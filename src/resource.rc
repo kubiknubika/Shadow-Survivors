@@ -1,0 +1,25 @@
+#include <windows.h>
+1 ICON "icon.ico"
+
+1 VERSIONINFO
+FILEVERSION 2,9,70,0
+PRODUCTVERSION 2,9,70,0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041904B0"
+        BEGIN
+            VALUE "CompanyName", "Shadow Forge Indie"
+            VALUE "FileDescription", "Shadow Survivors 2.9.70 - Action Survival Roguelike"
+            VALUE "FileVersion", "2.9.70"
+            VALUE "InternalName", "ShadowSurvivors"
+            VALUE "OriginalFilename", "ShadowSurvivors.exe"
+            VALUE "ProductName", "Shadow Survivors"
+            VALUE "ProductVersion", "2.9.70"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0419, 1200
+    END
+END
