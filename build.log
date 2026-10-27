@@ -1,0 +1,13 @@
+Build started 
+Date: 28.10.2026  2:51:23,85 
+Version: 2.9.70 
+Exe: ShadowSurvivors_2.9.70.exe 
+[OK] windres 
+[OK] g++ 
+[OK] source files 
+[OK] cleaned 
+[OK] resource.rc written 
+[OK] windres compile 
+BUILD SUCCESS: ShadowSurvivors_2.9.70.exe 
+Next version: 2.9.71 
+[28.10.2026  2:51:54,03] Build finished 
