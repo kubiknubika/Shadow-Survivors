@@ -47,6 +47,15 @@ enum GameMsgId : int {
     GMSG_SUPERCRIT,           // super crit popup
     GMSG_SMART_KILL,          // smart enemy one-tap popup
     GMSG_MATRYOSHKA,          // matryoshka opens
+    GMSG_STORY_ACT1,          // act I opening
+    GMSG_STORY_ACT2,          // act II opening
+    GMSG_STORY_ACT3,          // act III opening
+    GMSG_STORY_ACT4,          // act IV opening
+    GMSG_STORY_ACT5,          // act V opening
+    GMSG_STORY_CASE_CLOSED,   // case closed summary
+    GMSG_STORY_BRANCH,        // branch choice screen
+    GMSG_STORY_NO_NAME,       // "Свидетель без имени"
+    GMSG_STORY_COPY_WARNING,  // copy of the witness appears
     GMSG_COUNT
 };
 
@@ -91,6 +100,15 @@ static const GameMsgDef GAME_MESSAGES[GMSG_COUNT] = {
     {GMSG_SUPERCRIT,          "supercrit",          false, "", "числовой попап урона, не сообщение"},
     {GMSG_SMART_KILL,         "smart_kill",         false, "", "попап добивания, звучит пачками"},
     {GMSG_MATRYOSHKA,         "matryoshka",         false, "", "попап раскрытия матрёшки"},
+    {GMSG_STORY_ACT1,         "story_act1",         true,  "Акт первый: пепел на столе.", "открытие акта I"},
+    {GMSG_STORY_ACT2,         "story_act2",         true,  "Акт второй: голос в колбе.", "открытие акта II"},
+    {GMSG_STORY_ACT3,         "story_act3",         true,  "Акт третий: реестр.", "открытие акта III"},
+    {GMSG_STORY_ACT4,         "story_act4",         true,  "Акт четвёртый: архив.", "открытие акта IV"},
+    {GMSG_STORY_ACT5,         "story_act5",         true,  "Акт пятый: сердце архива.", "открытие акта V"},
+    {GMSG_STORY_CASE_CLOSED,  "story_case_closed",  true,  "Дело закрыто. Следующее откроется само.", "итог дела, открывает следующее"},
+    {GMSG_STORY_BRANCH,       "story_branch",       true,  "Выбор ветки. Второй след всё равно придётся пройти.", "экран выбора ветки"},
+    {GMSG_STORY_NO_NAME,      "story_no_name",      true,  "Свидетель без имени. В реестре такой строки нет.", "первое дело"},
+    {GMSG_STORY_COPY_WARNING, "story_copy_warning", true,  "Это копия. Она отвечает лучше оригинала.", "копия Свидетеля"},
 };
 
 struct MessageRegistry {

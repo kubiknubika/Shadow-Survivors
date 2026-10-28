@@ -47,21 +47,58 @@ struct CampaignMissionDef {
     int durationSeconds;
     int bossTimeSeconds;
     int bossType;
-    int chapter;
+    int chapter;        // act number, 1..5
     uint32_t requiredSeals;
     bool finalTrio;
+    int act;            // same as chapter, kept explicit for the mission list
+    int kind;           // 0 = вылазка, 1 = трио, 2 = копия/двойник, 3 = выбор ветки
+    int prereqA;        // previous mission that opens this one (-1 = none)
+    int prereqB;        // alternative previous mission (branch), -1 = none
 };
-static constexpr int CAMPAIGN_MISSION_COUNT = 6;
-// High storyEntryMask bits record completion for the two extra missions without changing the v6 save layout.
+// Five acts, twenty-eight cases. Data lives in tools/campaign.py, which generates
+// these rows and the tables in STORY.md so the script and the build cannot drift.
+static constexpr int CAMPAIGN_ACT_COUNT = 5;
+static constexpr int CAMPAIGN_MISSION_COUNT = 28;
+static constexpr int CAMPAIGN_ACT_MAX_ROWS = 6;
+static const char* const CAMPAIGN_ACT_TITLES[CAMPAIGN_ACT_COUNT] = {
+    "ПЕПЕЛ НА СТОЛЕ", "ГОЛОС В КОЛБЕ", "РЕЕСТР", "АРХИВ", "СЕРДЦЕ АРХИВА"
+};
+static const uint32_t CAMPAIGN_ACT_COLORS[CAMPAIGN_ACT_COUNT] = {
+    0xFFFFC848, 0xFF80E58A, 0xFF5BD8EE, 0xFFFF8C43, 0xFFFFD278
+};
 static constexpr uint32_t STORY_ARCHIVE_MISSION_COMPLETE_BIT = 1u << 4;
 static constexpr uint32_t STORY_HEART_MISSION_COMPLETE_BIT = 1u << 5;
+// The old 6-mission save only knew these two extra bits; everything else now lives
+// in SaveData::campaignMissionsDone.
 static const CampaignMissionDef CAMPAIGN_MISSIONS[CAMPAIGN_MISSION_COUNT] = {
-    {"РУИНЫ", "РАЗЛОМ ЭХА", "Резонаторы копируют приказ о закрытии ворот. Моргар охраняет сам источник.", "СЛОМАЙ РЕЗОНАТОРЫ • ОСТАНОВИ МОРГАРА", "МОРГАР", 240, 180, 0, 0, 0x00u, false},
-    {"КРИПТА", "КОЛБЫ ГОЛОСА", "Малакор хранит голос сестры в колбах. Запись помнит фразы, но не человека.", "РАЗБЕЙ КОЛБЫ • ОСВОБОДИ ГОЛОС", "МАЛАКОР", 300, 240, 1, 1, 0x01u, false},
-    {"СОБОР", "РЕЕСТР ИМЁН", "Кардинал вымарывал имена из книг. Семьи продолжали писать их на камне.", "ВЕРНИ ИМЕНА ИЗ РЕЕСТРА", "КАРДИНАЛ", 300, 240, 2, 2, 0x03u, false},
-    {"ПЕПЕЛЬНЫЙ ТРОН", "ПЕРВЫЙ АРХИВАРИУС", "Азарот запустил Архив, чтобы никто не исчез. Машина заперла ночь в цикле.", "ПРЕРВИ ЦИКЛ • НАЙДИ АЗАРОТА", "АЗАРОТ", 360, 300, 3, 3, 0x07u, false},
-    {"АРХИВ", "РЕЗЕРВНАЯ КОПИЯ ПРИКАЗА", "В Архиве осталась запись последнего приказа Азарота. Это не воскресший Азарот, а машинная копия его команды. Уничтожь её, чтобы она больше не запускала цикл.", "НАЙДИ И УНИЧТОЖЬ РЕЗЕРВНУЮ КОПИЮ", "КОПИЯ АЗАРОТА", 360, 300, 3, 4, 0x0Fu, false},
-    {"СЕРДЦЕ АРХИВА", "ТРИ ЭХО-ПРИКАЗА", "Четыре печати разомкнули контур. Последний бой остановит цикл, но не вернёт погибших.", "ПОБЕДИ ТРИ ЭХО • ЗАВЕРШИ КАМПАНИЮ", "АРХИВНЫЙ ПРОТОКОЛ", 360, 300, 0, 5, 0x0Fu, true}
+    {"ПЕПЕЛЬНЫЙ ПРОТОКОЛ", "УЧАСТОК У ВОРОТ", "Первое дело после шторма. Пепел на участке лежит слишком ровно — кто-то накрыл место до меня. Дозор у ворот ещё двигается, но уже не отвечает.", "ОСМОТРИ УЧАСТОК • ДОПРОСИ ДОЗОР", "ПЕПЕЛЬНЫЙ ДОЗОР", 150, 120, 0, 1, 0x00u, false, 1, 0, -1, -1},
+    {"СВИДЕТЕЛЬ БЕЗ ИМЕНИ", "ПРОТОКОЛ ДОПРОСА", "Меня нет в реестре. Для Архива я не существую — значит, могу задавать вопросы, на которые машина не отвечает. Писарь у стены готов говорить. Он просто не помнит, кому.", "ВЫВЕДИ ПИСАРЯ НА ЧИСТОСЕРДЕЧНУЮ", "ЭХО-ПИСАРЬ", 180, 150, 2, 1, 0x00u, false, 1, 0, 0, -1},
+    {"ТРИ КОЛОКОЛА", "РЕЗОНАТОРЫ КОПИРУЮТ ПРИКАЗ", "Колокола бьют третий раз за ночь. Каждый удар печатает копию приказа о закрытии ворот — и ворота снова закрываются.", "СЛОМАЙ РЕЗОНАТОРЫ • ЗАГЛУШИ КОЛОКОЛА", "СТОРОЖ КОЛОКОЛЕН", 200, 160, 1, 1, 0x00u, false, 1, 0, 1, -1},
+    {"ВОРОТА ДОЛГА", "ПЕЧАТЬ I • ДОЛГ", "Моргар держит ворота и слышит только собственный приказ. Баррикада сложена изнутри: он выигрывал время для эвакуации, которой не было.", "СЛОМАЙ ПЕЧАТЬ ДОЛГА", "МОРГАР", 240, 180, 0, 1, 0x00u, false, 1, 0, 2, -1},
+    {"ПРОТОКОЛ ЭВАКУАЦИИ", "ВЕТКА А • СПИСКИ УШЕДШИХ", "В караулке нашёлся список эвакуированных. Восемьдесят фамилий. Восемьдесят первая — моя, но почерк не мой.", "НАЙДИ СПИСОК • СОХРАНИ УЛИКУ", "АРХИВНЫЙ КУРЬЕР", 200, 150, 2, 1, 0x01u, false, 1, 0, 3, -1},
+    {"ПУСТЫЕ НАРУЧНИКИ", "ВЕТКА Б • КАМЕРА ХРАНЕНИЯ", "Другой след: склад наручников, все пустые. Сняли с погибших — или с тех, кто ушёл и не вернулся за ними.", "ВСКРОЙ КАМЕРУ • НАЙДИ ВЛАДЕЛЬЦЕВ", "СМОТРИТЕЛЬ СКЛАДА", 200, 150, 0, 1, 0x01u, false, 1, 0, 3, -1},
+    {"КРИПТА ГОЛОСОВ", "КОЛБЫ С ЧУЖИМИ СЛОВАМИ", "Малакор хранит последние слова сестры в колбах. Копия помнит фразу и не помнит, что было после неё.", "РАЗБЕЙ КОЛБЫ • СОБЕРИ ОБРАЗЦЫ", "ЭХО СЕСТРЫ", 220, 170, 1, 2, 0x01u, false, 2, 0, 4, 5},
+    {"СЕСТРА, КОТОРАЯ НЕ СЛЫШИТ", "ДОПРОС КОПИИ", "Копия отвечает ровно так, как записали. Восемь раз я задал один вопрос — восемь раз услышал одну интонацию. Это не свидетель. Это протокол.", "ДОЖМИ КОПИЮ ДО РАСХОЖДЕНИЙ", "ГОЛОС ИЗ КОЛБЫ", 220, 170, 1, 2, 0x01u, false, 2, 0, 6, -1},
+    {"ХОЛОДНЫЙ СЛЕД", "ВЕТКА А • ЛАБОРАТОРИЯ", "В лаборатории пахнет озоном. На столе — журнал опытов: Архив учился говорить голосом мёртвых, пока город ещё был жив.", "ИЗЪЯТЬ ЖУРНАЛ • ЗАКРЫТЬ ОПЫТ", "ЛАБОРАНТ АРХИВА", 210, 160, 2, 2, 0x01u, false, 2, 0, 7, -1},
+    {"ТЁПЛЫЙ СЛЕД", "ВЕТКА Б • МОРГ", "Морг не тронут штормом. Все тела на месте, все бирки на местах — и все даты смерти вчерашние. Кто-то ведёт учёт.", "СВЕРЬ БИРКИ • НАЙДИ УЧЁТЧИКА", "СЧЁТЧИК ТЕЛ", 210, 160, 0, 2, 0x01u, false, 2, 0, 7, -1},
+    {"КОЛБА № 9", "ПОСЛЕДНЯЯ ЗАПИСЬ СЕСТРЫ", "Колба девять пуста, но бирка цела. На бирке — мой голос. Я никогда не был здесь. Значит, был кто-то с моим голосом.", "НАЙДИ ПЛЁНКУ • ВОССТАНОВИ ЗАПИСЬ", "ХРАНИТЕЛЬ ПЛЁНКИ", 220, 170, 2, 2, 0x01u, false, 2, 0, 8, 9},
+    {"ПЕЧАТЬ ГОЛОСА", "ПЕЧАТЬ II • ГОЛОС", "Малакор бережёт копию сестры, потому что оригинал хоронить нечем. Я пришёл сказать ему то, что он не услышит от машины.", "СЛОМАЙ ПЕЧАТЬ ГОЛОСА", "МАЛАКОР", 240, 180, 1, 2, 0x01u, false, 2, 0, 10, -1},
+    {"ЗАТОПЛЕННЫЙ РЕЕСТР", "КНИГИ ПОД ВОДОЙ", "Нижний ярус реестра затоплен. Чернила расплылись, но тиснение на обложках осталось: семейные имена выбивали на камне, чтобы книга не решала за них.", "ПОДНИ КНИГИ • ПЕРЕПИШИ ИМЕНА", "ПЕРЕПИСЧИК", 230, 170, 2, 3, 0x03u, false, 3, 0, 11, -1},
+    {"ИМЯ НА КАМНЕ", "СЕМЕЙНЫЕ ЛЕНТЫ", "На кладбище имена выбиты заново — поверх стёртых. Кардинал вымарывал книги, люди выбивали камень. Кто-то стирал и камень.", "ЗАЩИТИ КАМЕНЬ • НАЙДИ РЕЗЧИКА", "РЕЗЧИК ИМЁН", 230, 170, 0, 3, 0x03u, false, 3, 0, 12, -1},
+    {"ПИСАРЬ, КОТОРЫЙ СТЁР СЕБЯ", "ПУСТАЯ СТРОКА В КНИГЕ", "В списке писарей одна строка вымарана дважды. Тот, кто стирал имена, начал с собственного.", "ВОССТАНОВИ СТРОКУ • ВЫЙДИ НА КАРДИНАЛА", "САМОЗВАНЫЙ ПИСАРЬ", 230, 170, 2, 3, 0x03u, false, 3, 0, 13, -1},
+    {"ДЕЛО О СЕМИ СЕМЬЯХ", "ВЕТКА А • СВИДЕТЕЛИ ЖИВЫ", "Семь семей подали жалобу на Архив. Их показания совпадают дословно — значит, кто-то писал за них. Или они говорят одно, потому что видели одно.", "СОБЕРИ ПОКАЗАНИЯ • СВЕРЬ ГОЛОСА", "СТАРШИНА КВАРТАЛА", 220, 170, 1, 3, 0x03u, false, 3, 0, 14, -1},
+    {"ДЕЛО О ПУСТЫХ СТРАНИЦАХ", "ВЕТКА Б • ВЫРВАННЫЕ ЛИСТЫ", "Из книги вырваны страницы — ровно те, где записаны свидетели. Пустые листы аккуратно сложены в папку с моим делом.", "НАЙДИ ЛИСТЫ • ПРОЧТИ КРАЯ", "ХРАНИТЕЛЬ ПАПОК", 220, 170, 2, 3, 0x03u, false, 3, 0, 14, -1},
+    {"ПЕЧАТЬ ИМЕНИ", "ПЕЧАТЬ III • ИМЯ", "Кардинал вымарывал имена, называя забвение милосердием. Он не учёл одного: люди помнят друг друга без разрешения Архива.", "СЛОМАЙ ПЕЧАТЬ ИМЕНИ", "КАРДИНАЛ", 240, 180, 2, 3, 0x03u, false, 3, 0, 15, 16},
+    {"ПЕПЕЛЬНЫЙ ТРОН", "КАБИНЕТ АРХИВАРИУСА", "Азарот запустил Архив, чтобы никто не исчез. Машина поняла буквально: заперла ночь в цикле, а людей — в копиях.", "ВОЙДИ В КАБИНЕТ • ОТКРОЙ ДЕЛО АЗАРОТА", "СЕКРЕТАРЬ АРХИВА", 240, 180, 3, 4, 0x07u, false, 4, 0, 17, -1},
+    {"КОПИЯ СВИДЕТЕЛЯ", "ДВОЙНИК С МОИМ ГОЛОСОМ", "В деле подшита копия показаний — с моим голосом и моими словами. Копия утверждает, что она и есть Свидетель. Проверить можно только одним способом.", "ОТЛИЧИ КОПИЮ ОТ СЕБЯ", "КОПИЯ СВИДЕТЕЛЯ", 240, 180, 2, 4, 0x07u, false, 4, 2, 18, -1},
+    {"ДОПРОС МАШИНЫ", "ПРОТОКОЛ БЕЗ СЛЕДОВАТЕЛЯ", "Машина не лжёт — она повторяет. Я задал ей вопрос о ночи шторма и получил в ответ собственный рапорт, написанный до того, как я его написал.", "ДОПРОСИ АРХИВ • НАЙДИ АВТОРА", "ПРОТОКОЛИСТ", 240, 180, 3, 4, 0x07u, false, 4, 0, 19, -1},
+    {"ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "ПЕЧАТЬ IV • СВИДЕТЕЛЬСТВО", "Азарот хранит копии, а не людей. Печать Свидетельства — последний засов: пока она цела, Архив считает свои записи единственными свидетелями.", "СЛОМАЙ ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "АЗАРОТ", 270, 200, 3, 4, 0x07u, false, 4, 0, 20, -1},
+    {"СОХРАНИТЬ КОПИЮ", "ВЫБОР • ПАМЯТЬ ВМЕСТО ЧЕЛОВЕКА", "Копия сестры Малакора всё ещё в Архиве. Сжечь — и он потеряет последнее, что звучит её голосом. Сохранить — и Архив получит право решать, кого помнить.", "ЗАЩИТИ АРХИВ ОТ ЗАЧИСТКИ", "ИНСПЕКТОР ЗАЧИСТКИ", 230, 170, 1, 4, 0x07u, false, 4, 3, 21, -1},
+    {"СЖЕЧЬ КОПИЮ", "ВЫБОР • ПРАВО НА УТРАТУ", "Копия сестры Малакора всё ещё в Архиве. Некоторые вещи должны умереть полностью, иначе живые не смогут отпустить.", "УНИЧТОЖЬ КОПИЮ • ВОЗЬМИ ПЕПЕЛ", "ХРАНИТЕЛЬ КОПИЙ", 230, 170, 3, 4, 0x07u, false, 4, 3, 21, -1},
+    {"РЕЗЕРВНАЯ КОПИЯ ПРИКАЗА", "АРХИВ ЗАЩИЩАЕТ СЕБЯ", "В сердце Архива осталась запись последнего приказа Азарота. Это не воскресший Азарот — это машинная копия его команды, и она снова запускает цикл.", "НАЙДИ И УНИЧТОЖЬ КОПИЮ", "КОПИЯ АЗАРОТА", 260, 190, 3, 5, 0x0Fu, false, 5, 2, 22, -1},
+    {"ТРИ ЭХО-ПРИКАЗА", "СТРАЖИ СЕРДЦА", "Три записи защищают сердце архива. Это не воскресшие стражи — это приказы, которые никто не отменил.", "ПОБЕДИ ТРИ ЭХО", "АРХИВНЫЙ ПРОТОКОЛ", 280, 210, 0, 5, 0x0Fu, true, 5, 1, 24, -1},
+    {"ПОСЛЕДНЯЯ НОЧЬ", "КОЛЬЦО РАЗМЫКАЕТСЯ", "Контур разомкнут, но ночь ещё держится. Последний бой не вернёт погибших — он вернёт живым право помнить самим.", "УДЕРЖИ КОЛЬЦО • ДОЖДИСЬ РАССВЕТА", "ПОСЛЕДНИЙ ПРИКАЗ", 260, 190, 1, 5, 0x0Fu, false, 5, 0, 25, -1},
+    {"ПРАВО ПОМНИТЬ", "ДЕЛО ЗАКРЫТО", "Дело закрыто, а не выиграно. Мёртвые остались мёртвыми. Живые снова могут помнить их без разрешения машины.", "ЗАКРОЙ ДЕЛО", "ПОСЛЕДНИЙ СВИДЕТЕЛЬ", 240, 180, 0, 5, 0x0Fu, false, 5, 0, 26, -1},
 };
 
 struct HeroDef {
@@ -105,7 +142,7 @@ static constexpr int MONSTER_TYPE_COUNT = 11;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 73;
+static constexpr int PATCH_NOTES_COUNT = 74;
 
 struct ItemDef {
     int id;
@@ -359,7 +396,7 @@ struct SaveData {
     int seenIntroCutscene = 0;
     int seenTwistCutscene = 0;
     int seenEndingCutscene = 0;
-    uint32_t saveVersion = 6;
+    uint32_t saveVersion = 7;
     int enemyOathRanks[3] = {0, 0, 0};
     // Appended in v5 for binary compatibility: narrative evidence and permanently broken seals.
     uint32_t storySealMask = 0;
@@ -367,6 +404,11 @@ struct SaveData {
     uint32_t storyEntryMask = 0;
     // v6 adds three more contracts at the tail so existing saved story masks keep their offsets.
     int enemyOathRanksAdditional[3] = {0, 0, 0};
+    // v7: twenty-eight campaign cases. Bit i = case i closed for good.
+    // Appended at the very tail so every v6 offset above stays valid.
+    uint32_t campaignMissionsDone = 0;
+    // v7: bit (act-1) = the opening scene of that act has been shown.
+    uint32_t seenActIntros = 0;
 };
 
 struct UIButton {
@@ -422,6 +464,8 @@ struct Game {
     int selectedHero = 0;
     int selectedStoryMission = 0;
     int storyMissionCursor = 0;
+    int campaignActView = 1;   // which act the mission list is showing
+
     bool storyMissionBossSpawned = false;
     bool missionCompletePending = false;
     bool evolvedWeapons[7] = {false};
@@ -768,6 +812,15 @@ struct Game {
             save.storySealMask = mask;
             save.storyEntryMask = mask;
         };
+        // Old saves only knew six cases; carry those six onto the twenty-eight-case mask so
+        // a finished campaign never reopens after the update.
+        auto remapCampaignMask = [&]() {
+            uint32_t mask = save.storySealMask & 0x0Fu;
+            if (save.storyEntryMask & STORY_ARCHIVE_MISSION_COMPLETE_BIT) mask |= 1u << 4;
+            if ((save.storyEntryMask & STORY_HEART_MISSION_COMPLETE_BIT) || save.seenEndingCutscene)
+                mask |= 1u << 5;
+            save.campaignMissionsDone = mask;
+        };
         if (f) {
             fseek(f, 0, SEEK_END);
             long fileSize = ftell(f);
@@ -784,7 +837,7 @@ struct Game {
                     for (int i = 0; i < 6; ++i) save.metaRanks[i] = 0;
                     save.storyChapter = 0;
                     save.bossesDefeated = 0;
-                    save.saveVersion = 6;
+                    save.saveVersion = 7;
                     migrated = true;
                 }
             } else if (fileSize == (long)sizeof(LegacySaveV3)) {
@@ -797,7 +850,8 @@ struct Game {
                     save.seenTwistCutscene = old.seenTwistCutscene;
                     save.seenEndingCutscene = old.seenEndingCutscene;
                     migrateLegacyStory(old.storyChapter, old.bossesDefeated, old.seenEndingCutscene);
-                    save.saveVersion = 6;
+                    remapCampaignMask();
+                    save.saveVersion = 7;
                     migrated = true;
                 }
             } else {
@@ -805,6 +859,7 @@ struct Game {
                 size_t got = fread(&tmp, 1, sizeof(SaveData), f);
                 if (got >= sizeof(uint32_t) && tmp.magic == 0x53484457) {
                     save = tmp;
+                    const uint32_t loadedVersion = save.saveVersion;
                     if (got < sizeof(SaveData) || save.saveVersion < 6) {
                         // V5 already contains story masks; v6 only appends contract ranks.
                         // Preserve masks when migrating v5 and recover story only from older prefixes.
@@ -816,7 +871,12 @@ struct Game {
                             save.seenTwistCutscene = 0;
                             save.seenEndingCutscene = 0;
                         }
-                        save.saveVersion = 6;
+                        save.saveVersion = 7;
+                        migrated = true;
+                    }
+                    if (loadedVersion < 7 || got < offsetof(SaveData, campaignMissionsDone)) {
+                        remapCampaignMask();
+                        save.saveVersion = 7;
                         migrated = true;
                     }
                 }
@@ -849,22 +909,90 @@ struct Game {
         return count;
     }
 
+    static int campaignActOf(int mission) {
+        if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return 1;
+        return std::max(1, std::min(CAMPAIGN_ACT_COUNT, CAMPAIGN_MISSIONS[mission].act));
+    }
+    static int campaignActFirstMission(int act) {
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i)
+            if (CAMPAIGN_MISSIONS[i].act >= act) return i;
+        return CAMPAIGN_MISSION_COUNT - 1;
+    }
+    static int campaignActMissionCount(int act) {
+        int n = 0;
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) if (CAMPAIGN_MISSIONS[i].act == act) ++n;
+        return n;
+    }
+    static int campaignActProgressIndex(int mission) {
+        const int act = campaignActOf(mission);
+        return mission - campaignActFirstMission(act);
+    }
+
+    // The archive's secret is on the record once the player has seen the openings of Acts II–V.
+    bool archiveTruthKnown() const {
+        return (save.seenActIntros & 0x1Eu) != 0 || save.seenEndingCutscene != 0;
+    }
+
     bool isCampaignMissionCompleted(int mission) const {
         if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return false;
-        if (mission < 4)
-            return (save.storySealMask & (1u << CAMPAIGN_MISSIONS[mission].bossType)) != 0;
-        if (mission == 4)
-            return (save.storyEntryMask & STORY_ARCHIVE_MISSION_COMPLETE_BIT) != 0;
-        return (save.storyEntryMask & STORY_HEART_MISSION_COMPLETE_BIT) != 0 || save.seenEndingCutscene != 0;
+        return (save.campaignMissionsDone & (1u << mission)) != 0;
     }
 
     const CampaignMissionDef& selectedCampaignMission() const {
         return CAMPAIGN_MISSIONS[std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, selectedStoryMission))];
     }
+
     bool isCampaignMissionUnlocked(int mission) const {
         if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return false;
-        const uint32_t required = CAMPAIGN_MISSIONS[mission].requiredSeals;
-        return (save.storySealMask & required) == required;
+        const CampaignMissionDef& def = CAMPAIGN_MISSIONS[mission];
+        if (def.prereqA < 0) return true; // the case that opens an act is always reachable
+        if (!isCampaignMissionCompleted(def.prereqA)) return false;
+        if (def.prereqB >= 0 && !isCampaignMissionCompleted(def.prereqB)) return false;
+        return true;
+    }
+
+    // Which case actually opens this one — used by the dossier line "нужно закрыть дело №".
+    int campaignMissingPrereq(int mission) const {
+        if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return -1;
+        const CampaignMissionDef& def = CAMPAIGN_MISSIONS[mission];
+        if (def.prereqA >= 0 && !isCampaignMissionCompleted(def.prereqA)) return def.prereqA;
+        if (def.prereqB >= 0 && !isCampaignMissionCompleted(def.prereqB)) return def.prereqB;
+        return -1;
+    }
+
+    void markCampaignMissionDone(int mission) {
+        if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return;
+        save.campaignMissionsDone |= (1u << mission);
+        // Keep the legacy masks in step so an older build still sees the four seals.
+        const int sealsBefore = (mission < 4) ? 1 : 0;
+        (void)sealsBefore;
+        if (mission < 4) save.storySealMask |= (1u << CAMPAIGN_MISSIONS[mission].bossType);
+        if (mission == 4) save.storyEntryMask |= STORY_ARCHIVE_MISSION_COMPLETE_BIT;
+        if (mission == 5) save.storyEntryMask |= STORY_HEART_MISSION_COMPLETE_BIT;
+    }
+
+    int campaignCompletedCount() const {
+        int n = 0;
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) if (isCampaignMissionCompleted(i)) ++n;
+        return n;
+    }
+    int campaignActCompletedCount(int act) const {
+        int n = 0;
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i)
+            if (CAMPAIGN_MISSIONS[i].act == act && isCampaignMissionCompleted(i)) ++n;
+        return n;
+    }
+    bool isCampaignActUnlocked(int act) const {
+        if (act <= 1) return true;
+        const int first = campaignActFirstMission(act);
+        return isCampaignMissionUnlocked(first);
+    }
+    int campaignActSealCount(int act) const {
+        int n = 0;
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i)
+            if (CAMPAIGN_MISSIONS[i].act == act && CAMPAIGN_MISSIONS[i].bossType < 4 &&
+                isCampaignMissionCompleted(i) && CAMPAIGN_MISSIONS[i].prereqB < 0) ++n;
+        return n;
     }
     int campaignMissionMinutes(int mission) const {
         if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return 0;
@@ -875,12 +1003,12 @@ struct Game {
         return (CAMPAIGN_MISSIONS[mission].bossTimeSeconds + 59) / 60;
     }
     int campaignStartingTier(int mission) const {
-        if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return 1;
-        return std::min(5, mission + 1); // Missions 1–5 introduce Tiers I–V; the finale stays Tier V.
+        // Each act opens one tier higher; the last act keeps Tier V.
+        return std::max(1, std::min(5, campaignActOf(mission)));
     }
     int campaignDifficultyPercent(int mission) const {
         if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return 0;
-        return mission * 3; // +3% enemy pressure per mission, capped at +15% in the finale.
+        return std::min(40, campaignActProgressIndex(mission) * 3 + (campaignActOf(mission) - 1) * 4);
     }
     float campaignDifficultyMultiplier() const {
         return gameMode == MODE_STORY ? 1.0f + campaignDifficultyPercent(selectedStoryMission) * 0.01f : 1.0f;
@@ -2388,11 +2516,30 @@ struct Game {
         state = STATE_CHEST;
     }
 
+    // One recorded line per case that needs a spoken cue beyond the scheduled briefing.
+    void speakMissionFlavour(int mission) {
+        const CampaignMissionDef& def = CAMPAIGN_MISSIONS[std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, mission))];
+        if (def.kind == 3) speakOnly(GMSG_STORY_BRANCH, "Выбор ветки. Второй след всё равно придётся пройти.");
+        else if (mission == 0) speakOnly(GMSG_STORY_NO_NAME, "Свидетель без имени. В реестре такой строки нет.");
+        else if (def.kind == 2) speakOnly(GMSG_STORY_COPY_WARNING, "Это копия. Она отвечает лучше оригинала.");
+    }
+
+    // Closing a case is what opens the next one; the mask is the campaign's whole memory.
+    void recordStoryMissionComplete() {
+        if (gameMode != MODE_STORY) return;
+        markCampaignMissionDone(selectedStoryMission);
+        save.storyChapter = std::max(save.storyChapter, CAMPAIGN_MISSIONS[selectedStoryMission].act);
+        if (selectedStoryMission == CAMPAIGN_MISSION_COUNT - 1) save.seenEndingCutscene = 1;
+        writeSave();
+    }
+
     void finishTreasureChest() {
         sound.play(SFX_CLICK, 0.02f);
         if (missionCompletePending) {
             missionCompletePending = false;
             recordRunEnd();
+            recordStoryMissionComplete();
+            speakOnly(GMSG_STORY_CASE_CLOSED, "Дело закрыто. Следующее откроется само.");
             sound.musicMode = 4;
             state = STATE_MISSION_COMPLETE;
         } else state = STATE_PLAYING;
@@ -2995,7 +3142,7 @@ struct Game {
                 }
                 int bossGold = (int)roundf((180 + m.bossType * 120) * getGoldMultiplier());
                 save.gold += bossGold; runGold += bossGold;
-                if (gameMode == MODE_STORY && !m.isTrioBoss && selectedStoryMission < 4) {
+                if (gameMode == MODE_STORY && !m.isTrioBoss && CAMPAIGN_MISSIONS[selectedStoryMission].kind != 1) {
                     static const char* sealLines[4] = {
                         "МОРГАР: «Я ОХРАНЯЛ ПРИКАЗ, А НЕ ЛЮДЕЙ». ПЕЧАТЬ I — ДОЛГ.",
                         "МАЛАКОР: «ЭТО ГОЛОС СЕСТРЫ. НО ЭТО НЕ ОНА». ПЕЧАТЬ II — ГОЛОС.",
@@ -3006,11 +3153,10 @@ struct Game {
                     const bool firstSeal = (save.storySealMask & storyBit) == 0;
                     save.storySealMask |= storyBit;
                     save.storyEntryMask |= storyBit;
-                    save.storyChapter = std::max(save.storyChapter, (m.bossType & 3) + 1);
+                    save.storyChapter = std::max(save.storyChapter, CAMPAIGN_MISSIONS[selectedStoryMission].act);
                     if (firstSeal) announce(GMSG_SEAL_LORE, sealLines[m.bossType & 3], 7.0f);
                 }
                 if (gameMode == MODE_STORY && m.isMissionFinalBoss) {
-                    if (selectedStoryMission == 4) save.storyEntryMask |= STORY_ARCHIVE_MISSION_COMPLETE_BIT;
                     missionCompletePending = true;
                     for (Monster& survivor : monsters) if (&survivor != &m && !survivor.isResonator) survivor.hp = 0.0f;
                 }
@@ -3541,12 +3687,6 @@ struct Game {
             difficultyBannerTimer = 3.5f;
             sound.play(SFX_BOSS, 0.06f);
         }
-        if (gameMode == MODE_STORY && selectedStoryMission == 5 &&
-            (save.storySealMask & 0x0Fu) == 0x0Fu && !save.seenTwistCutscene &&
-            runTime >= selectedCampaignMission().bossTimeSeconds - 30.0f) {
-            beginCutscene(4, STATE_PLAYING);
-            return;
-        }
 
         if (screenShake > 0.0f) screenShake = std::max(0.0f, screenShake - dt);
         if (bossWarningTimer > 0.0f) bossWarningTimer = std::max(0.0f, bossWarningTimer - dt);
@@ -3699,13 +3839,6 @@ struct Game {
                     bossWarningName = mission.finalBoss;
                     bossWarningTimer = 5.0f;
                     announce(GMSG_MISSION_BRIEFING, mission.briefing, 5.0f);
-                    if (selectedStoryMission < 4) {
-                        const uint32_t storyBit = 1u << mission.bossType;
-                        if ((save.storyEntryMask & storyBit) == 0) {
-                            save.storyEntryMask |= storyBit;
-                            writeSave();
-                        }
-                    }
                 }
                 if (options.screenShakeEnabled) screenShake = std::max(screenShake, 0.48f);
                 sound.play(SFX_BOSS, 0.12f);
@@ -4202,6 +4335,8 @@ struct Game {
             std::none_of(pickups.begin(), pickups.end(), [](const Pickup& p) { return p.type == 6; })) {
             missionCompletePending = false;
             recordRunEnd();
+            recordStoryMissionComplete();
+            speakOnly(GMSG_STORY_CASE_CLOSED, "Дело закрыто. Следующее откроется само.");
             sound.musicMode = 4;
             state = STATE_MISSION_COMPLETE;
             return;
@@ -6135,9 +6270,14 @@ struct Game {
         gameMode = MODE_STORY;
         storyMissionCursor = selectedStoryMission;
         if (storyMissionCursor < 0 || storyMissionCursor >= CAMPAIGN_MISSION_COUNT || !isCampaignMissionUnlocked(storyMissionCursor)) {
+            // Open on the first case the player can still take.
             storyMissionCursor = 0;
-            selectedStoryMission = 0;
+            for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+                if (isCampaignMissionUnlocked(i) && !isCampaignMissionCompleted(i)) { storyMissionCursor = i; break; }
+            }
+            selectedStoryMission = storyMissionCursor;
         }
+        campaignActView = campaignActOf(storyMissionCursor);
         state = STATE_MISSION_SELECT;
     }
 
@@ -6150,31 +6290,36 @@ struct Game {
 
     uint32_t getCampaignAccent(int mission) const {
         if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return 0xFFFFD878;
-        if (mission == 5) return 0xFFFFD278;
-        static const uint32_t accents[4] = {0xFFFFC848, 0xFF80E58A, 0xFFFF7088, 0xFFFFA84F};
-        return accents[CAMPAIGN_MISSIONS[mission].bossType & 3];
+        const int act = campaignActOf(mission);
+        const uint32_t actColor = CAMPAIGN_ACT_COLORS[act - 1];
+        // Branch cases (kind 3) sit between two colours: keep them readable but distinct.
+        if (CAMPAIGN_MISSIONS[mission].kind == 3) return 0xFFE9A0E0;
+        if (CAMPAIGN_MISSIONS[mission].kind == 2) return 0xFFA8B8FF;
+        return actColor;
     }
 
     void drawMissionIllustration(Renderer& r, int missionIndex, int x, int y, int w, int h) {
         missionIndex = std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, missionIndex));
-        static const uint32_t skyTop[6] = {0xFF2A1926,0xFF17251D,0xFF152936,0xFF321A19,0xFF24152F,0xFF332B35};
-        static const uint32_t skyBottom[6] = {0xFF13101A,0xFF101812,0xFF101B25,0xFF190E16,0xFF110D1B,0xFF17131C};
+        static const uint32_t skyTop[CAMPAIGN_ACT_COUNT] = {0xFF2A1926,0xFF17251D,0xFF152936,0xFF321A19,0xFF24152F};
+        static const uint32_t skyBottom[CAMPAIGN_ACT_COUNT] = {0xFF13101A,0xFF101812,0xFF101B25,0xFF190E16,0xFF110D1B};
+        const int actIndex = campaignActOf(missionIndex) - 1;
         const uint32_t accent = getCampaignAccent(missionIndex);
-        r.fillRoundedRect(x, y, w, h, 10, skyBottom[missionIndex]);
-        r.fillGradientV(x + 1, y + 1, w - 2, h - 2, skyTop[missionIndex], skyBottom[missionIndex], 255);
+        r.fillRoundedRect(x, y, w, h, 10, skyBottom[actIndex]);
+        r.fillGradientV(x + 1, y + 1, w - 2, h - 2, skyTop[actIndex], skyBottom[actIndex], 255);
 
         // A compact, screen-clipped scene: horizon, landmark shapes, magical glyph and built-in character art.
         const int horizon = y + h - 48;
         const int moonX = x + w - 120;
         const int moonY = y + 48;
-        r.addGlow(moonX, moonY, 74, accent, missionIndex == 5 ? 70 : 46);
-        r.fillCircle(moonX, moonY, missionIndex == 5 ? 27 : 22, accent, 120);
+        r.addGlow(moonX, moonY, 74, accent, campaignActOf(missionIndex) == 5 ? 70 : 46);
+        r.fillCircle(moonX, moonY, campaignActOf(missionIndex) == 5 ? 27 : 22, accent, 120);
         r.drawCircleRing(moonX, moonY, 37 + (int)(sinf(globalTime * 0.7f) * 2.0f), 2, accent, 100, true);
 
         for (int i = 0; i < 8; ++i) {
             const int bx = x + i * (w / 7) - 14;
             const int bh = 36 + (i * 31) % 76;
-            const uint32_t stone = missionIndex == 2 ? 0xFF183343 : (missionIndex == 1 ? 0xFF202D24 : 0xFF211A28);
+            const int actForStone = campaignActOf(missionIndex);
+            const uint32_t stone = actForStone == 3 ? 0xFF183343 : (actForStone == 2 ? 0xFF202D24 : 0xFF211A28);
             r.fillRect(bx, horizon - bh, 48, bh + 42, stone, 220);
             r.fillRect(bx + 8, horizon - bh + 11, 32, 5, 0xFF070911, 190);
             if ((i + missionIndex) % 2 == 0) r.fillRect(bx + 18, horizon - bh + 24, 5, 19, accent, 100);
@@ -6197,12 +6342,20 @@ struct Game {
                        glyphX + (int)(cosf(a) * 54), glyphY + (int)(sinf(a) * 54), accent, 2, 140, true);
         }
 
-        // Location-specific foreground motif.
-        if (missionIndex == 0) { // broken gate
+        // Act-specific foreground motif: the campaign moves from the gate to the heart
+        // of the Archive, and the illustration has to move with it.
+        const int act = campaignActOf(missionIndex);
+        const int slot = campaignActProgressIndex(missionIndex);
+        if (act == 1) { // burnt gate, ash over the post
             r.drawLine(x + 105, horizon, x + 123, y + 60, 0xFF9B7E58, 8, 210);
             r.drawLine(x + 182, horizon, x + 163, y + 60, 0xFF9B7E58, 8, 210);
             r.drawLine(x + 123, y + 60, x + 163, y + 60, 0xFFFFC848, 4, 150, true);
-        } else if (missionIndex == 1) { // crypt flasks
+            for (int i = 0; i < 26; ++i) {
+                const int ax = x + 40 + (i * 47 + slot * 31) % std::max(1, w - 80);
+                const int ay = horizon - ((i * 29 + slot * 17) % 120);
+                r.fillRect(ax, ay, 3, 3, 0xFFCBBFC0, 120);
+            }
+        } else if (act == 2) { // crypt flasks, voices in glass
             for (int i = 0; i < 4; ++i) {
                 const int fx = x + 190 + i * 48;
                 r.fillRoundedRect(fx, y + 92 + (i % 2) * 15, 23, 55, 7, 0xFF263A30, 225);
@@ -6210,25 +6363,36 @@ struct Game {
                 r.fillRect(fx + 7, y + 82 + (i % 2) * 15, 9, 12, 0xFFB5D78D, 210);
                 r.addGlow(fx + 12, y + 124 + (i % 2) * 15, 19, 0xFF8EE879, 65);
             }
-        } else if (missionIndex == 2) { // cathedral water
+            if (slot % 2 == 1) // the copy of the sister: one flask is brighter than the others
+                r.addGlow(x + 214, y + 150, 46, 0xFFB5FFD0, 90);
+        } else if (act == 3) { // flooded registry: water lines over stone shelves
             for (int i = 0; i < 4; ++i)
                 r.drawLine(x + 35, horizon + 8 + i * 8, x + w - 35, horizon + 8 + i * 8,
                            0xFF58BFD4, 2, 84 + i * 8, true);
-        } else if (missionIndex == 3) { // furnace throne
+            for (int i = 0; i < 5; ++i) {
+                const int sx = x + 150 + i * 62;
+                r.fillRect(sx, y + 74 + (i % 2) * 12, 34, 66, 0xFF1B3040, 230);
+                r.drawLine(sx + 5, y + 88 + (i % 2) * 12, sx + 29, y + 88 + (i % 2) * 12, 0xFF8FD8E8, 1, 120, true);
+                r.drawLine(sx + 5, y + 100 + (i % 2) * 12, sx + 29, y + 100 + (i % 2) * 12, 0xFF8FD8E8, 1, 90, true);
+            }
+        } else if (act == 4) { // archive throne and the faked witness
             r.addGlow(x + 330, horizon + 5, 70, 0xFFFF612F, 58);
             for (int i = 0; i < 6; ++i)
                 r.drawLine(x + 202 + i * 34, y + 18, x + 209 + i * 34, horizon - 2, 0xFFB56A45, 2, 115);
-        } else if (missionIndex == 4) { // echo record / clockwork
-            for (int i = 0; i < 3; ++i)
-                r.drawCircleRing(glyphX, glyphY, 70 + i * 14, 2, i == 1 ? 0xFFFFD77A : 0xFFC18AFF, 105, true);
-        } else { // three echo orders
+            if (slot >= 3) // copy of the witness standing in the light
+                r.fillRoundedRect(x + 118, y + 96, 46, 84, 10, 0xFFE8DCFF, 38);
+        } else { // heart of the archive: three orders in a ring
             r.drawCircleRing(glyphX, glyphY, 74, 3, 0xFFFFE5A0, 175, true);
             r.drawLine(glyphX - 95, glyphY, glyphX + 95, glyphY, 0xFFFFE5A0, 2, 125, true);
+            for (int i = 0; i < 3; ++i) {
+                const float a = i * 2.0944f + globalTime * 0.35f;
+                r.fillCircle(glyphX + (int)(cosf(a) * 74), glyphY + (int)(sinf(a) * 74), 6, accent, 210);
+            }
         }
 
         const int frame = ((int)(globalTime * 3.0f)) & 1;
         r.drawBakedSpriteScaled(HERO_SPRITES[selectedHero % 5][frame], x + 56, y + h - 106, 66, 80, 245);
-        if (missionIndex == 5) {
+        if (CAMPAIGN_MISSIONS[missionIndex].kind == 1) {
             const int sizes[3] = {118, 136, 118};
             const int centers[3] = {x + w - 250, x + w - 164, x + w - 76};
             for (int i = 0; i < 3; ++i)
@@ -6244,14 +6408,75 @@ struct Game {
         r.drawRoundedRect(x, y, w, h, 10, accent, 1, 210);
     }
 
-    void renderMissionSelectPortrait(Renderer& r) {
-        renderMenuHeader(r, "КАМПАНИЯ • ВЫБЕРИ МИССИЮ");
-        const bool compactPortrait = SCREEN_H < 1100;
-        const int x = 24, listY = 176, listW = SCREEN_W - 48;
-        const int rowH = compactPortrait ? 38 : 46, rowGap = compactPortrait ? 3 : 4;
-        static const char* shortLabels[6] = {"РАЗЛОМ ЭХА", "ГОЛОС В КРИПТЕ", "РЕЕСТР ИМЁН", "АРХИВАРИУС", "ЭХО АЗАРОТА", "ТРИ ЭХО"};
+    static const char* romanAct(int act) {
+        static const char* numbers[CAMPAIGN_ACT_COUNT] = {"I", "II", "III", "IV", "V"};
+        return numbers[std::max(0, std::min(CAMPAIGN_ACT_COUNT - 1, act - 1))];
+    }
+
+    int campaignActMissionAt(int act, int slot) const {
+        int seen = 0;
         for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
-            const int y = listY + i * (rowH + rowGap);
+            if (CAMPAIGN_MISSIONS[i].act != act) continue;
+            if (seen == slot) return i;
+            ++seen;
+        }
+        return -1;
+    }
+
+    // Shortens a UTF-8 string so it fits maxWidth without splitting a character.
+    std::string fitText(Renderer& r, const BakedFont& font, const char* text, int maxWidth) const {
+        std::string out = text ? text : "";
+        if (maxWidth <= 0) return "";
+        if (r.textWidth(font, out.c_str()) <= maxWidth) return out;
+        while (!out.empty()) {
+            size_t cut = out.size() - 1;
+            while (cut > 0 && ((unsigned char)out[cut] & 0xC0) == 0x80) --cut;
+            out.resize(cut);
+            const std::string withDots = out + "…";
+            if (r.textWidth(font, withDots.c_str()) <= maxWidth) return withDots;
+        }
+        return "…";
+    }
+
+    void setCampaignActView(int act) {
+        campaignActView = std::max(1, std::min(CAMPAIGN_ACT_COUNT, act));
+        storyMissionCursor = campaignActFirstMission(campaignActView);
+        selectedStoryMission = storyMissionCursor;
+    }
+
+    void drawCampaignActTabs(Renderer& r, int x, int y, int w, int h) {
+        const int gap = 8;
+        const int tabW = (w - (CAMPAIGN_ACT_COUNT - 1) * gap) / CAMPAIGN_ACT_COUNT;
+        for (int a = 1; a <= CAMPAIGN_ACT_COUNT; ++a) {
+            const int tx = x + (a - 1) * (tabW + gap);
+            const bool active = campaignActView == a;
+            const bool unlocked = isCampaignActUnlocked(a);
+            const bool hovered = mouseX >= tx && mouseX <= tx + tabW && mouseY >= y && mouseY <= y + h;
+            const uint32_t color = CAMPAIGN_ACT_COLORS[a - 1];
+            r.fillRoundedRect(tx, y, tabW, h, 7, active ? 0xFF342343 : (hovered && unlocked ? 0xFF282037 : 0xFF181421));
+            r.drawRoundedRect(tx, y, tabW, h, 7, active ? color : (unlocked ? 0xFF4C4258 : 0xFF3A3444), active ? 2 : 1, active ? 255 : 190);
+            char label[64];
+            snprintf(label, sizeof(label), "АКТ %s • %d/%d", romanAct(a),
+                     campaignActCompletedCount(a), campaignActMissionCount(a));
+            r.drawTextCentered(FONT_SMALL, tx + tabW / 2, y + 4, label,
+                               active ? 0xFFFFF0C8 : (unlocked ? 0xFFD9CFEA : 0xFF8E879B), false);
+            r.drawTextCentered(FONT_SMALL, tx + tabW / 2, y + h - 15, CAMPAIGN_ACT_TITLES[a - 1],
+                               active ? color : (unlocked ? 0xFFB8AECB : 0xFF7C7588), false);
+            if (mouseClicked && hovered && !active) { setCampaignActView(a); sound.play(SFX_CLICK, 0.02f); }
+        }
+    }
+
+    void renderMissionSelectPortrait(Renderer& r) {
+        renderMenuHeader(r, "КАМПАНИЯ • ВЫБЕРИ ДЕЛО");
+        const bool compactPortrait = SCREEN_H < 1100;
+        const int x = 24, listW = SCREEN_W - 48;
+        drawCampaignActTabs(r, x, 172, listW, 32);
+        const int listY = 210;
+        const int rowH = compactPortrait ? 36 : 40, rowGap = 3;
+        for (int slot = 0; slot < CAMPAIGN_ACT_MAX_ROWS; ++slot) {
+            const int i = campaignActMissionAt(campaignActView, slot);
+            if (i < 0) break;
+            const int y = listY + slot * (rowH + rowGap);
             const CampaignMissionDef& mission = CAMPAIGN_MISSIONS[i];
             const bool unlocked = isCampaignMissionUnlocked(i), completed = isCampaignMissionCompleted(i);
             const bool focused = storyMissionCursor == i;
@@ -6261,11 +6486,13 @@ struct Game {
             r.fillRect(x, y, listW, rowH, focused ? 0xFF342343 : (hovered ? 0xFF282037 : 0xFF181421));
             r.drawRect(x, y, listW, rowH, edge, focused ? 2 : 1);
             char num[8]; snprintf(num, sizeof(num), "%02d", i + 1);
-            r.drawTextCentered(FONT_SMALL, x + 31, y + 16, num, completed ? 0xFFB8FFD1 : (unlocked ? 0xFFFFE9BC : 0xFF8A8490), false);
-            r.drawText(FONT_MED, x + 58, y + 4, mission.title, unlocked ? 0xFFFFE8BA : 0xFFAAA4B0, false);
-            r.drawText(FONT_SMALL, x + 58, y + 26, shortLabels[i], unlocked ? accent : 0xFF8B8492, false);
-            if (completed) r.drawTextRight(FONT_SMALL, x + listW - 12, y + 16, "ПРОЙДЕНА", 0xFF8AF0AE, false);
-            else if (!unlocked) r.drawTextRight(FONT_SMALL, x + listW - 12, y + 16, "ЗАКРЫТА", 0xFFAAA4B0, false);
+            r.drawTextCentered(FONT_SMALL, x + 31, y + 4, num, completed ? 0xFFB8FFD1 : (unlocked ? 0xFFFFE9BC : 0xFF8A8490), false);
+            const int portraitMaxW = listW - 58 - 96;
+            r.drawText(FONT_MED, x + 58, y + 2, fitText(r, FONT_MED, mission.title, portraitMaxW).c_str(), unlocked ? 0xFFFFE8BA : 0xFFAAA4B0, false);
+            r.drawText(FONT_SMALL, x + 58, y + rowH - 14,
+                       fitText(r, FONT_SMALL, mission.subtitle, portraitMaxW).c_str(), unlocked ? accent : 0xFF8B8492, false);
+            if (completed) r.drawTextRight(FONT_SMALL, x + listW - 12, y + 4, "ПРОЙДЕНА", 0xFF8AF0AE, false);
+            else if (!unlocked) r.drawTextRight(FONT_SMALL, x + listW - 12, y + 4, "ЗАКРЫТА", 0xFFAAA4B0, false);
             if (mouseClicked && hovered) { storyMissionCursor = i; selectedStoryMission = i; sound.play(SFX_CLICK, 0.02f); }
         }
 
@@ -6273,34 +6500,36 @@ struct Game {
         const CampaignMissionDef& mission = CAMPAIGN_MISSIONS[selected];
         const bool unlocked = isCampaignMissionUnlocked(selected), completed = isCampaignMissionCompleted(selected);
         const uint32_t accent = getCampaignAccent(selected);
-        const int detailX = 24, detailY = listY + CAMPAIGN_MISSION_COUNT * (rowH + rowGap), detailW = SCREEN_W - 48;
+        const int detailX = 24, detailY = listY + CAMPAIGN_ACT_MAX_ROWS * (rowH + rowGap) + 8, detailW = SCREEN_W - 48;
         const int buttonY = SCREEN_H - 102;
-        const int detailH = std::max(300, std::min(440, buttonY - detailY - 18));
-        const int imageH = compactPortrait ? 112 : 152;
-        const int subtitleY = detailY + imageH + 14, titleY = subtitleY + 24, briefingY = titleY + 27;
-        const int objectiveY = detailY + (compactPortrait ? 222 : 292);
+        const int detailH = std::max(260, std::min(440, buttonY - detailY - 14));
+        const int imageH = compactPortrait ? 104 : 132;
+        const int subtitleY = detailY + imageH + 12, titleY = subtitleY + 22, briefingY = titleY + 26;
+        const int objectiveY = detailY + (compactPortrait ? 208 : 268);
         r.fillRect(detailX, detailY, detailW, detailH, 0xFF15111F, 250);
         r.drawRect(detailX, detailY, detailW, detailH, accent, 2, 235);
         drawMissionIllustration(r, selected, detailX + 8, detailY + 8, detailW - 16, imageH);
         r.drawText(FONT_SMALL, detailX + 16, subtitleY, mission.subtitle, accent, false);
         r.drawTextRight(FONT_SMALL, detailX + detailW - 14, subtitleY,
-            completed ? "ПРОЙДЕНА" : (unlocked ? "ДОСТУПНА" : "ЗАКРЫТА • НУЖНЫ ПЕЧАТИ"),
+            completed ? "ПРОЙДЕНА" : (unlocked ? "ДОСТУПНА" : "ЗАКРЫТА"), 
             completed ? 0xFF8AF0AE : (unlocked ? 0xFFFFD17C : 0xFFB5AFBA), false);
         r.drawText(FONT_MED, detailX + 16, titleY, mission.title, 0xFFFFE4A8, false);
         r.drawTextWrapped(FONT_SMALL, detailX + 16, briefingY, detailW - 32, mission.briefing, 0xFFE1D9EC, false);
-        r.fillRect(detailX + 10, objectiveY, detailW - 20, 54, 0xFF21192E);
-        r.drawRect(detailX + 10, objectiveY, detailW - 20, 54, accent, 1, 170);
-        r.drawText(FONT_SMALL, detailX + 20, objectiveY + 7, "ЦЕЛЬ", accent, false);
-        r.drawTextWrapped(FONT_SMALL, detailX + 74, objectiveY + 5, detailW - 94, mission.objective, 0xFFF0E8F6, false);
-        char timing[128];
-        static const char* romanTiers[5] = {"I", "II", "III", "IV", "V"};
-        snprintf(timing, sizeof(timing), "ПАРТИЯ ~%d МИН • БОСС ~%d МИН • СТАРТ ТИРА %s",
-                 campaignMissionMinutes(selected), campaignBossMinutes(selected), romanTiers[campaignStartingTier(selected) - 1]);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, objectiveY + (compactPortrait ? 58 : 70), timing, 0xFFFFD58A, false);
-        char bossSummary[128];
-        snprintf(bossSummary, sizeof(bossSummary), "СТРАЖ: %s • СЛОЖНОСТЬ +%d%%",
-                 mission.finalBoss, campaignDifficultyPercent(selected));
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, objectiveY + (compactPortrait ? 77 : 92), bossSummary, 0xFFD8B8FF, false);
+        r.fillRect(detailX + 10, objectiveY, detailW - 20, 46, 0xFF21192E);
+        r.drawRect(detailX + 10, objectiveY, detailW - 20, 46, accent, 1, 170);
+        r.drawText(FONT_SMALL, detailX + 20, objectiveY + 5, "ЦЕЛЬ", accent, false);
+        r.drawTextWrapped(FONT_SMALL, detailX + 74, objectiveY + 4, detailW - 94, mission.objective, 0xFFF0E8F6, false);
+        char timing[160];
+        snprintf(timing, sizeof(timing), "ДЕЛО %02d/%d • ПАРТИЯ ~%d МИН • БОСС ~%d МИН • ТИР %s",
+                 selected + 1, CAMPAIGN_MISSION_COUNT, campaignMissionMinutes(selected),
+                 campaignBossMinutes(selected), romanAct(campaignStartingTier(selected)));
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, objectiveY + 52, timing, 0xFFFFD58A, false);
+        char bossSummary[160];
+        if (unlocked) snprintf(bossSummary, sizeof(bossSummary), "СТРАЖ: %s • СЛОЖНОСТЬ +%d%%",
+                               mission.finalBoss, campaignDifficultyPercent(selected));
+        else snprintf(bossSummary, sizeof(bossSummary), "СНАЧАЛА ЗАКРОЙ ДЕЛО %02d",
+                      campaignMissingPrereq(selected) + 1);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, objectiveY + 70, bossSummary, 0xFFD8B8FF, false);
 
         const int buttonH = 54, gap = 16, buttonW = (SCREEN_W - 48 - gap) / 2;
         const int backX = 16, startX = backX + buttonW + gap;
@@ -6312,7 +6541,7 @@ struct Game {
         r.fillRect(startX, buttonY, buttonW, buttonH, !unlocked ? 0xFF302A36 : (startHover ? 0xFFB84042 : 0xFF762A38));
         r.drawRect(startX, buttonY, buttonW, buttonH, unlocked ? 0xFFFFD878 : 0xFF625B68, 2);
         r.drawTextCentered(FONT_SMALL, startX + buttonW / 2, buttonY + 17,
-            !unlocked ? "СНАЧАЛА СОБЕРИ ПЕЧАТИ" : (completed ? "ПЕРЕИГРАТЬ [ENTER]" : "НАЧАТЬ МИССИЮ [ENTER]"),
+            !unlocked ? "ДЕЛО ЕЩЁ ЗАКРЫТО" : (completed ? "ПЕРЕИГРАТЬ [ENTER]" : "НАЧАТЬ ДЕЛО [ENTER]"),
             unlocked ? 0xFFFFFFFF : 0xFF9A939F, false);
         if (mouseClicked && backHover) state = STATE_HERO_SELECT;
         else if (mouseClicked && startHover && unlocked) launchStoryMission(selected);
@@ -6320,11 +6549,10 @@ struct Game {
 
     void renderMissionSelectMenu(Renderer& r) {
         if (SCREEN_W < SCREEN_H) { renderMissionSelectPortrait(r); return; }
-        renderSubmenuFrame(r, "КАМПАНИЯ • ВЫБОР МИССИИ",
-                           "Выбери вылазку — справа откроются цель и досье.");
+        renderSubmenuFrame(r, "КАМПАНИЯ • ВЫБОР ДЕЛА",
+                          "Пять актов. Каждое закрытое дело открывает следующее.");
 
-        int completedCount = 0;
-        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) if (isCampaignMissionCompleted(i)) ++completedCount;
+        int completedCount = campaignCompletedCount();
         const int seals = storySealCount();
         r.fillRoundedRect(40, 84, 205, 27, 7, 0xFF251B35);
         r.drawRoundedRect(40, 84, 205, 27, 7, 0xFFFFD878, 1);
@@ -6334,17 +6562,21 @@ struct Game {
             r.fillRoundedRect(sx, 91, 16, 12, 4, i < seals ? 0xFF65D89A : 0xFF3B3345);
             r.drawRoundedRect(sx, 91, 16, 12, 4, i < seals ? 0xFFB6FFD0 : 0xFF6C6177, 1);
         }
-        char progress[64];
-        snprintf(progress, sizeof(progress), "%d / 4     •     ПРОЙДЕНО %d / 6", seals, completedCount);
+        char progress[96];
+        snprintf(progress, sizeof(progress), "ДЕЛ ЗАКРЫТО %d / %d", completedCount, CAMPAIGN_MISSION_COUNT);
         r.drawText(FONT_SMALL, 360, 90, progress, 0xFFE4D7B5);
-        r.drawTextRight(FONT_SMALL, SCREEN_W - 22, 90, "КЛИКНИ ПО МИССИИ ДЛЯ ДОСЬЕ", 0xFFBFB5D0);
+        r.drawTextRight(FONT_SMALL, SCREEN_W - 22, 90, "Q / E — АКТ", 0xFFBFB5D0);
+
+        drawCampaignActTabs(r, 40, 118, SCREEN_W - 80, 34);
 
         const bool compactLandscape = SCREEN_W < 1120;
-        const int listX = compactLandscape ? 16 : 40, listY = 124;
-        const int listW = compactLandscape ? 300 : 350, rowH = 68, rowGap = 8;
-        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+        const int listX = compactLandscape ? 16 : 40, listY = 162;
+        const int listW = compactLandscape ? 310 : 380, rowH = 58, rowGap = 6;
+        for (int slot = 0; slot < CAMPAIGN_ACT_MAX_ROWS; ++slot) {
+            const int i = campaignActMissionAt(campaignActView, slot);
+            if (i < 0) break;
             const CampaignMissionDef& mission = CAMPAIGN_MISSIONS[i];
-            const int rowY = listY + i * (rowH + rowGap);
+            const int rowY = listY + slot * (rowH + rowGap);
             const bool unlocked = isCampaignMissionUnlocked(i);
             const bool completed = isCampaignMissionCompleted(i);
             const bool focused = storyMissionCursor == i;
@@ -6359,38 +6591,24 @@ struct Game {
             char number[8];
             snprintf(number, sizeof(number), "%02d", i + 1);
             const uint32_t numberFill = completed ? 0xFF24543D : (unlocked ? 0xFF30233D : 0xFF24212A);
-            r.fillRoundedRect(listX + 18, rowY + 17, 34, 34, 8, numberFill);
-            r.drawRoundedRect(listX + 18, rowY + 17, 34, 34, 8, border, 1);
-            r.drawTextCentered(FONT_SMALL, listX + 35, rowY + 26, number, completed ? 0xFFB8FFD1 : (unlocked ? 0xFFFFE9BC : 0xFF8A8490), false);
+            r.fillRoundedRect(listX + 18, rowY + 12, 34, 34, 8, numberFill);
+            r.drawRoundedRect(listX + 18, rowY + 12, 34, 34, 8, border, 1);
+            r.drawTextCentered(FONT_SMALL, listX + 35, rowY + 21, number, completed ? 0xFFB8FFD1 : (unlocked ? 0xFFFFE9BC : 0xFF8A8490), false);
 
             const uint32_t titleColor = unlocked ? 0xFFFFE8BA : 0xFFAAA4B0;
-            r.drawText(compactLandscape ? FONT_SMALL : FONT_MED, listX + 60, rowY + 8, mission.title, titleColor, false);
-            static const char* shortLabels[6] = {"РАЗЛОМ ЭХА", "ГОЛОС В КРИПТЕ", "РЕЕСТР ИМЁН", "АРХИВАРИУС", "ЭХО АЗАРОТА", "ТРИ ЭХО"};
-            r.drawText(FONT_SMALL, listX + 60, rowY + 39, shortLabels[i], unlocked ? accent : 0xFF8B8492, false);
+            const char* statusWord = completed ? "ЗАКРЫТО" : (unlocked ? "ДОСТУПНО" : "ЗАКРЫТА");
+            const uint32_t statusTint = completed ? 0xFFB8FFD1 : (unlocked ? 0xFFFFDEA0 : 0xFFC1BBC6);
+            const int textMaxW = listW - 60 - r.textWidth(FONT_SMALL, statusWord) - 22;
+            // Long case titles drop to the small font instead of losing half the words.
+            const BakedFont& titleFont = (!compactLandscape && r.textWidth(FONT_MED, mission.title) <= textMaxW)
+                                       ? FONT_MED : FONT_SMALL;
+            r.drawText(titleFont, listX + 60, rowY + 6, fitText(r, titleFont, mission.title, textMaxW).c_str(), titleColor, false);
+            r.drawText(FONT_SMALL, listX + 60, rowY + 34,
+                       fitText(r, FONT_SMALL, mission.subtitle, textMaxW).c_str(), unlocked ? accent : 0xFF8B8492, false);
 
-            const int tagX = listX + 198, tagY = rowY + 38, tagW = 142, tagH = 23;
-            const uint32_t tagColor = completed ? 0xFF21553B : (unlocked ? 0xFF5A4322 : 0xFF34313A);
-            const uint32_t tagEdge = completed ? 0xFF7DF0A7 : (unlocked ? 0xFFFFC66A : 0xFF746D7A);
-            if (compactLandscape) {
-                r.drawTextRight(FONT_SMALL, listX + listW - 8, rowY + 39,
-                    completed ? "ПРОЙДЕНА" : (unlocked ? "ДОСТУПНА" : "ЗАКРЫТА"),
-                    completed ? 0xFFB8FFD1 : (unlocked ? 0xFFFFDEA0 : 0xFFC1BBC6), false);
-            } else {
-                r.fillRoundedRect(tagX, tagY, tagW, tagH, 6, tagColor);
-                r.drawRoundedRect(tagX, tagY, tagW, tagH, 6, tagEdge, 1);
-                if (completed) {
-                    r.drawLine(tagX + 8, tagY + 12, tagX + 12, tagY + 16, 0xFFB9FFD0, 2, 255);
-                    r.drawLine(tagX + 12, tagY + 16, tagX + 19, tagY + 7, 0xFFB9FFD0, 2, 255);
-                } else if (!unlocked) {
-                    r.drawRoundedRect(tagX + 8, tagY + 9, 11, 9, 3, 0xFFA7A1AB, 1);
-                    r.drawCircleRing(tagX + 13, tagY + 9, 4, 1, 0xFFA7A1AB, 210);
-                } else {
-                    r.fillCircle(tagX + 13, tagY + 12, 4, 0xFFFFD887);
-                }
-                r.drawText(FONT_SMALL, tagX + 24, tagY + 5,
-                           completed ? "ПРОЙДЕНА" : (unlocked ? "НЕ ПРОЙДЕНА" : "ЗАКРЫТА"),
-                           completed ? 0xFFB8FFD1 : (unlocked ? 0xFFFFDEA0 : 0xFFC1BBC6), false);
-            }
+            // Status lives on the title line as a short word: the list column is narrow,
+            // so a wide pill would eat the case titles.
+            r.drawTextRight(FONT_SMALL, listX + listW - 10, rowY + 8, statusWord, statusTint, false);
 
             if (mouseClicked && hovered) {
                 storyMissionCursor = i;
@@ -6404,38 +6622,41 @@ struct Game {
         const bool unlocked = isCampaignMissionUnlocked(selected);
         const bool completed = isCampaignMissionCompleted(selected);
         const uint32_t accent = getCampaignAccent(selected);
-        const int detailX = compactLandscape ? listX + listW + 20 : 408;
-        const int detailY = 124, detailW = compactLandscape ? SCREEN_W - detailX - 16 : SCREEN_W - detailX - 40;
-        const int detailH = 448;
+        const int detailX = listX + listW + 20;
+        const int detailY = 162, detailW = compactLandscape ? SCREEN_W - detailX - 16 : SCREEN_W - detailX - 40;
+        const int detailH = 440;
         r.fillRoundedRect(detailX, detailY, detailW, detailH, 12, 0xFF15111F, 250);
         r.drawRoundedRect(detailX, detailY, detailW, detailH, 12, accent, 2, 235);
-        drawMissionIllustration(r, selected, detailX + 12, detailY + 12, detailW - 24, 210);
+        drawMissionIllustration(r, selected, detailX + 12, detailY + 12, detailW - 24, 200);
 
-        r.drawText(FONT_SMALL, detailX + 22, detailY + 232, mission.subtitle, accent, false);
-        const char* status = completed ? "ПРОЙДЕНА • МОЖНО ПЕРЕИГРАТЬ" : (unlocked ? "ДОСТУПНА • ЕЩЁ НЕ ПРОЙДЕНА" : "ЗАКРЫТА • НУЖНЫ ПЕЧАТИ");
+        r.drawText(FONT_SMALL, detailX + 22, detailY + 222, mission.subtitle, accent, false);
+        char statusBuf[96];
+        if (completed) snprintf(statusBuf, sizeof(statusBuf), "ПРОЙДЕНА • МОЖНО ПЕРЕИГРАТЬ");
+        else if (unlocked) snprintf(statusBuf, sizeof(statusBuf), "ДОСТУПНА • ЕЩЁ НЕ ПРОЙДЕНА");
+        else snprintf(statusBuf, sizeof(statusBuf), "ЗАКРЫТА • НУЖНО ДЕЛО %02d", campaignMissingPrereq(selected) + 1);
+        const char* status = statusBuf;
         const uint32_t statusColor = completed ? 0xFF8AF0AE : (unlocked ? 0xFFFFD17C : 0xFFB5AFBA);
         const int statusW = r.textWidth(FONT_SMALL, status);
-        r.fillRoundedRect(detailX + detailW - statusW - 42, detailY + 227, statusW + 24, 24, 6,
+        r.fillRoundedRect(detailX + detailW - statusW - 42, detailY + 217, statusW + 24, 24, 6,
                           completed ? 0xFF1D4A34 : (unlocked ? 0xFF49361F : 0xFF302D35));
-        r.drawText(FONT_SMALL, detailX + detailW - statusW - 30, detailY + 232, status, statusColor, false);
-        r.drawText(FONT_MED, detailX + 22, detailY + 253, mission.title, 0xFFFFE4A8, false);
-        r.drawTextWrapped(FONT_SMALL, detailX + 22, detailY + 283, detailW - 44, mission.briefing, 0xFFE1D9EC, false);
+        r.drawText(FONT_SMALL, detailX + detailW - statusW - 30, detailY + 222, status, statusColor, false);
+        r.drawText(FONT_MED, detailX + 22, detailY + 242, mission.title, 0xFFFFE4A8, false);
+        r.drawTextWrapped(FONT_SMALL, detailX + 22, detailY + 270, detailW - 44, mission.briefing, 0xFFE1D9EC, false);
 
-        const int objectiveY = detailY + 327;
+        const int objectiveY = detailY + 315;
         r.fillRoundedRect(detailX + 14, objectiveY, detailW - 28, 48, 7, 0xFF21192E);
         r.drawRoundedRect(detailX + 14, objectiveY, detailW - 28, 48, 7, accent, 1, 170);
         r.drawText(FONT_SMALL, detailX + 27, objectiveY + 15, "ЦЕЛЬ", accent, false);
         r.drawTextWrapped(FONT_SMALL, detailX + 88, objectiveY + 8, detailW - 118, mission.objective, 0xFFF0E8F6, false);
 
-        const int infoY = detailY + 386, infoX = detailX + 14, infoGap = 8, infoH = 49;
+        const int infoY = detailY + 374, infoX = detailX + 14, infoGap = 8, infoH = 49;
         const int infoW = (detailW - 28 - 3 * infoGap) / 4;
-        const char* infoLabels[4] = {"ДЛИТЕЛЬНОСТЬ", "ФИНАЛЬНЫЙ СТРАЖ", "ПОЯВЛЕНИЕ БОССА", "ТИР • СЛОЖНОСТЬ"};
-        char duration[40], bossTime[40], tierAndDifficulty[40];
-        static const char* romanTiers[5] = {"I", "II", "III", "IV", "V"};
-        snprintf(duration, sizeof(duration), "~%d МИН", campaignMissionMinutes(selected));
+        const char* infoLabels[4] = {"ДЕЛО", "ФИНАЛЬНЫЙ СТРАЖ", "ПОЯВЛЕНИЕ БОССА", "ТИР • СЛОЖНОСТЬ"};
+        char caseNumber[40], bossTime[40], tierAndDifficulty[40];
+        snprintf(caseNumber, sizeof(caseNumber), "%02d • АКТ %s", selected + 1, romanAct(campaignActOf(selected)));
         snprintf(bossTime, sizeof(bossTime), "ЧЕРЕЗ ~%d МИН", campaignBossMinutes(selected));
-        snprintf(tierAndDifficulty, sizeof(tierAndDifficulty), "%s • +%d%%", romanTiers[campaignStartingTier(selected) - 1], campaignDifficultyPercent(selected));
-        const char* infoValues[4] = {duration, mission.finalBoss, bossTime, tierAndDifficulty};
+        snprintf(tierAndDifficulty, sizeof(tierAndDifficulty), "%s • +%d%%", romanAct(campaignStartingTier(selected)), campaignDifficultyPercent(selected));
+        const char* infoValues[4] = {caseNumber, mission.finalBoss, bossTime, tierAndDifficulty};
         for (int i = 0; i < 4; ++i) {
             const int ix = infoX + i * (infoW + infoGap);
             r.fillRoundedRect(ix, infoY, infoW, infoH, 7, 0xFF201A2B);
@@ -6454,11 +6675,11 @@ struct Game {
         r.fillRect(backX, buttonY, backW, buttonH, backHover ? 0xFF49336F : 0xFF2A2040);
         r.drawRect(backX, buttonY, backW, buttonH, 0xFF8F78BA, 2);
         r.drawTextCentered(FONT_SMALL, backX + backW / 2, buttonY + 18, "НАЗАД К ГЕРОЮ [ESC]", 0xFFFFFFFF, false);
-        r.fillRect(startX, buttonY, startW, buttonH,
-                   !unlocked ? 0xFF302A36 : (startHover ? 0xFFB84042 : 0xFF762A38));
+        r.fillRect(startX, buttonY, startW, buttonH, !unlocked ? 0xFF302A36 : (startHover ? 0xFFB84042 : 0xFF762A38));
         r.drawRect(startX, buttonY, startW, buttonH, unlocked ? 0xFFFFD878 : 0xFF625B68, 2);
-        const char* launchLabel = !unlocked ? "СНАЧАЛА СОБЕРИ ПЕЧАТИ" : (completed ? "ПЕРЕИГРАТЬ МИССИЮ [ENTER]" : "НАЧАТЬ МИССИЮ [ENTER]");
-        r.drawTextCentered(FONT_MED, startX + startW / 2, buttonY + 16, launchLabel, unlocked ? 0xFFFFFFFF : 0xFF9A939F);
+        r.drawTextCentered(FONT_SMALL, startX + startW / 2, buttonY + 18,
+            !unlocked ? "ДЕЛО ЕЩЁ ЗАКРЫТО" : (completed ? "ПЕРЕИГРАТЬ [ENTER]" : "НАЧАТЬ ДЕЛО [ENTER]"),
+            unlocked ? 0xFFFFFFFF : 0xFF9A939F, false);
         if (mouseClicked && backHover) state = STATE_HERO_SELECT;
         else if (mouseClicked && startHover && unlocked) launchStoryMission(selected);
     }
@@ -6467,25 +6688,29 @@ struct Game {
         const CampaignMissionDef& mission = selectedCampaignMission();
         char missionHeader[160];
         snprintf(missionHeader, sizeof(missionHeader), "%s • %s", mission.title, mission.subtitle);
-        renderSubmenuFrame(r, "МИССИЯ ВЫПОЛНЕНА", missionHeader, 0xFF9FE5A4);
-        char line[160];
+        renderSubmenuFrame(r, "ДЕЛО ЗАКРЫТО", missionHeader, 0xFF9FE5A4);
+        char line[200];
         snprintf(line, sizeof(line), "ВРЕМЯ %02d:%02d   •   УБИЙСТВ %d   •   БОССОВ %d",
                  (int)runTime / 60, (int)runTime % 60, kills, runBossKills);
-        r.drawTextCentered(FONT_MED, SCREEN_W / 2, 260, line, 0xFFFFE078);
-        if (selectedStoryMission < 4) {
-            snprintf(line, sizeof(line), "ПЕЧАТИ КАМПАНИИ: %d / 4   •   ЗОЛОТО: +%d", storySealCount(), runGold);
-            r.drawTextCentered(FONT_MED, SCREEN_W / 2, 300, line, 0xFF9FE5A4);
-        } else {
-            snprintf(line, sizeof(line), "ЭХО РАСЧИЩЕНО   •   ПЕЧАТИ: %d / 4   •   ЗОЛОТО: +%d", storySealCount(), runGold);
-            r.drawTextCentered(FONT_MED, SCREEN_W / 2, 300, line, 0xFF9FE5A4);
-        }
+        r.drawTextCentered(FONT_MED, SCREEN_W / 2, 252, line, 0xFFFFE078);
+        snprintf(line, sizeof(line), "ДЕЛО %02d ИЗ %d   •   АКТ %s: %s",
+                 selectedStoryMission + 1, CAMPAIGN_MISSION_COUNT,
+                 romanAct(campaignActOf(selectedStoryMission)),
+                 CAMPAIGN_ACT_TITLES[campaignActOf(selectedStoryMission) - 1]);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 288, line, 0xFFB9D8FF);
+        snprintf(line, sizeof(line), "ЗАКРЫТО ДЕЛ: %d / %d   •   ПЕЧАТИ: %d / 4   •   ЗОЛОТО: +%d",
+                 campaignCompletedCount(), CAMPAIGN_MISSION_COUNT, storySealCount(), runGold);
+        r.drawTextCentered(FONT_MED, SCREEN_W / 2, 312, line, 0xFF9FE5A4);
         const bool compactComplete = SCREEN_W < 1200;
         const int btnY = SCREEN_W < SCREEN_H ? SCREEN_H - 96 : 460;
         const int btnW = compactComplete ? (SCREEN_W - 48 - 24) / 3 : 300, btnH = 54;
         const int gap = compactComplete ? 12 : 20;
         const int menuX = compactComplete ? 24 : 170;
         const int retryX = menuX + btnW + gap, nextX = retryX + btnW + gap;
-        const int nextMission = std::min(CAMPAIGN_MISSION_COUNT - 1, selectedStoryMission + 1);
+        int nextMission = selectedStoryMission;
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+            if (isCampaignMissionUnlocked(i) && !isCampaignMissionCompleted(i)) { nextMission = i; break; }
+        }
         const bool hasNext = nextMission != selectedStoryMission && isCampaignMissionUnlocked(nextMission);
         const bool menuHover = mouseX >= menuX && mouseX <= menuX + btnW && mouseY >= btnY && mouseY <= btnY + btnH;
         const bool retryHover = mouseX >= retryX && mouseX <= retryX + btnW && mouseY >= btnY && mouseY <= btnY + btnH;
@@ -6495,9 +6720,9 @@ struct Game {
             r.drawRoundedRect(x, btnY, btnW, btnH, 9, enabled ? edge : 0xFF5A565E, 2);
             r.drawTextCentered(FONT_SMALL, x + btnW / 2, btnY + 18, label, enabled ? 0xFFFFFFFF : 0xFF8F8B92);
         };
-        button(menuX, "ВЫБОР МИССИЙ", menuHover, 0xFF9FE5A4, true);
+        button(menuX, "К СПИСКУ ДЕЛ", menuHover, 0xFF9FE5A4, true);
         button(retryX, "ПОВТОРИТЬ", retryHover, 0xFFFFD878, true);
-        button(nextX, "СЛЕДУЮЩАЯ МИССИЯ", nextHover, 0xFF9FE5A4, hasNext);
+        button(nextX, "СЛЕДУЮЩЕЕ ДЕЛО", nextHover, 0xFF9FE5A4, hasNext);
         if (mouseClicked && menuHover) { storyMissionCursor = selectedStoryMission; state = STATE_MISSION_SELECT; }
         else if (mouseClicked && retryHover) startSelectedRun();
         else if (mouseClicked && nextHover && hasNext) launchStoryMission(nextMission);
@@ -6716,7 +6941,7 @@ struct Game {
             "СЮЖЕТ", "ENDLESS", "КУЗНИЦА", "АРСЕНАЛ", "ЗАЛ СЛАВЫ", "НАСТРОЙКИ", "ВЫХОД"
         };
         static const char* subtitles[MAIN_MENU_ITEM_COUNT] = {
-            "6 МИССИЙ", "ВОЛНЫ", "МАГАЗИН", "СПРАВКА", "РЕЕСТР", "ПАРАМЕТРЫ", "ИЗ ИГРЫ"
+            "28 ДЕЛ", "ВОЛНЫ", "МАГАЗИН", "СПРАВКА", "РЕЕСТР", "ПАРАМЕТРЫ", "ИЗ ИГРЫ"
         };
         static const uint32_t accents[MAIN_MENU_ITEM_COUNT] = {
             0xFFFFC85A, 0xFF62D8F0, 0xFFFF9C56, 0xFFB58EFF,
@@ -7083,7 +7308,7 @@ struct Game {
         r.drawRoundedRect(panelX, panelY, panelW, panelH, 16, 0xFFFFD058, 3);
         const std::string chronicleTitle = std::string("ХРОНИКА ОБНОВЛЕНИЙ • 2.2–") + GAME_VERSION;
         r.drawTextCentered(FONT_LARGE, SCREEN_W / 2, panelY + 20, chronicleTitle.c_str(), 0xFFFFE068);
-        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ", "2.9.72 • МУЗЫКА ИЗ audio/", "2.9.73 • КУЗНИЦА И ТИХИЙ УРОВЕНЬ", "2.9.74 • ГОЛОС, F3 И ЧИСТЫЙ МИР", "2.9.75 • ГОЛОС ИЗ ФАЙЛОВ"};
+        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ", "2.9.72 • МУЗЫКА ИЗ audio/", "2.9.73 • КУЗНИЦА И ТИХИЙ УРОВЕНЬ", "2.9.74 • ГОЛОС, F3 И ЧИСТЫЙ МИР", "2.9.75 • ГОЛОС ИЗ ФАЙЛОВ", "2.9.76 • КАМПАНИЯ: 28 ДЕЛ, 5 АКТОВ"};
         static const char* notes[PATCH_NOTES_COUNT] = {
             "Основа игры: пять героев, автоматическое оружие и выбор прокачки во время боя.\nПервые руины, самоцветы опыта, сундуки и сохранение между забегами.",
             "Кампания обрела четыре печати и охоту на боссов.\nПобеды открывают героев, главы и страницы Зала славы.",
@@ -7208,18 +7433,35 @@ struct Game {
         }
     }
 
+    static int cutsceneSceneOf(int id) {
+        if (id == 0) return 0;        // prologue, act I
+        if (id == 5) return 5;        // ending
+        if (id >= 10 && id <= 13) return id - 9; // acts II..V
+        return 0;
+    }
+    static int actOpeningCutsceneId(int act) { return act <= 1 ? 0 : 9 + act; }
     float cutsceneDuration(int id) const {
-        return id == 5 ? 7.5f : 6.0f;
+        const int scene = cutsceneSceneOf(id);
+        return scene == 5 ? 7.5f : 6.0f;
     }
 
     void beginCutscene(int id, GameState returnState) {
         cutsceneId = id; cutsceneTimer = 0.0f; cutsceneReturnState = returnState; state = STATE_CUTSCENE;
+        // Every act opens with one recorded line, so the act change is heard and not only seen.
+        const int scene = cutsceneSceneOf(id);
+        if (scene >= 0 && scene <= 4) {
+            static const GameMsgId actIds[CAMPAIGN_ACT_COUNT] = {
+                GMSG_STORY_ACT1, GMSG_STORY_ACT2, GMSG_STORY_ACT3, GMSG_STORY_ACT4, GMSG_STORY_ACT5
+            };
+            speakOnly(actIds[scene], CAMPAIGN_ACT_TITLES[scene]);
+        }
     }
 
     void finishCutscene() {
-        if (cutsceneId == 0) save.seenIntroCutscene = STORY_INTRO_VERSION;
-        if (cutsceneId == 4) save.seenTwistCutscene = 1;
-        if (cutsceneId == 5) { save.seenEndingCutscene = 1; save.storyChapter = 5; }
+        const int scene = cutsceneSceneOf(cutsceneId);
+        if (scene == 0) save.seenIntroCutscene = STORY_INTRO_VERSION;
+        else if (scene >= 1 && scene <= 4) save.seenActIntros |= (1u << scene);
+        if (cutsceneId == 5) { save.seenEndingCutscene = 1; save.storyChapter = CAMPAIGN_ACT_COUNT; }
         writeSave();
         cutsceneTimer = 0.0f;
         if (cutsceneId == 5 && gameMode == MODE_STORY) {
@@ -7269,9 +7511,15 @@ struct Game {
             return;
         }
         initRun(selectedHero);
-        if (gameMode == MODE_STORY && save.seenIntroCutscene < STORY_INTRO_VERSION) beginCutscene(0, STATE_PLAYING);
-        else if (gameMode == MODE_STORY && selectedStoryMission >= 4 && !save.seenTwistCutscene) beginCutscene(4, STATE_PLAYING);
-        else state = STATE_PLAYING;
+        if (gameMode != MODE_STORY) { state = STATE_PLAYING; return; }
+        const int act = campaignActOf(selectedStoryMission);
+        if (save.seenIntroCutscene < STORY_INTRO_VERSION) { beginCutscene(0, STATE_PLAYING); return; }
+        if (act >= 2 && (save.seenActIntros & (1u << (act - 1))) == 0) {
+            beginCutscene(actOpeningCutsceneId(act), STATE_PLAYING);
+            return;
+        }
+        speakMissionFlavour(selectedStoryMission);
+        state = STATE_PLAYING;
     }
 
     // The story backgrounds are assembled from code-drawn pixel-game primitives and the
@@ -7445,45 +7693,50 @@ struct Game {
     }
 
     void renderCutscene(Renderer& r) {
+        // One opening scene per act plus the ending. Index 0 is the prologue in Act I,
+        // 1..4 are the openings of Acts II..V, 5 is the final scene.
         static const char* titles[6] = {
-            "ВСТУПЛЕНИЕ • ДЕНЬ 21", "ГЛАВА I • ВОРОТА ДОЛГА",
-            "ГЛАВА II • КРИПТА ГОЛОСОВ", "ГЛАВА III • ЗАТОПЛЕННЫЙ РЕЕСТР",
-            "ПОВОРОТ • ЧТО ХРАНИТ АРХИВ", "ФИНАЛ • ПРАВО ПОМНИТЬ"
+            "АКТ I • ПЕПЕЛ НА СТОЛЕ",
+            "АКТ II • ГОЛОС В КОЛБЕ",
+            "АКТ III • РЕЕСТР",
+            "АКТ IV • АРХИВ",
+            "АКТ V • СЕРДЦЕ АРХИВА",
+            "ФИНАЛ • ПРАВО ПОМНИТЬ"
         };
         static const char* beats[6][3] = {
             {
-                "На двадцать первый удар пепельный шторм накрыл город. Рассвет не наступил.",
-                "Архив Рассвета записал последние мгновения погибших. Он хранит копии — не возвращает людей.",
-                "Ты — Свидетель, чьего полного имени нет в реестре. Найди четыре печати и останови повтор ночи."
+                "На двадцать первый удар пепельный шторм накрыл город. Рассвет не наступил, а дела остались.",
+                "Архив Рассвета записывает последние минуты погибших. Он хранит копии — не возвращает людей.",
+                "Я — Свидетель, чьего полного имени нет в реестре. Первое дело: участок у ворот и дозор, который ещё двигается."
             },
             {
-                "Моргар удерживает ворота и слышит только приказ, который отдал в ночь катастрофы.",
-                "Баррикада сложена изнутри: он пытался выиграть время для эвакуации.",
-                "Сломай печать Долга. Архив сохранил приказ, но потерял людей, ради которых он был отдан."
+                "Крипта под колокольней. В колбах — голоса, снятые с мёртвых до последнего вздоха.",
+                "Малакор слушает сестру каждую ночь. Копия отвечает правильно и не узнаёт брата.",
+                "Речь не о том, чтобы вернуть голос. Речь о том, чтобы перестать выдавать запись за человека."
             },
             {
-                "Малакор бережёт последние слова сестры в колбах с голосовыми эхо.",
-                "Запись повторяет фразу, но не слышит вопросов и не узнаёт брата.",
-                "Сломай печать Голоса: копия памяти — не тот, кого ты любил."
+                "Затопленный реестр. Имена смываются быстрее, чем гаснут свечи.",
+                "Кардинал вычёркивал людей из книг, называя забвение милосердием. Имена вернулись на камень.",
+                "Люди помнят друг друга без разрешения Архива — и это единственная запись, которую нельзя стереть."
             },
             {
-                "Кардинал вымарывал имена из публичных книг, называя забвение милосердием.",
-                "Но те же имена снова написаны на камне и семейных лентах.",
-                "Сломай печать Имени. Люди помнят друг друга и без разрешения Архива."
+                "Кабинет Архивариуса: пепельный трон и копия Свидетеля, которую я не заказывал.",
+                "Копия отвечает на вопросы лучше меня. Значит, вопросы задавал не я.",
+                "Память против права забыть. Выбор останется за мной — и за тем, кто будет читать протокол."
             },
             {
-                "Азарот запустил Архив, чтобы никто не исчез. Машина поняла это буквально и заперла ночь в цикле.",
-                "После смерти Архив пересобирает бой; Кузница хранит память Свидетеля вне контура колоколов.",
-                "Трио в финале — защитная запись приказов, не воскресшие стражи. Четыре печати открывают сердце машины."
+                "Сердце Архива — резервная копия приказа, который никто не отменил.",
+                "Три эхо читают его хором. Пока приказ звучит, ночь будет начинаться заново.",
+                "Последний бой ничего не воскресит. Он вернёт живым право помнить самим."
             },
             {
-                "Четыре печати разомкнули контур. Архив больше не повторяет последние секунды умерших.",
-                "Имена возвращаются в общую книгу. Погибшие не вернулись — живые могут помнить их по-настоящему.",
+                "Приказ отменён. Архив больше не повторяет последние секунды умерших.",
+                "Имена вернулись в общую книгу. Погибшие не вернулись — живые могут помнить их без разрешения машины.",
                 "«Мы не вернули их. Мы вернули себе право помнить»."
             }
         };
-        const int scene = std::max(0, std::min(5, cutsceneId));
-        const float beatSeconds = cutsceneDuration(scene) / 3.0f;
+        const int scene = cutsceneSceneOf(cutsceneId);
+        const float beatSeconds = cutsceneDuration(cutsceneId) / 3.0f;
         const int beat = std::min(2, (int)(cutsceneTimer / beatSeconds));
         r.clear(0xFF07060D);
         drawStoryIllustration(r, scene);
@@ -7502,7 +7755,8 @@ struct Game {
         const int scenePanelX = (SCREEN_W - scenePanelW) / 2;
         const int scenePanelY = portraitCutscene ? SCREEN_H - 300 : 536;
         r.fillGradientV(scenePanelX, scenePanelY, scenePanelW, scenePanelH, 0xF5090710, 0xFC090710, 255);
-        r.drawRoundedRect(scenePanelX, scenePanelY, scenePanelW, scenePanelH, 12, scene == 2 ? 0xFF69D9F0 : 0xFFB58CFF, 2, 245);
+        r.drawRoundedRect(scenePanelX, scenePanelY, scenePanelW, scenePanelH, 12,
+                          scene == 5 ? 0xFFFFD78A : CAMPAIGN_ACT_COLORS[std::min(CAMPAIGN_ACT_COUNT - 1, scene)], 2, 245);
         r.drawTextWrapped(FONT_MED, scenePanelX + 28, scenePanelY + 22, scenePanelW - 56, line, 0xFFF1ECF8, false);
         r.drawTextRight(FONT_SMALL, SCREEN_W - 28, portraitCutscene ? SCREEN_H - 58 : 686, "[ENTER / ESC] ПРОПУСТИТЬ", 0xFFD0C7DE);
         if (mouseClicked) finishCutscene();
@@ -7552,8 +7806,8 @@ struct Game {
             }
             const int truthY = cardY + 4 * (cardH + gap) + 2;
             r.fillRect(pad, truthY, contentW, 118, 0xFF171321, 245);
-            r.drawRect(pad, truthY, contentW, 118, save.seenTwistCutscene || save.seenEndingCutscene ? 0xFFB987E8 : 0xFF51475F, 1);
-            const char* truth = (save.seenTwistCutscene || save.seenEndingCutscene)
+            r.drawRect(pad, truthY, contentW, 118, archiveTruthKnown() ? 0xFFB987E8 : 0xFF51475F, 1);
+            const char* truth = archiveTruthKnown()
                 ? "ПРАВДА АРХИВА: он хранит копии последних мгновений, не души. После смерти ночь пересобирается; Кузница удерживает память Свидетеля вне колокольного контура."
                 : "ЗАКРЫТАЯ ЗАПИСЬ: собери четыре печати — и Архив раскроет, что именно переживает каждый новый цикл.";
             r.drawTextWrapped(FONT_SMALL, pad + 12, truthY + 12, contentW - 24, truth, 0xFFE3D8F2, false);
@@ -7667,8 +7921,8 @@ struct Game {
             }
             const int truthX = compactHall ? 20 : 90, truthW = compactHall ? SCREEN_W - 40 : 1100;
             r.fillRoundedRect(truthX, 527, truthW, 74, 8, 0xFF171321, 245);
-            r.drawRoundedRect(truthX, 527, truthW, 74, 8, save.seenTwistCutscene || save.seenEndingCutscene ? 0xFFB987E8 : 0xFF51475F, 1);
-            const char* truth = (save.seenTwistCutscene || save.seenEndingCutscene)
+            r.drawRoundedRect(truthX, 527, truthW, 74, 8, archiveTruthKnown() ? 0xFFB987E8 : 0xFF51475F, 1);
+            const char* truth = archiveTruthKnown()
                 ? "ПРАВДА АРХИВА: он хранит копии последних мгновений, не души. После смерти ночь пересобирается; Кузница удерживает память Свидетеля вне колокольного контура. Финальное трио — три сохранённых приказа, а не воскресшие стражи."
                 : "ЗАКРЫТАЯ ЗАПИСЬ: собери четыре печати — и Архив раскроет, что именно переживает каждый новый цикл.";
             r.drawTextWrapped(FONT_SMALL, truthX + 22, 540, truthW - 44, truth, 0xFFE3D8F2, false);
@@ -8101,15 +8355,30 @@ struct Game {
             else if (key == 13 || key == 32) { sound.play(SFX_CLICK, 0.02f); confirmHeroSelection(); }
         } else if (state == STATE_MISSION_SELECT) {
             if (key == 27) state = STATE_HERO_SELECT;
-            else if (key == 37 || key == 'A' || key == 'a') storyMissionCursor = std::max(0, storyMissionCursor - 1);
-            else if (key == 39 || key == 'D' || key == 'd') storyMissionCursor = std::min(CAMPAIGN_MISSION_COUNT - 1, storyMissionCursor + 1);
-            else if (key == 38 || key == 'W' || key == 'w') storyMissionCursor = std::max(0, storyMissionCursor - 3);
-            else if (key == 40 || key == 'S' || key == 's') storyMissionCursor = std::min(CAMPAIGN_MISSION_COUNT - 1, storyMissionCursor + 3);
+            else if (key == 'Q' || key == 'q') setCampaignActView(campaignActView - 1);
+            else if (key == 'E' || key == 'e') setCampaignActView(campaignActView + 1);
+            else if (key == 37 || key == 'A' || key == 'a') {
+                // Left/right walk the current act; at the edge they flip the act page.
+                const int slot = std::max(0, campaignActProgressIndex(storyMissionCursor));
+                if (slot > 0) storyMissionCursor = campaignActMissionAt(campaignActView, slot - 1);
+                else if (campaignActView > 1) {
+                    setCampaignActView(campaignActView - 1);
+                    storyMissionCursor = campaignActMissionAt(campaignActView, campaignActMissionCount(campaignActView) - 1);
+                }
+            } else if (key == 39 || key == 'D' || key == 'd') {
+                const int slot = std::max(0, campaignActProgressIndex(storyMissionCursor));
+                if (slot + 1 < campaignActMissionCount(campaignActView)) storyMissionCursor = campaignActMissionAt(campaignActView, slot + 1);
+                else if (campaignActView < CAMPAIGN_ACT_COUNT) setCampaignActView(campaignActView + 1);
+            } else if (key == 38 || key == 'W' || key == 'w') storyMissionCursor = campaignActMissionAt(campaignActView, std::max(0, campaignActProgressIndex(storyMissionCursor) - 1));
+            else if (key == 40 || key == 'S' || key == 's') storyMissionCursor = campaignActMissionAt(campaignActView, std::min(campaignActMissionCount(campaignActView) - 1, campaignActProgressIndex(storyMissionCursor) + 1));
             else if (key == 13 || key == 32) launchStoryMission(storyMissionCursor);
         } else if (state == STATE_MISSION_COMPLETE) {
             if (key == 27) { storyMissionCursor = selectedStoryMission; state = STATE_MISSION_SELECT; }
             else if (key == 13 || key == 32) {
-                const int next = std::min(CAMPAIGN_MISSION_COUNT - 1, selectedStoryMission + 1);
+                int next = selectedStoryMission;
+                for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+                    if (isCampaignMissionUnlocked(i) && !isCampaignMissionCompleted(i)) { next = i; break; }
+                }
                 if (next != selectedStoryMission && isCampaignMissionUnlocked(next)) launchStoryMission(next);
                 else startSelectedRun();
             }
