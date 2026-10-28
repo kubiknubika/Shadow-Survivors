@@ -14,6 +14,9 @@ rem ============================================================================
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
+rem Bump this with the version: it is the fastest way to tell a freshly
+rem downloaded updater from a cached old one in the console and in the log.
+set "SELF=2.10.10"
 set "TARGET=main"
 set "REMOTE=origin"
 set "SRC=%cd%\src"
@@ -29,8 +32,10 @@ mkdir "%BUILD%" >nul 2>&1
 :have_build
 > "%LOG%" echo === Shadow Survivors updater ===
 >> "%LOG%" echo %DATE% %TIME%   folder: %cd%
+>> "%LOG%" echo updater build !SELF!
 
 echo === Shadow Survivors: update ===
+echo updater build !SELF!
 echo.
 
 if exist "%SRC%\version.h" goto have_src
