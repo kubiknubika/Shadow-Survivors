@@ -12,13 +12,18 @@
     python3 tools/normalize_voice.py audio/voice/mission_brief_11.wav [...]
     python3 tools/normalize_voice.py --all audio/voice/*.wav
 """
-import audioop
 import glob
 import os
 import sys
 import wave
 
+try:                      # numpy даёт фильтр перед понижением частоты
+    import numpy as np
+except ImportError:       # без него остаётся линейная интерполяция (хуже звучит)
+    np = None
+
 RATE = 16000
+CUTOFF = 7200             # ниже половины новой частоты: выше 8 кГц всё равно не влезет
 FADE_IN = 0.015
 FADE_OUT = 0.060
 PRE_ROLL = 0.080
@@ -28,37 +33,87 @@ PEAK_LIMIT = 0.89
 
 
 def read(path):
+    """Читает WAV и приводит к 16 кГц моно 16 бит.
+
+    Понижение частоты делается с фильтром: сначала срезается всё выше 7,2 кГц,
+    потом сигнал пересчитывается на новую сетку. Без фильтра верхние гармоники
+    складываются в слышимый «звон» — именно он читается как лишние гласные
+    посреди слова, хотя диктор их не произносил.
+    """
     with wave.open(path) as w:
         frames, rate, width, channels = w.getnframes(), w.getframerate(), w.getsampwidth(), w.getnchannels()
         data = w.readframes(frames)
-    if width != 2:
-        data = audioop.lin2lin(data, width, 2)
+    if np is None:
+        import audioop
+        if width != 2:
+            data = audioop.lin2lin(data, width, 2)
+        if channels == 2:
+            data = audioop.tomono(data, 2, 0.5, 0.5)
+        if rate != RATE:
+            data = audioop.ratecv(data, 2, 1, rate, RATE, None)[0]
+        return data
+
+    raw = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
     if channels == 2:
-        data = audioop.tomono(data, 2, 0.5, 0.5)
+        raw = raw.reshape(-1, 2).mean(axis=1)
     if rate != RATE:
-        data = audioop.ratecv(data, 2, 1, rate, RATE, None)[0]
-    return data
+        spectrum = np.fft.rfft(raw)
+        freqs = np.fft.rfftfreq(len(raw), 1.0 / rate)
+        # плавный спад от 0,8*CUTOFF до CUTOFF, дальше ноль — без «звонкого» среза
+        taper = np.clip((CUTOFF - freqs) / (CUTOFF * 0.2), 0.0, 1.0)
+        spectrum *= taper
+        raw = np.fft.irfft(spectrum, n=len(raw))
+        duration = len(raw) / rate
+        grid = np.linspace(0.0, duration, int(round(duration * RATE)), endpoint=False)
+        raw = np.interp(grid, np.arange(len(raw)) / rate, raw)
+    pcm = np.clip(raw * 32767.0, -32768, 32767).astype(np.int16)
+    return pcm.tobytes()
 
 
 def trim(data):
-    peak = audioop.max(data, 2) or 1
-    threshold = max(60, int(peak * 0.004))
-    total = len(data) // 2
-    first, last = 0, total - 1
-    for i in range(total):
-        if abs(int.from_bytes(data[i * 2:i * 2 + 2], "little", signed=True)) > threshold:
-            first = i
-            break
-    for i in range(total - 1, -1, -1):
-        if abs(int.from_bytes(data[i * 2:i * 2 + 2], "little", signed=True)) > threshold:
-            last = i
-            break
+    """Обрезает тишину по краям, оставляя 80 мс перед первой согласной."""
+    if np is not None:
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+        peak = float(np.max(np.abs(samples))) or 1.0
+        threshold = max(60.0, peak * 0.004)
+        loud = np.nonzero(np.abs(samples) > threshold)[0]
+        if len(loud) == 0:
+            return data
+        first, last = int(loud[0]), int(loud[-1])
+    else:
+        import audioop
+        peak = audioop.max(data, 2) or 1
+        threshold = max(60, int(peak * 0.004))
+        total = len(data) // 2
+        first, last = 0, total - 1
+        for i in range(total):
+            if abs(int.from_bytes(data[i * 2:i * 2 + 2], "little", signed=True)) > threshold:
+                first = i
+                break
+        for i in range(total - 1, -1, -1):
+            if abs(int.from_bytes(data[i * 2:i * 2 + 2], "little", signed=True)) > threshold:
+                last = i
+                break
     head = max(0, first - int(RATE * PRE_ROLL))
-    tail = min(total, last + int(RATE * TAIL))
+    tail = min(len(data) // 2, last + int(RATE * TAIL))
     return data[head * 2:tail * 2]
 
 
 def ramp(data, seconds, rising):
+    """Настоящее нарастание на краях — не обнуление, иначе слышен щелчок."""
+    if np is not None:
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+        count = min(len(samples), int(RATE * seconds))
+        if count <= 0:
+            return data
+        gain = np.linspace(0.0, 1.0 if rising else 0.0, count, endpoint=True)
+        if not rising:
+            gain = gain[::-1]
+        if rising:
+            samples[:count] *= gain
+        else:
+            samples[-count:] *= gain
+        return np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
     count = min(len(data) // 2, int(RATE * seconds))
     if count <= 0:
         return data
@@ -73,10 +128,20 @@ def ramp(data, seconds, rising):
 
 
 def normalize(data):
-    peak = audioop.max(data, 2) or 1
-    rms = audioop.rms(data, 2) or 1
-    gain = min(RMS_TARGET / (rms / 32768.0), (PEAK_LIMIT * 32768.0) / peak)
-    data = audioop.mul(data, 2, gain)
+    """Выравнивает громкость по RMS, а не по пику: иначе фразы звучат по-разному."""
+    if np is not None:
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        peak = float(np.max(np.abs(samples))) or 1.0
+        rms = float(np.sqrt(np.mean(samples ** 2))) or 1.0
+        gain = min(RMS_TARGET / rms, PEAK_LIMIT / peak)
+        samples = samples * gain
+        data = np.clip(samples * 32767.0, -32768, 32767).astype(np.int16).tobytes()
+    else:
+        import audioop
+        peak = audioop.max(data, 2) or 1
+        rms = audioop.rms(data, 2) or 1
+        gain = min(RMS_TARGET / (rms / 32768.0), (PEAK_LIMIT * 32768.0) / peak)
+        data = audioop.mul(data, 2, gain)
     data = ramp(data, FADE_IN, True)
     data = ramp(data, FADE_OUT, False)
     return data
@@ -90,7 +155,13 @@ def process(path):
         w.setframerate(RATE)
         w.writeframes(data)
     seconds = len(data) / 2 / RATE
-    print(f"{os.path.basename(path):32s} {seconds:5.2f} с  rms={audioop.rms(data, 2):5d}  peak={audioop.max(data, 2):5d}")
+    if np is not None:
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+        rms, peak = int(np.sqrt(np.mean(samples ** 2))), int(np.max(np.abs(samples)))
+    else:
+        import audioop
+        rms, peak = audioop.rms(data, 2), audioop.max(data, 2)
+    print(f"{os.path.basename(path):32s} {seconds:5.2f} с  rms={rms:5d}  peak={peak:5d}")
 
 
 def main():

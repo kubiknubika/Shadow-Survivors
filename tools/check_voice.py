@@ -10,6 +10,7 @@
     python3 tools/check_voice.py --levels   # плюс контроль громкости всех записей
     python3 tools/check_voice.py --voice    # плюс контроль тембра: один ли голос
     python3 tools/check_voice.py --stress   # плюс поиск слов с плавающим ударением
+    python3 tools/check_voice.py --alias    # плюс поиск «звона» от понижения частоты
 
 Уровни важны не меньше, чем наличие файла: «одна фраза вдвое тише другой»
 слышно сразу, а глазами в реестре не видно. Поэтому --levels перебирает все
@@ -37,14 +38,39 @@ def registry_rows():
 
 
 LEVEL_RMS_BAND = (3000, 4600)   # коридор RMS, в который попадает штатная запись
-# Все реплики читает один рассказчик. Его медианная высота тона ~95 Гц; клип,
+# Все реплики читает один рассказчик. Его медианная высота тона 93–119 Гц; клип,
 # который вылез из этого коридора, записан другим голосом — и это слышно в игре,
 # даже если громкость и формат в порядке. Поэтому тембр тоже проверяется.
-VOICE_F0_BAND = (84, 116)
+VOICE_F0_BAND = (82, 130)
 
 # Слова, на которых синтез уходит в чужое ударение: «сестрЫ» читают как «сЁстры»,
 # «зАдал» вместо «задАл», «пИсарей» вместо «писарЕй» и так далее. Встретилось такое
 # слово в уже записанном описании — переписываем фразу, а не надеемся на диктора.
+# Доля энергии в полосе 7–8 кГц. У нормальной записи её почти нет (<1%);
+# если больше, значит частоту понизили без фильтра и верхи «сложились» в звон,
+# который на слух читается как лишние гласные посреди слова.
+ALIAS_LIMIT = 1.2
+
+
+def alias_ratio(path):
+    try:
+        import numpy as np
+    except ImportError:
+        return None
+    with wave.open(path) as w:
+        rate, channels = w.getframerate(), w.getnchannels()
+        data = w.readframes(w.getnframes())
+    if channels == 2:
+        data = audioop.tomono(data, 2, 0.5, 0.5)
+    x = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+    if rate != 16000 or len(x) == 0:
+        return None
+    spectrum = np.abs(np.fft.rfft(x))
+    freqs = np.fft.rfftfreq(len(x), 1.0 / rate)
+    total = float(spectrum.sum()) or 1.0
+    return float(spectrum[(freqs >= 7000) & (freqs < 8000)].sum()) / total * 100.0
+
+
 STRESS_TRAPS = {
     "сестры": "сестрЫ/сЁстры — переписать: «говорила сестра» или «родной голос»",
     "задал": "зАдал/задАл — заменить на «спрашивал»",
@@ -210,6 +236,20 @@ def main(argv):
         for key, stem, why in traps:
             print(f"  ! {key}: «{stem}» — {why}")
 
+    alias_bad = []
+    if "--alias" in argv:
+        for name in sorted(os.listdir(VOICE_DIR)):
+            if not name.endswith(".wav"):
+                continue
+            value = alias_ratio(os.path.join(VOICE_DIR, name))
+            if value is not None and value > ALIAS_LIMIT:
+                alias_bad.append((name, value))
+        print(f"звон: проверено клипов, вне нормы {len(alias_bad)}")
+        for name, value in alias_bad:
+            print(f"  ! {name}: {value:.2f}% энергии в 7–8 кГц — перечитать из исходника")
+        if alias_bad:
+            print("  причина: понижение частоты без фильтра (см. tools/normalize_voice.py)")
+
     if missing:
         print("\nне хватает файлов в audio/voice/:")
         for key, line in missing:
@@ -229,6 +269,8 @@ def main(argv):
     if "--voice" in argv and voice_bad:
         return 1
     if "--stress" in argv and "--strict" in argv and stress_warnings():
+        return 1
+    if "--alias" in argv and alias_bad:
         return 1
     return 0
 
