@@ -1061,10 +1061,12 @@ struct Renderer {
             FR(cx - 26 + sway, oy - 4, 52, 46, 14, robe, alpha);
             FR(cx - 26 + sway, oy - 4, 8, 46, 4, robeLit, alpha);   // блик ткани
             // плечи-пластины
-            FR(cx - 52 + sway, oy - 20, 26, 20, 8, ash, alpha);
-            FR(cx + 26 + sway, oy - 20, 26, 20, 8, ash, alpha);
-            FR(cx - 50 + sway, oy - 18, 22, 8, 4, ashLit, alpha);
-            FR(cx + 28 + sway, oy - 18, 22, 8, 4, ashLit, alpha);
+            // плечи плотно лежат на балахоне: сдвинуты внутрь и ниже, иначе
+            // висели в воздухе отдельными камешками
+            FR(cx - 48 + sway, oy - 14, 26, 20, 8, ash, alpha);
+            FR(cx + 22 + sway, oy - 14, 26, 20, 8, ash, alpha);
+            FR(cx - 46 + sway, oy - 12, 22, 8, 4, ashLit, alpha);
+            FR(cx + 24 + sway, oy - 12, 22, 8, 4, ashLit, alpha);
             // руки-угли, тянутся вниз и в стороны
             for (int side = -1; side <= 1; side += 2) {
                 const int hx = cx + side * (40 + sway) + (int)(sinf(animTime * 1.1f + side) * 3.0f);
@@ -1084,12 +1086,14 @@ struct Renderer {
             FR(cx - 15 + sway, oy - 52, 30, 30, 10, 0xFF0B0812, alpha);
             FX(cx - 10 + sway, oy - 42, 7, 4, core, 240);
             FX(cx + 3 + sway, oy - 42, 7, 4, core, 240);
-            // корона из пепельных осколков: высота каждого живёт своей фазой
+            // Корона — рваный гребень по краю капюшона: плотные клинья-пластины,
+            // а не тонкие лучи с шариком на конце (те читались как усики).
             for (int i = -2; i <= 2; ++i) {
-                const int hgt = 10 + (int)(6.0f + 5.0f * sinf(animTime * 2.0f + i * 0.8f));
-                const int bx2 = cx + sway + i * 11;
-                DL(bx2, oy - 58, bx2 + i * 3, oy - 58 - hgt, ashLit, 3, alpha);
-                FC(bx2 + i * 3, oy - 58 - hgt, 2, core, 230);
+                const int hgt = 7 + (int)(4.0f + 4.0f * sinf(animTime * 2.0f + i * 1.1f)) - (i % 2 ? 2 : 0);
+                const int bx2 = cx + sway + i * 9 - 2;
+                FX(bx2, oy - 60 - hgt, 6, hgt + 2, ash, alpha);
+                FX(bx2 + 1, oy - 60 - hgt, 4, hgt, ashLit, alpha);
+                FX(bx2 + 2, oy - 60 - hgt, 2, 3, core, 220);
             }
             // вихрь пепла вокруг фигуры — эллипс, читается как орбита
             for (int ring = 0; ring < 2; ++ring) {
@@ -1126,9 +1130,9 @@ struct Renderer {
             FR(cx - 28 + sway, oy - 2, 56, 54, 12, stone, alpha);
             FR(cx - 28 + sway, oy - 2, 7, 54, 3, stoneLit, alpha);
             // наплечник-скрижаль
-            FR(cx - 48 + sway, oy - 34, 96, 20, 8, stoneLit, alpha);
-            FR(cx - 44 + sway, oy - 30, 88, 8, 4, stone, alpha);
-            for (int i = 0; i < 4; ++i) FC(cx - 34 + i * 22 + sway, oy - 26, 2, ink, 200);
+            FR(cx - 44 + sway, oy - 34, 88, 18, 8, stoneLit, alpha);
+            FR(cx - 40 + sway, oy - 31, 80, 7, 4, stone, alpha);
+            for (int i = 0; i < 4; ++i) FC(cx - 31 + i * 21 + sway, oy - 27, 2, ink, 200);
             // капюшон и скрижаль-лицо с прорезью чернил
             FR(cx - 22 + sway, oy - 78, 44, 48, 14, stoneDark, alpha);
             FR(cx - 16 + sway, oy - 70, 32, 32, 8, 0xFF0E1219, alpha);
@@ -1148,29 +1152,31 @@ struct Renderer {
                 FC(ax - 10 + (int)(sinf(qa) * 6.0f), ay - 28, 3, ink, 230);
             }
             // большой том перед фигурой: страницы дышат, строки ползут вверх
-            const int bookY = oy + 26;
+            // Том держим ниже и уже: на арене (s≈1.1) прежний размер закрывал
+            // мантию целиком, и страж читался как «скрижаль над книгой».
+            const int bookY = oy + 42;
             const int flutter = (int)(sinf(animTime * 5.0f) * 2.0f);
-            FR(cx - 40, bookY - 20, 80, 44, 6, 0xFF2B2119, alpha);      // переплёт
-            FR(cx - 37, bookY - 17, 74, 38, 4, 0xFF4A382A, alpha);
+            FR(cx - 29, bookY - 15, 58, 32, 6, 0xFF2B2119, alpha);      // переплёт
+            FR(cx - 27, bookY - 13, 54, 27, 4, 0xFF4A382A, alpha);
             for (int side = -1; side <= 1; side += 2) {
-                const int pw = 33;
-                const int px3 = side < 0 ? cx - 35 : cx + 2;
-                const int ph = 32 + (side > 0 ? flutter : -flutter);
+                const int pw = 23;
+                const int px3 = side < 0 ? cx - 25 : cx + 2;
+                const int ph = 23 + (side > 0 ? flutter : -flutter);
                 FR(px3, bookY - ph / 2, pw, ph, 3, 0xFFDCD2BC, alpha);
                 FR(px3 + 2, bookY - ph / 2 + 2, pw - 4, ph - 4, 2, 0xFFF6EFDD, alpha);
                 const int scroll = (int)(animTime * 9.0f) % 6;
                 for (int ln = 0; ln < 5; ++ln) {
-                    const int ly = bookY - ph / 2 + 5 + ln * 6 - scroll;
+                    const int ly = bookY - ph / 2 + 4 + ln * 5 - scroll;
                     if (ly < bookY - ph / 2 + 2 || ly > bookY + ph / 2 - 3) continue;
-                    FX(px3 + 5, ly, pw - 10, 1, 0xFF3A4652, 220);
+                    FX(px3 + 4, ly, pw - 8, 1, 0xFF3A4652, 220);
                 }
             }
-            FR(cx - 3, bookY - 22, 6, 46, 3, stoneLit, alpha);
-            FC(cx, bookY - 26, 5, ink, 230);
+            FR(cx - 3, bookY - 16, 6, 34, 3, stoneLit, alpha);
+            FC(cx, bookY - 20, 5, ink, 230);
             // чернильные капли падают с тома
             for (int i = 0; i < 3; ++i) {
                 const float t2 = fmodf(animTime * 0.6f + i * 0.33f, 1.0f);
-                FX(cx - 16 + i * 16, bookY + 20 + (int)(t2 * 30.0f), 2, 3, ink, (int)(200 * (1.0f - t2)));
+                FX(cx - 13 + i * 13, bookY + 16 + (int)(t2 * 24.0f), 2, 3, ink, (int)(200 * (1.0f - t2)));
             }
             // перья-перья вокруг: летят по орбите с хвостом
             for (int i = 0; i < 4; ++i) {
