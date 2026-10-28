@@ -9,6 +9,7 @@
 #include "font_atlas.h"
 #include "sprite_atlas.h"
 #include "skill_icon_atlas.h"
+#include "skill_icon_color_atlas.h"
 #include "forge_icon_atlas.h"
 
 static int SCREEN_W = 1280;
@@ -35,7 +36,7 @@ struct Renderer {
     int width = 0;
     int height = 0;
     // 0 = compact vector icons, 1 = AI-rendered art for the two approved skill variants.
-    int skillIconStyle = 0;
+    int skillIconStyle = 0; // 0 = vector, 1 = AI art, 2 = «цвет» (один предмет — один цвет)
 
     Renderer() : pixels(nullptr) {
         resize(SCREEN_W, SCREEN_H);
@@ -669,7 +670,7 @@ struct Renderer {
         float squash;      // squash-and-stretch strength (0 = rigid)
     };
     static const MonsterMotion& monsterMotion(int type) {
-        static const MonsterMotion profiles[11] = {
+        static const MonsterMotion profiles[12] = {
             {2.0f, 9.0f, 1.2f, 3.2f, 0.0f, 7.5f, 11, 4, 0.05f}, // 0 — imp: nervous, twitchy
             {1.0f, 5.0f, 0.0f, 1.0f, 0.0f, 5.0f, 12, 5, 0.00f},  // 1 — skeleton: steady march
             {3.2f, 6.5f, 0.0f, 1.0f, 0.0f, 6.5f, 13, 5, 0.14f},  // 2 — slime: hop and squash
@@ -681,12 +682,52 @@ struct Renderer {
             {1.3f, 5.2f, 1.0f, 2.2f, 0.0f, 5.4f, 12, 5, 0.04f},  // 8 — archer: light on its feet
             {2.0f, 2.8f, 2.4f, 1.2f, 0.0f, 3.4f, 18, 7, 0.09f},  // 9 — ogre: heavy stomp
             {1.6f, 4.2f, 0.0f, 1.0f, 0.0f, 4.4f, 15, 6, 0.00f},  // 10 — matryoshka: rigid, doll-like
+            {0.9f, 16.0f, 0.0f, 1.0f, 0.0f, 14.0f, 9, 3, 0.06f}, // 11 — rat: scurries
         };
-        return profiles[std::max(0, std::min(10, type))];
+        return profiles[std::max(0, std::min(11, type))];
+    }
+
+    // The rat is drawn from parts rather than baked: a low body, a pointed snout, round
+    // ears and a whipping tail. At swarm density it reads as "many small things running",
+    // which is exactly what it is.
+    void drawRatSprite(int cx, int cy, float animTime, bool hitFlash, bool frozen) {
+        const uint32_t fur      = frozen ? 0xFF7FE4FF : (hitFlash ? 0xFFFFF0C0 : 0xFF8B7A6A);
+        const uint32_t furDark  = frozen ? 0xFF4FB8D8 : (hitFlash ? 0xFFFFD890 : 0xFF5E5148);
+        const uint32_t snout    = frozen ? 0xFFBFF2FF : 0xFFB8A896;
+        const uint32_t eye      = frozen ? 0xFFFFFFFF : 0xFFFF5A4A;
+        const int step = ((int)(animTime * 18.0f)) & 1;
+        // legs
+        const int legSwing = step ? 2 : -2;
+        for (int i = -1; i <= 1; i += 2) {
+            drawLine(cx + i * 4 + legSwing, cy + 6, cx + i * 6 - legSwing, cy + 11, furDark, 2, 235);
+            drawLine(cx + i * 8 - legSwing, cy + 6, cx + i * 9 + legSwing, cy + 11, furDark, 2, 200);
+        }
+        // tail: a thin curve that lags behind the body
+        const int tailPhase = (int)(sinf(animTime * 9.0f) * 5.0f);
+        drawLine(cx - 12, cy + 1, cx - 20, cy - 4 + tailPhase, furDark, 2, 230);
+        drawLine(cx - 20, cy - 4 + tailPhase, cx - 27, cy - 1 + tailPhase, furDark, 1, 180);
+        // body
+        fillRoundedRect(cx - 13, cy - 5, 25, 12, 6, fur);
+        fillRoundedRect(cx - 13, cy + 2, 25, 4, 2, furDark, 190);
+        // head and snout
+        fillRoundedRect(cx + 7, cy - 7, 12, 11, 5, fur);
+        fillRoundedRect(cx + 15, cy - 3, 8, 6, 3, snout);
+        fillCircle(cx + 23, cy, 2, eye);
+        // ears
+        fillCircle(cx + 8, cy - 8, 3, furDark);
+        fillCircle(cx + 13, cy - 8, 3, fur);
+        // eye
+        fillCircle(cx + 15, cy - 3, 2, eye);
     }
 
     void drawMonsterSprite(int cx, int cy, int type, float animTime, bool hitFlash, bool isElite, bool frozen = false, bool flipX = false) {
         const MonsterMotion& motion = monsterMotion(type);
+        if (type == 11) {
+            const int bob = (int)(sinf(animTime * 16.0f) * motion.bobAmp);
+            drawShadow(cx, cy + 10, motion.shadowW, motion.shadowH);
+            drawRatSprite(cx, cy + bob, animTime, hitFlash, frozen);
+            return;
+        }
         const int frame = ((int)(animTime * motion.fps + cx * 0.04f)) & 1;
         const BakedSprite* spr = MONSTER_SPRITES[type % 11][frame];
         const int bob = (int)(sinf(animTime * motion.bobFreq * 6.2831853f) * motion.bobAmp);
@@ -779,14 +820,15 @@ struct Renderer {
             0xFF8BEAFF,0xFFFF705E,0xFFFF9A72,0xFFD6A0FF
         };
         const int id = std::max(0, std::min(39, weaponId));
-        // AI-арт для любого оружия 00–39, если игрок выбрал ИИ-АРТ в настройках.
-        if (skillIconStyle == 1) {
+        // Арт-наборы для любого предмета 00–39: ИИ-АРТ или набор «ЦВЕТ», где первые
+        // десять предметов различаются цветом и силуэтом, а не общей рамкой.
+        if (skillIconStyle >= 1) {
             const uint32_t frameBg = evolved ? 0xFF3A1828 : 0xFF181228;
             const uint32_t frameBorder = evolved ? 0xFFFFD838 : 0xFF685890;
             const uint32_t glow = evolved ? 0xFFFFB820 : glowColors[id];
             fillRoundedRect(cx - size, cy - size, size * 2, size * 2, 7, frameBg);
             addGlow(cx, cy, size + (evolved ? 9 : 3), glow, evolved ? 145 : 65);
-            const BakedIconImage& image = SKILL_ICONS_AI[id];
+            const BakedIconImage& image = skillIconStyle == 2 ? SKILL_ICONS_COLOR[id] : SKILL_ICONS_AI[id];
             const int side = std::max(1, size * 2 - 8);
             const int left = cx - side / 2, top = cy - side / 2;
             const int corner = std::max(2, side / 11);

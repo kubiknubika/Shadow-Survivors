@@ -138,11 +138,14 @@ static constexpr int MAX_ACTIVE_RESONATORS = 8;
 static constexpr int RESONATOR_DESTRUCTION_BURST_BASE = 24;
 static constexpr int MATRYOSHKA_CHILDREN = 2;
 static constexpr int MATRYOSHKA_ENEMY_TYPE = 10;
-static constexpr int MONSTER_TYPE_COUNT = 11;
+// A rat swarm does not hunt: it crosses the arena in one direction. It is a moving
+// obstacle and a moving reward, not another pursuer — that is the point of it.
+static constexpr int RAT_ENEMY_TYPE = 11;
+static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 77;
+static constexpr int PATCH_NOTES_COUNT = 78;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -221,6 +224,7 @@ static DeathBurst monsterDeathBurst(int type, bool elite) {
         {0xFF9AD8FF, 0xFF2C4C7A, 10}, // 8 — archer
         {0xFFFF9A3A, 0xFF6B3412, 14}, // 9 — ogre
         {0xFFFFC65E, 0xFF6B4A1C, 11}, // 10 — matryoshka
+        {0xFFB8A48C, 0xFF573F32, 7},  // 11 — rat: dust and a thin tail of fur
     };
     DeathBurst b = bursts[std::max(0, std::min(MONSTER_TYPE_COUNT - 1, type))];
     if (elite) { b.count += 6; b.accent = 0xFFFFC64A; }
@@ -325,6 +329,10 @@ struct Monster {
     bool isTrioBoss = false;
     bool isMissionFinalBoss = false;
     bool fromHunt = false;   // spawned by the quiet-hunt pack (the only pack that can be "cleared")
+    bool isRat = false;      // swarm runner: flies in one direction, never chases
+    float ratDirX = 1.0f, ratDirY = 0.0f;
+    float ratLife = 0.0f;    // seconds left before the swarm leaves the field
+    float ratPhase = 0.0f;   // per-rat animation offset for the scurrying legs
     int bossPhase = 1; // 1 hunt, 2 assault, 3 fury; determined by remaining health.
     float phaseInvulnTimer = 0.0f; // Brief phase-transition shield, prevents same-frame burst skips.
     int exposeHitStacks = 0; // Repeated hits build a target-specific weak-point mark (item 29).
@@ -465,7 +473,7 @@ struct GameOptions {
     float sfxVolume = 0.65f;
     float musicVolume = 0.42f;
     int messageSpeechEnabled = 1; // read combat messages aloud (SAPI)
-    int skillIconStyle = 0; // 0=vector, 1=AI art; used by weapon IDs 2 and 3 only.
+    int skillIconStyle = 0; // 0 = вектор, 1 = ИИ-арт, 2 = набор «цвет».
 };
 
 struct SaveData {
@@ -682,6 +690,7 @@ struct Game {
     float lowActionTimer = 0.0f;
     float eventCooldown = 35.0f;
     float squadTimer = 16.0f;      // next themed squad push
+    float ratTimer = 34.0f;        // next rat swarm crossing
     // Quiet hunt ("тихая охота") is an *opportunity*, not a wall: a finite pack walks the
     // trail, drops coins as it dies, and pays a bounty if the whole pack is cleared.
     // The breakthrough is the wall: timed, unavoidable and it blocks progression.
@@ -870,7 +879,7 @@ struct Game {
         options.musicVolume = std::max(0.0f, std::min(1.0f, options.musicVolume));
         // Old builds stored the music-track index here; anything non-zero simply means "on".
         options.messageSpeechEnabled = options.messageSpeechEnabled != 0 ? 1 : 0;
-        options.skillIconStyle = std::max(0, std::min(1, options.skillIconStyle));
+        options.skillIconStyle = std::max(0, std::min(2, options.skillIconStyle));
         sound.musicVariant.store(0, std::memory_order_relaxed);
         sound.enabled.store(options.sfxEnabled != 0, std::memory_order_relaxed);
         sound.musicEnabled.store(options.musicEnabled != 0, std::memory_order_relaxed);
@@ -1997,6 +2006,7 @@ struct Game {
         smartStrengthMultiplier[0] = smartStrengthMultiplier[1] = smartStrengthMultiplier[2] = 1.0f;
         pendingResonatorBurst = 0; pendingMatryoshkaSplits.clear(); eventCooldown = 35.0f;
         squadTimer = 14.0f;
+        ratTimer = 30.0f;
         huntActive = false; huntPackTotal = huntPackRemaining = 0; huntTimer = 0.0f; huntCoinsDropped = 0;
         measuredKillsPerSecond = 0.0f; lowActionTimer = 0.0f; killWindowTimer = 0.0f;
         particles.clear();
@@ -2386,6 +2396,43 @@ struct Game {
         }
     }
 
+    // A rat swarm enters from one edge and crosses the whole arena in a straight line.
+    // It never turns toward the player: it is a moving hazard you can also farm.
+    void spawnRatSwarm() {
+        const int side = rand() % 4;
+        const float margin = 96.0f;
+        const float outerX = SCREEN_W * 0.5f + margin;
+        const float outerY = SCREEN_H * 0.5f + margin;
+        float startX = playerX, startY = playerY;
+        float dirX = 0.0f, dirY = 0.0f;
+        // Travel direction is perpendicular to the entry edge, with a slight diagonal so
+        // the line cuts across the screen instead of hugging one edge.
+        const float skew = ((rand() % 101) / 100.0f - 0.5f) * 0.55f;
+        if (side == 0)      { startX = playerX - outerX; startY = playerY + ((rand() % 201) - 100) / 100.0f * outerY * 0.7f; dirX = 1.0f; dirY = skew; }
+        else if (side == 1) { startX = playerX + outerX; startY = playerY + ((rand() % 201) - 100) / 100.0f * outerY * 0.7f; dirX = -1.0f; dirY = skew; }
+        else if (side == 2) { startY = playerY - outerY; startX = playerX + ((rand() % 201) - 100) / 100.0f * outerX * 0.7f; dirX = skew; dirY = 1.0f; }
+        else                { startY = playerY + outerY; startX = playerX + ((rand() % 201) - 100) / 100.0f * outerX * 0.7f; dirX = skew; dirY = -1.0f; }
+        const float len = std::max(0.001f, sqrtf(dirX * dirX + dirY * dirY));
+        dirX /= len; dirY /= len;
+        const int count = 6 + rand() % 4;
+        // The line is perpendicular to the travel direction, so the pack reads as a wave.
+        const float perpX = -dirY, perpY = dirX;
+        for (int i = 0; i < count; ++i) {
+            const size_t before = monsters.size();
+            spawnMonster(RAT_ENEMY_TYPE, false, false);
+            if (monsters.size() == before) continue;
+            Monster& rat = monsters.back();
+            const float offset = (i - (count - 1) * 0.5f) * 46.0f;
+            const float jitter = ((rand() % 41) - 20) * 1.0f;
+            rat.x = startX + perpX * offset + dirX * jitter;
+            rat.y = startY + perpY * offset + dirY * jitter;
+            rat.ratDirX = dirX; rat.ratDirY = dirY;
+            rat.ratLife = 6.5f;
+            rat.ratPhase = (rand() % 100) * 0.1f;
+            rat.facing = dirX >= 0.0f ? 1 : -1;
+        }
+    }
+
     void spawnMonster(int type, bool isElite, bool isBoss, int bossType = 0, int squadSide = -1, float squadAlong = 0.0f) {
         // Keep the hard world cap inclusive of bosses and summoned units. A boss may
         // displace one regular enemy at the ceiling rather than pushing beyond 520.
@@ -2416,6 +2463,7 @@ struct Game {
         m.bossPhase = 1;
         m.isElite = isElite;
         m.isMatryoshka = !isBoss && type == MATRYOSHKA_ENEMY_TYPE;
+        m.isRat = !isBoss && type == RAT_ENEMY_TYPE;
         m.bossType = bossType;
         m.isShieldBearer = false; m.shieldHits = 0;
         float shieldDx = playerX - m.x, shieldDy = playerY - m.y;
@@ -2424,8 +2472,8 @@ struct Game {
         // Only the gate warden blocks. The others defend by moving: plague pools, a charge,
         // a ring the player has to slip through.
         if (isBoss && bossType == 0) m.shieldHits = 1;
-        m.smartTactic = !isBoss && !isElite ? rand() % 3 : 0;
-        m.isSmart = !isBoss && !isElite && !m.isMatryoshka && ((rand() % 10000) < (int)(smartSpawnChance[m.smartTactic] * 10000.0f));
+        m.smartTactic = (!isBoss && !isElite && !m.isRat) ? rand() % 3 : 0;
+        m.isSmart = !isBoss && !isElite && !m.isMatryoshka && !m.isRat && ((rand() % 10000) < (int)(smartSpawnChance[m.smartTactic] * 10000.0f));
         m.smartDodgeTimer = 0.0f;
         m.smartThinkTimer = 0.0f;
         m.smartDodgeX = m.smartDodgeY = 0.0f;
@@ -2452,10 +2500,10 @@ struct Game {
             m.damage *= getEnemyOathDamageMultiplier();
             m.radius = 30.0f;
         } else {
-            static const float baseHps[MONSTER_TYPE_COUNT]   = {28.0f, 48.0f, 42.0f, 52.0f, 115.0f, 68.0f, 84.0f, 135.0f, 72.0f, 190.0f, 112.0f};
-            static const float baseSpds[MONSTER_TYPE_COUNT]  = {102.0f, 72.0f, 94.0f, 66.0f, 62.0f, 86.0f, 88.0f, 58.0f, 70.0f, 76.0f, 82.0f};
-            static const float baseDmgs[MONSTER_TYPE_COUNT]  = {9.0f,  12.0f, 12.0f, 14.0f, 19.0f, 16.0f, 16.0f, 21.0f, 15.0f, 24.0f, 11.0f};
-            static const float baseRads[MONSTER_TYPE_COUNT]  = {13.0f, 15.0f, 16.0f, 15.0f, 20.0f, 18.0f, 17.0f, 21.0f, 16.0f, 23.0f, 18.0f};
+            static const float baseHps[MONSTER_TYPE_COUNT]   = {28.0f, 48.0f, 42.0f, 52.0f, 115.0f, 68.0f, 84.0f, 135.0f, 72.0f, 190.0f, 112.0f, 18.0f};
+            static const float baseSpds[MONSTER_TYPE_COUNT]  = {102.0f, 72.0f, 94.0f, 66.0f, 62.0f, 86.0f, 88.0f, 58.0f, 70.0f, 76.0f, 82.0f, 215.0f};
+            static const float baseDmgs[MONSTER_TYPE_COUNT]  = {9.0f,  12.0f, 12.0f, 14.0f, 19.0f, 16.0f, 16.0f, 21.0f, 15.0f, 24.0f, 11.0f, 6.0f};
+            static const float baseRads[MONSTER_TYPE_COUNT]  = {13.0f, 15.0f, 16.0f, 15.0f, 20.0f, 18.0f, 17.0f, 21.0f, 16.0f, 23.0f, 18.0f, 11.0f};
             const int safeType = std::max(0, std::min(MONSTER_TYPE_COUNT - 1, type));
             m.maxHp = baseHps[safeType] * timeScale * balance.enemyHpMultiplier * phaseHpScale * (isElite ? 3.2f : 1.0f);
             m.maxHp *= getEnemyOathHpMultiplier();
@@ -2466,7 +2514,7 @@ struct Game {
             m.damage *= getEnemyOathDamageMultiplier();
             m.radius = baseRads[safeType] * (isElite ? 1.25f : 1.0f);
             int shieldChance = options.hardModeEnabled ? 105 : 48;
-            m.isShieldBearer = !isElite && !m.isMatryoshka && (rand() % 1000) < shieldChance;
+            m.isShieldBearer = !isElite && !m.isMatryoshka && !m.isRat && (rand() % 1000) < shieldChance;
             if (m.isShieldBearer) { m.shieldHits = 3; m.maxHp *= 1.18f; m.hp = m.maxHp; }
         }
         if (m.isSmart) {
@@ -4035,6 +4083,12 @@ struct Game {
             squadTimer = 17.0f + (float)(rand() % 90) / 10.0f;
             spawnSquad();
         }
+        ratTimer -= dt;
+        if (ratTimer <= 0.0f && state == STATE_PLAYING) {
+            ratTimer = 28.0f + (float)(rand() % 160) / 10.0f;
+            spawnRatSwarm();
+            announce(GMSG_RAT_SWARM, "КРЫСИНАЯ СТАЯ ПРОХОДИТ ЧЕРЕЗ ПОЛЕ", 2.4f);
+        }
 
         // Story campaigns are standalone missions: each has one clearly scheduled final encounter.
         // Endless keeps the original repeating 90-second guardian cadence.
@@ -4339,6 +4393,33 @@ struct Game {
             float dx = playerX - m.x;
             float dy = playerY - m.y;
             float dist = sqrtf(dx * dx + dy * dy);
+
+            if (m.isRat) {
+                // Rats hold their heading. They are not pursuers: they run across the field,
+                // scurry around each other and leave. Contact still hurts.
+                m.ratLife -= dt;
+                const float sway = sinf(globalTime * 5.0f + m.ratPhase) * 0.34f;
+                const float rx = m.ratDirX - m.ratDirY * sway;
+                const float ry = m.ratDirY + m.ratDirX * sway;
+                float speed = m.speed * (m.freezeTimer > 0.0f ? 0.4f : 1.0f);
+                m.x += rx * speed * dt;
+                m.y += ry * speed * dt;
+                m.facing = rx >= 0.0f ? 1 : -1;
+                const bool farAway = fabsf(m.x - playerX) > SCREEN_W * 0.5f + 180.0f ||
+                                     fabsf(m.y - playerY) > SCREEN_H * 0.5f + 180.0f;
+                if (m.ratLife <= 0.0f && farAway) { m.hp = 0.0f; }
+                if (dist <= m.radius + 14.0f && dashTimer > 0.0f) registerDashEvade();
+                if (dist <= m.radius + 14.0f && dashTimer <= 0.0f && playerHurtTimer <= 0.0f) {
+                    float dmg = applyVeilMitigation(std::max(2.0f, m.damage * getSublevelEnemyDamageMultiplier() - getArmor()));
+                    playerHp -= dmg;
+                    registerRetaliationCharge(dmg);
+                    notePlayerDamaged();
+                    playerHurtTimer = 0.42f;
+                    sound.play(SFX_HIT, 0.06f);
+                }
+                continue; // no chase, no shooting, no separation push
+            }
+
             if (m.isBoss && !isWorldPointVisible(m.x, m.y, 58.0f)) {
                 teleportBossTowardMovement(m);
                 dx = playerX - m.x; dy = playerY - m.y;
@@ -4480,7 +4561,7 @@ struct Game {
             // Keep sparse groups readable; disable pairwise separation in dense endgame swarms.
             if (monsters.size() < 180) for (size_t j = i + 1; j < monsters.size(); ++j) {
                 Monster& m2 = monsters[j];
-                if (m2.hp <= 0.0f || m2.isResonator) continue;
+                if (m2.hp <= 0.0f || m2.isResonator || m2.isRat || m.isRat) continue;
                 float sx = m2.x - m.x;
                 float sy = m2.y - m.y;
                 float minD = (m.radius + m2.radius) * 0.78f;
@@ -7617,7 +7698,7 @@ struct Game {
         else if (optionId == 4) options.advisorEnabled = !options.advisorEnabled;
         else if (optionId == 5) options.hardModeEnabled = !options.hardModeEnabled;
         else if (optionId == 6) options.projectileTrailsEnabled = !options.projectileTrailsEnabled;
-        else if (optionId == 7) options.skillIconStyle = options.skillIconStyle == 0 ? 1 : 0;
+        else if (optionId == 7) options.skillIconStyle = (options.skillIconStyle + 1) % 3;
         else if (optionId == 8) {
             options.messageSpeechEnabled = options.messageSpeechEnabled != 0 ? 0 : 1;
             sound.setVoiceEnabled(options.messageSpeechEnabled != 0);
@@ -7650,18 +7731,18 @@ struct Game {
         const char* labels[8] = {
             "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
             "Советник по сборке (ИИ)", "БЕЗДНА — давление выше; пауэрапы только с умных", "Следы снарядов",
-            "Стиль иконок навыков 00–03", "Озвучка сообщений в бою"
+            "Стиль иконок предметов", "Озвучка сообщений в бою"
         };
         // Narrow portraits need shorter labels: the ВКЛ/ВЫКЛ value is right-aligned on the row.
         static const char* labelsPortrait[8] = {
             "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
             "Советник по сборке (ИИ)", "БЕЗДНА — сложнее", "Следы снарядов",
-            "Стиль иконок навыков", "Озвучка сообщений в бою"
+            "Стиль иконок предметов", "Озвучка сообщений в бою"
         };
         const bool values[8] = {
             sound.enabled.load(std::memory_order_relaxed), options.hitEffectsEnabled != 0,
             options.screenShakeEnabled != 0, options.advisorEnabled != 0,
-            options.hardModeEnabled != 0, options.projectileTrailsEnabled != 0, options.skillIconStyle == 1,
+            options.hardModeEnabled != 0, options.projectileTrailsEnabled != 0, options.skillIconStyle != 0,
             options.messageSpeechEnabled != 0
         };
         const bool portraitLayout = SCREEN_W < SCREEN_H;
@@ -7677,7 +7758,10 @@ struct Game {
             r.fillRoundedRect(x, y, w, h, 9, hov ? 0xFF2D2147 : 0xFF1A132C);
             r.drawRoundedRect(x, y, w, h, 9, border, hov ? 3 : 2);
             r.drawText(FONT_MED, x + 24, y + 12, rowLabels[i], 0xFFEAE4F8);
-            if (i == 6) snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ИИ-АРТ" : "ВЕКТОР");
+            if (i == 6) {
+                static const char* iconStyles[3] = {"ВЕКТОР", "ИИ-АРТ", "ЦВЕТ"};
+                snprintf(stateText, sizeof(stateText), "%s", iconStyles[std::max(0, std::min(2, options.skillIconStyle))]);
+            }
             else snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ВКЛ" : "ВЫКЛ");
             r.drawTextRight(FONT_MED, x + w - 24, y + (h - 18) / 2, stateText, values[i] ? 0xFF68F0A0 : 0xFFFF8B98);
             if (mouseClicked && hov) toggleOption(i + 1);
@@ -7795,6 +7879,7 @@ struct Game {
             "2.9.81 • ТИХИЕ РЕПЛИКИ В УГЛУ",
             "2.9.82 • КАЖДОЕ ДЕЛО — СВОЁ МЕСТО",
             "2.9.83 • ВЕРСИЯ, КАМПАНИЯ, СТРАЖИ",
+            "2.9.84 • ЦВЕТ И КРЫСЫ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -7875,6 +7960,7 @@ struct Game {
             "Боевые сообщения живут только в голосе и в левом нижнем углу: страж, фаза босса, тир сборки, сложность, тихая охота и сюжетная строка собраны в одну стопку плашек. Центр поля больше ничем не перекрывается.\n• Элитные и особые враги получили янтарный отсвет и светящийся силуэт — их видно в толпе.\n• Тихая охота не путает итог: у победы и у провала отдельные фразы и отдельная озвучка.",
             "Пять мест вместо одной арены: Руины, Крипта, Собор, Пепельный трон и Сердце Архива отличаются кладкой пола, светом, огнём, ориентирами и воздухом. Endless проходит эти же места по ходу ночи.\n• Гарнизон у каждого места свой: крипта выставляет щиты и тяжеловесов, собор — стрелков, трон — броню.\n• Отряды приходят линией с одного края, а не бесконечной россыпью.\n• У каждой семьи своя походка и своя смерть: кости, слизь, искры, пепел.\n• Каждый страж метит пол своим знаком.",
             "Номер версии больше не берётся из локального файла: его читает src/version.h, поэтому сборка, заголовок окна и хроника больше не расходятся.\n• Кампания открывается на последнем доступном деле, а не на первом.\n• У каждого стража свой набор атак: Моргар бьёт волной и зовёт щитоносцев, Малакор льёт чуму и пускает самонаводящиеся сгустки, Кардинал идёт на рывок с узким веером, Азарот выпускает кольцо искр с проходом и спираль. Общих приёмов больше нет.",
+            "Третий стиль иконок — «ЦВЕТ»: клинки синие, шар оранжевый, вихрь фиолетовый, молния золотая, аура алая, топор стальной, лёд бирюзовый, книга костяная, сапоги зелёные, магнит пурпурный. Один предмет — один цвет и один силуэт; остальные тридцать предметов — рунные печати в том же цвете.\n• Новая угроза: крысиная стая. Крысы не преследуют — они пересекают арену по прямой линией, кусают на бегу и уходят; их можно фармить по дороге.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
@@ -9126,7 +9212,7 @@ struct Game {
     void renderBossPhaseTransition(Renderer& r) { (void)r; }
 
     void render(Renderer& r) {
-        r.skillIconStyle = std::max(0, std::min(1, options.skillIconStyle));
+        r.skillIconStyle = std::max(0, std::min(2, options.skillIconStyle));
         if (state == STATE_PATCH_NOTES) {
             renderPatchNotes(r);
         } else if (state == STATE_CUTSCENE) {
