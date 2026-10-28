@@ -155,7 +155,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 98;
+static constexpr int PATCH_NOTES_COUNT = 100;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -5787,7 +5787,7 @@ struct Game {
         char line[256];
         const int pad = 8, lineH = 17;
         const bool hasMessage = storyTimer > 0.0f && !storyLine.empty();
-        const int rows = 14 + (hasMessage ? 2 : 0);
+        const int rows = 15 + (hasMessage ? 2 : 0);
         const int labelW = 176;
         const int boxW = std::min(SCREEN_W - 16, 486), boxH = rows * lineH + pad * 2;
         const int bx = 8, by = 8;
@@ -5826,11 +5826,15 @@ struct Game {
         snprintf(line, sizeof(line), "%d/%d КЛИПОВ  %s", voiceClips, MessageRegistry::voicedDefs(), options.messageSpeechEnabled != 0 ? "ВКЛ" : "ВЫКЛ");
         put(12, "ОЗВУЧКА", line, (options.messageSpeechEnabled != 0 && voiceClips > 0) ? 0xFF9BF0B0 : 0xFFFF9B7E);
         put(13, "СООБЩЕНИЯ", messages.summary().c_str(), MessageRegistry::invalidRows() == 0 ? 0xFFE6E0F4 : 0xFFFF6A7A);
+        // The announcer is its own bus: the gain and the live effects duck explain a quiet
+        // line better than the clip count does (a file can be in the corridor and still drown).
+        snprintf(line, sizeof(line), "x%.2f  SFX %+.1f ДБ", sound.announcerBusGain(), sound.announcerDuckDb());
+        put(14, "ГОЛОС ШИНА", line, sound.voiceSpeaking() ? 0xFF9BF0B0 : 0xFFE6E0F4);
         if (hasMessage) {
             snprintf(line, sizeof(line), "%s  %.1f С", storySpeaker.c_str(), storyTimer);
-            put(14, "НА ЭКРАНЕ", line, 0xFFC9A6FF);
+            put(15, "НА ЭКРАНЕ", line, 0xFFC9A6FF);
             snprintf(line, sizeof(line), "%s  ПРОЗВУЧАЛО %d", sound.voiceEnabled() ? "ГОЛОС ON" : "ГОЛОС OFF", sound.voiceSpokenCount());
-            put(15, "ОЗВУЧЕНО", line, sound.voiceEnabled() ? 0xFF9BF0B0 : 0xFFFF9B7E);
+            put(16, "ОЗВУЧЕНО", line, sound.voiceEnabled() ? 0xFF9BF0B0 : 0xFFFF9B7E);
         }
     }
 
@@ -8295,6 +8299,8 @@ struct Game {
             "2.10.2 • ГОЛОС СЛЫШЕН: ПЛОТНОСТЬ ВМЕСТО «УРОВНЯ В НОРМЕ»",
             "2.10.3 • ОБНОВЛЕНИЕ СНОВА ДОХОДИТ ДО КОМПЬЮТЕРА",
             "2.10.4 • СОРОК РАЗНЫХ ЦВЕТОВ И ЖИВЫЕ СТРАЖИ",
+            "2.10.5 • РЕПЛИКА ГРОМЧЕ БОЯ: СВОЯ ШИНА И ПРИОРИТЕТ",
+            "2.10.6 • UPDATE.BAT ОБНОВЛЯЕТ MAIN, А НЕ РАБОЧУЮ ВЕТКУ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -8396,6 +8402,8 @@ struct Game {
             "• Причина «тихо» была не в громкости, а в пик-факторе: при rms 3750 у свежих фраз пик уходил в 7,4 от среднего, а у банка — 4,7, и фраза слышалась тише соседей при формально равном RMS.\n• Весь банк пересобран режимом --dense: rms 4851–5242, пик-фактор 3,9–4,7 — теперь реплики звучат вровень, и это на 2,4 дБ громче прежнего.\n• check_voice проверяет не только RMS, но и плотность: клип с пик-фактором больше 5,4 больше не пройдёт как «нормальный».\n• Перезаписаны своим голосом player_death, portal_found, portal_used, resonator_spawn, story_act4, story_case_closed, voice_on, breakthrough; чужим голосом осталось 2 клипа.\n• Бриф последнего боя записан одним проходом: раньше склейка из трёх кусков давала неверную интонацию на «Контур разорван» и «Последний бой не вернёт погибших».\n• «Уходи из зоны удара!» стало «Зона удара! Уходи!» — приказ в два слова звучит как приказ.\n• update.bat печатает версию до и после git pull.\n• Вся ветка наконец влита в main: раньше работа шла в ветке, а git pull тянул main, который не менялся с 2.9.83.",
             "• Причина «версия 2.9.99, а по факту 2.9.83» найдена: работа шла в ветке, а git pull тянул main, который не менялся с 2.9.83. Вся ветка влита в main — теперь update.bat действительно обновляет игру.\n• update.bat печатает ветку, коммит и версию до и после pull и прямо пишет, если обновлений не было.\n• build_windows.bat после сборки перезаписывает ShadowSurvivors.exe в корне: рядом больше не остаётся старая сборка под привычным именем.",
             "• Иконки: раньше цвет шёл по кругу из десяти оттенков, и предметы 00, 10, 20, 30 были одного тона. Теперь у каждого из сорока свой цвет: семейство задаёт смысл (огонь — оранжевый, кровь — красный, лёд — бирюза, ветер — зелёный, руны — фиолет, магнит — пурпур, пергамент — янтарь), вариант — вес предмета. Минимальное расстояние между тонами выросло с 12 до 30.\n• Подложка: у оружия квадратная стальная пластина, у артефакта круглая каменная шайба — форма читается раньше цвета.\n• Азарот: каждый удар сердца расходится кольцом, в ярости пепел идёт в 1,6 раза быстрее.\n• Протоколист: страница тома переворачивается раз в 2,6 с, по скрижали-лицу идёт сканирующая строка.\n• Двойник: у настоящего тела появился шлейф из двух запоздавших слепков.",
+            "Причина «тихие реплики» — в микшере, а не в записях: все семь фраз были в коридоре банка (rms 4,9–5,2 тыс., речь −14…−15 дБ), но реплика входила в сумму с усилением 1,20 против 1,75 у эффектов и проходила через общий лимитер — на прорыве её и было слышно тише боя.\n• Своя шина ×1,45; под фразой эффекты 0,58 (−4,7 дБ), музыка 0,34.\n• Лимитер видит только музыку и эффекты: голос идёт поверх него, под своим ограничителем 0,94.\n• Замер рендером: голос над боем +15,5 дБ вместо +13,9 дБ; без реплики микс совпадает с прежним до сэмпла.\n• В F3 — строка «ГОЛОС ШИНА»: усиление шины и живой присед эффектов.",
+            "Причина: update.bat делал git pull той ветки, которая открыта, а готовая игра собирается из main. На ветке arena/... это ломалось двумя способами: пока ветка жива, pull честно отвечал «Already up to date», и скрипт молча собирал старую версию; после merge ветку удаляют на GitHub, и pull падал с «no such ref was fetched», не дойдя до сборки.\n• Теперь цель — origin/main: скрипт печатает версию и коммит, которые лежат на GitHub, переключает рабочую копию на main (свои правки остаются в прежней ветке), привязывает upstream, если его нет, и только потом делает pull --ff-only.\n• Если переключиться нечем или main разошёлся с origin, печатается точная причина и команды — вместо общего «обновление не завершено».\n• Консоль переводится в UTF-8: русский текст скрипта больше не читается как мусор.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");

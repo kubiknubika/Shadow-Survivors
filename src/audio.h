@@ -103,6 +103,7 @@ struct SoundEngine {
     float musicMuteGain = 1.0f;
     float sfxMuteGain = 1.0f;
     float musicDuckGain = 1.0f;
+    float sfxDuckGain = 1.0f;      // effects bus trim while the announcer speaks
     float musicVolumeSmooth = 0.42f;
     float musicSceneGainSmooth = 1.0f;
     float sfxVolumeSmooth = 0.65f;
@@ -535,6 +536,9 @@ struct SoundEngine {
     bool voiceEnabled() const { return voice.enabled; }
     void setVoiceEnabled(bool on) { voice.setEnabled(on); }
     bool voiceSpeaking() const { return voice.speaking(); }
+    // F3: the announcer bus and how far the effects sit under a phrase right now.
+    static float announcerBusGain() { return VOICE_BUS_GAIN; }
+    float announcerDuckDb() const { return 20.0f * log10f(std::max(0.001f, sfxDuckGain)); }
     int externalMusicTrackCount() const { return externalMusic.trackCount(); }
     // Short read-out of which scenes actually have a file, for the settings screen.
     std::string externalMusicSummary() const {
@@ -553,6 +557,15 @@ struct SoundEngine {
     static constexpr double MUSIC_BPM = 96.0; // base tempo of the Ash theme
     static constexpr float MUSIC_BUS_GAIN = 0.80f;
     static constexpr float SFX_BUS_GAIN = 1.75f;
+    // Announcer bus. A recorded phrase is not "one more effect": it used to enter the same
+    // sum at 1.20 while every one-shot entered at 1.75, and then the whole sum went through
+    // the soft-knee limiter, so during a breakthrough (horde bed + dozens of effects) the
+    // phrase was heard quieter than the fight around it — the file was in the corridor and
+    // the mix still buried it. Now the phrase has its own bus gain, the effects and the
+    // score step back while it speaks, and the limiter only ever sees the program bus.
+    static constexpr float VOICE_BUS_GAIN = 1.45f;
+    static constexpr float VOICE_DUCK_SFX = 0.58f;   // -4.7 dB under a phrase
+    static constexpr float VOICE_DUCK_MUSIC = 0.34f; // the score steps back furthest
     static double musicVariantBpm(int variant) { return MusicComposer::tempo(variant); }
     static double musicVariantBarBeats(int variant) { return MusicComposer::beatsPerBar(variant); }
     static int nextMusicTempoTier(int currentTier,int liveMonsters) {
@@ -734,25 +747,29 @@ struct SoundEngine {
             if (sfxOn && voices[v].priority >= 4) importantVoice = true;
         }
         if (!sfxOn) { externalCues[0].stop(); externalCues[1].stop(); voice.stop(); }
-        const bool announcing = sfxOn && voice.speaking();
-        const float duckTarget = (importantVoice || announcing) ? 0.60f : (liveVoices > 0 ? 0.84f : 1.0f);
         const float voiceHeadroom = liveVoices > 10 ? 0.78f : (liveVoices > 6 ? 0.88f : 1.0f);
         for (int i = 0; i < numSamples; ++i) {
             const float sfxTarget = sfxOn ? 1.0f : 0.0f;
             sfxMuteGain += (sfxTarget - sfxMuteGain) * 0.00065f;
             sfxVolumeSmooth += (sfxVolume.load(std::memory_order_relaxed) - sfxVolumeSmooth) * 0.00045f;
-            const float duckRate = duckTarget < musicDuckGain ? 0.00050f : 0.00010f;
+            // The announcer is pulled first: its state decides how far the program steps back
+            // on this very sample, so the first syllable never lands in a full fight.
+            const float phrase = voice.next();
+            const bool narrating = sfxOn && voice.speaking();
+            const float duckTarget = narrating ? VOICE_DUCK_MUSIC
+                : (importantVoice ? 0.60f : (liveVoices > 0 ? 0.84f : 1.0f));
+            const float duckRate = duckTarget < musicDuckGain ? (narrating ? 0.00160f : 0.00050f) : 0.00010f;
             musicDuckGain += (duckTarget - musicDuckGain) * duckRate;
+            // Effects step back under a phrase too, and return in about a tenth of a second.
+            const float sfxDuckTarget = narrating ? VOICE_DUCK_SFX : 1.0f;
+            sfxDuckGain += (sfxDuckTarget - sfxDuckGain) * (sfxDuckTarget < sfxDuckGain ? 0.00160f : 0.00022f);
             // Keep music as the bed, not the foreground: raise one-shot effects and let active voices duck the score gently.
-            float mix = sampleMusic(musicTime) * musicDuckGain * MUSIC_BUS_GAIN;
+            float program = sampleMusic(musicTime) * musicDuckGain * MUSIC_BUS_GAIN;
             musicTime += invSr;
             // Level-up / upgrade stings use the SFX bus, so [M] and the effects slider apply.
             float cueSample = 0.0f;
             for (int c = 0; c < 2; ++c) cueSample += externalCues[c].next();
-            if (cueSample != 0.0f) mix += cueSample * sfxVolumeSmooth * sfxMuteGain * 1.15f;
-            // The announcer is a one-shot on the same bus: honours [M] and the effects slider.
-            const float phrase = voice.next();
-            if (phrase != 0.0f) mix += phrase * sfxVolumeSmooth * sfxMuteGain * 1.20f;
+            if (cueSample != 0.0f) program += cueSample * sfxVolumeSmooth * sfxMuteGain * sfxDuckGain * 1.15f;
 
             for (int v = 0; v < MAX_VOICES; ++v) {
                 ActiveVoice& vc = voices[v];
@@ -769,17 +786,24 @@ struct SoundEngine {
                 const float attack = std::min(1.0f, vc.pos / 132.0f); // 3 ms at 44.1 kHz
                 const float tail = std::min(1.0f, (vc.length - 1.0f - vc.pos) / 220.0f); // 5 ms release
                 const float voiceBusGain = (vc.id == SFX_GEM || vc.id == SFX_MAGNET) ? 1.10f : SFX_BUS_GAIN;
-                mix += sample * attack * tail * vc.volume * sfxVolumeSmooth * sfxMuteGain * hordeSfxGain * voiceHeadroom * voiceBusGain;
+                program += sample * attack * tail * vc.volume * sfxVolumeSmooth * sfxMuteGain * hordeSfxGain * sfxDuckGain * voiceHeadroom * voiceBusGain;
                 vc.pos += vc.speed;
             }
 
-            // Smooth soft-knee limiter: stacked combat sounds compress gently instead of hard-clipping.
-            if (!isfinite(mix)) mix = 0.0f;
-            float magnitude = fabsf(mix);
+            // Smooth soft-knee limiter over the program bus only: a dense fight compresses
+            // the effects and the score, it never squashes the announcer.
+            if (!isfinite(program)) program = 0.0f;
+            float magnitude = fabsf(program);
             if (magnitude > 0.62f) {
                 float limited = 0.62f + 0.30f * (1.0f - expf(-(magnitude - 0.62f) / 0.30f));
-                mix = copysignf(std::min(limited, 0.92f), mix);
+                program = copysignf(std::min(limited, 0.92f), program);
             }
+            // The phrase rides above the limiter: honours [M] and the effects slider, but not
+            // the effects duck and not the program knee. The sum gets its own guard knee.
+            float mix = program + phrase * sfxVolumeSmooth * sfxMuteGain * VOICE_BUS_GAIN;
+            if (!isfinite(mix)) mix = 0.0f;
+            const float level = fabsf(mix);
+            if (level > 0.94f) mix = copysignf(0.94f + 0.05f * (1.0f - expf(-(level - 0.94f) / 0.05f)), mix);
             outBuf[i] = (int16_t)(mix * 30000.0f);
         }
 #ifdef _WIN32
