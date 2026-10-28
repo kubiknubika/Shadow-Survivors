@@ -9,6 +9,7 @@
     python3 tools/check_voice.py --strict   # код возврата 1, если чего-то не хватает
     python3 tools/check_voice.py --levels   # плюс контроль громкости всех записей
     python3 tools/check_voice.py --voice    # плюс контроль тембра: один ли голос
+    python3 tools/check_voice.py --stress   # плюс поиск слов с плавающим ударением
 
 Уровни важны не меньше, чем наличие файла: «одна фраза вдвое тише другой»
 слышно сразу, а глазами в реестре не видно. Поэтому --levels перебирает все
@@ -40,6 +41,21 @@ LEVEL_RMS_BAND = (3000, 4600)   # коридор RMS, в который попа
 # который вылез из этого коридора, записан другим голосом — и это слышно в игре,
 # даже если громкость и формат в порядке. Поэтому тембр тоже проверяется.
 VOICE_F0_BAND = (84, 116)
+
+# Слова, на которых синтез уходит в чужое ударение: «сестрЫ» читают как «сЁстры»,
+# «зАдал» вместо «задАл», «пИсарей» вместо «писарЕй» и так далее. Встретилось такое
+# слово в уже записанном описании — переписываем фразу, а не надеемся на диктора.
+STRESS_TRAPS = {
+    "сестры": "сестрЫ/сЁстры — переписать: «говорила сестра» или «родной голос»",
+    "задал": "зАдал/задАл — заменить на «спрашивал»",
+    "начал": "нАчал/начАл — переписать без этого глагола",
+    "понял": "пОнял/понЯл — заменить на «услышал», «решил»",
+    "отдал": "Отдал/отдАл — переписать",
+    "писарей": "пИсарей/писарЕй — заменить на «писцов»",
+    "тиснение": "тИснение — заменить на «оттиск»",
+    "выбиты": "вЫбиты — заменить на «резаны»",
+    "интонацию": "интонацИю — заменить на «голос»",
+}
 
 
 def clip_levels():
@@ -100,6 +116,25 @@ def median_f0(path, decimate=2):
                 break
     found.sort()
     return found[len(found) // 2] if found else 0.0
+
+
+def stress_warnings():
+    """Записанные описания, в которых остались слова с плавающим ударением."""
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    try:
+        import campaign
+    except Exception:
+        return []
+    out = []
+    for i, mission in enumerate(campaign.MISSIONS):
+        key = f"mission_brief_{i:02d}"
+        if not any(os.path.exists(os.path.join(VOICE_DIR, key + ext)) for ext in (".wav", ".mp3")):
+            continue
+        text = mission["briefing"].lower()
+        for stem, why in STRESS_TRAPS.items():
+            if re.search(r"\b" + stem, text):
+                out.append((key, stem, why))
+    return out
 
 
 def main(argv):
@@ -169,6 +204,12 @@ def main(argv):
         for name, hz in voice_bad:
             print(f"  ! {name}: {hz:.0f} Гц (рассказчик ~95 Гц) — перечитать этим же голосом")
 
+    if "--stress" in argv:
+        traps = stress_warnings()
+        print(f"ударения: записей с рискованными словами {len(traps)}")
+        for key, stem, why in traps:
+            print(f"  ! {key}: «{stem}» — {why}")
+
     if missing:
         print("\nне хватает файлов в audio/voice/:")
         for key, line in missing:
@@ -186,6 +227,8 @@ def main(argv):
     if "--levels" in argv and levels_bad:
         return 1
     if "--voice" in argv and voice_bad:
+        return 1
+    if "--stress" in argv and "--strict" in argv and stress_warnings():
         return 1
     return 0
 
