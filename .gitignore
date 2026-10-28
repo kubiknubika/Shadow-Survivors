@@ -1,0 +1,13 @@
+# Build output (build_windows.bat writes these)
+/build/
+*.o
+src/resource.rc
+src/resource.o
+
+# Shipped binaries are produced by the build, not hand-edited.
+/ShadowSurvivors_*.exe
+
+# Runtime leftovers (save, config and crash dump live next to the .exe)
+/build.log
+/crash.log
+*.stackdump
