@@ -133,8 +133,18 @@ def normalize(data):
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         peak = float(np.max(np.abs(samples))) or 1.0
         rms = float(np.sqrt(np.mean(samples ** 2))) or 1.0
-        gain = min(RMS_TARGET / rms, PEAK_LIMIT / peak)
-        samples = samples * gain
+        gain = RMS_TARGET / rms
+        if peak * gain <= PEAK_LIMIT:
+            samples = samples * gain
+        else:
+            # Короткая фраза с резким пиком не давала добрать громкость: прежний
+            # min() просто оставлял клип тише остальных (замер: 2723 при 3767).
+            # Мягкое колено возвращает уровень, не срезая пик в ноль.
+            x = samples * gain
+            knee = 0.55 * PEAK_LIMIT
+            ax = np.abs(x)
+            soft = np.where(ax <= knee, ax, knee + (PEAK_LIMIT - knee) * np.tanh((ax - knee) / (PEAK_LIMIT - knee)))
+            samples = np.sign(x) * soft
         data = np.clip(samples * 32767.0, -32768, 32767).astype(np.int16).tobytes()
     else:
         import audioop
