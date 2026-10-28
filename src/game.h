@@ -101,6 +101,15 @@ static const CampaignMissionDef CAMPAIGN_MISSIONS[CAMPAIGN_MISSION_COUNT] = {
     {"ПРАВО ПОМНИТЬ", "ДЕЛО ЗАКРЫТО", "Дело закрыто, а не выиграно. Мёртвые остались мёртвыми. Живые снова могут помнить их без разрешения машины.", "ЗАКРОЙ ДЕЛО", "ПОСЛЕДНИЙ СВИДЕТЕЛЬ", 240, 180, 0, 5, 0x0Fu, false, 5, 0, 26, -1},
 };
 
+// Every case has its own recorded narration: audio/voice/mission_brief_00…27.
+// The clip name is derived from the case index, so adding a case can never silently
+// reuse another case's voice line.
+static std::string missionBriefKey(int mission) {
+    char key[32];
+    snprintf(key, sizeof(key), "mission_brief_%02d", std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, mission)));
+    return std::string(key);
+}
+
 struct HeroDef {
     const char* name;
     const char* subtitle;
@@ -145,7 +154,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 78;
+static constexpr int PATCH_NOTES_COUNT = 79;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -556,6 +565,8 @@ struct Game {
     int selectedHero = 0;
     int selectedStoryMission = 0;
     int storyMissionCursor = 0;
+    int briefPreviewMission = -1; // which case narration was last read out in the select screen
+    float pendingObjectiveVoiceTimer = 0.0f; // speak the objective once the case narration ends
     int campaignActView = 1;   // which act the mission list is showing
     int helpPage = 0;          // 0 = арсенал, 1 = словарь терминов
     int glossaryScroll = 0;
@@ -1985,10 +1996,17 @@ struct Game {
         memset(evolvedWeapons, 0, sizeof(evolvedWeapons));
         superCharge = 0.0f; superActive = false; superTimer = 0.0f;
         if (gameMode == MODE_STORY) {
-            announce(GMSG_MISSION_BRIEFING, selectedCampaignMission().briefing, 8.0f);
+            // When this case has its own recording, the generic "миссия начинается" line
+            // stays silent so it cannot clip the narration by a fraction of a second.
+            const bool ownNarration = sound.voice.hasClip(missionBriefKey(selectedStoryMission));
+            if (ownNarration) announceVisual(GMSG_MISSION_BRIEFING, selectedCampaignMission().briefing, 8.0f);
+            else announce(GMSG_MISSION_BRIEFING, selectedCampaignMission().briefing, 8.0f);
+            const bool narrated = speakCaseBriefing(selectedStoryMission, true);
             difficultyBanner = selectedCampaignMission().objective;
             difficultyBannerTimer = 7.0f;
-            speakOnly(GMSG_MISSION_OBJECTIVE, difficultyBanner);
+            const float narrationLength = narrated ? sound.voice.clipSeconds(missionBriefKey(selectedStoryMission)) : 0.0f;
+            pendingObjectiveVoiceTimer = narrationLength > 0.6f ? narrationLength + 0.25f : 0.0f;
+            if (pendingObjectiveVoiceTimer <= 0.0f) speakOnly(GMSG_MISSION_OBJECTIVE, difficultyBanner);
         } else {
             announce(GMSG_ENDLESS_START, "БЕСКОНЕЧНАЯ НОЧЬ: КУЗНИЦА ТРЕНИРУЕТСЯ НА БЕЗОПАСНЫХ ЭХО.", 4.0f);
         }
@@ -4083,6 +4101,11 @@ struct Game {
             squadTimer = 17.0f + (float)(rand() % 90) / 10.0f;
             spawnSquad();
         }
+        if (pendingObjectiveVoiceTimer > 0.0f) {
+            pendingObjectiveVoiceTimer -= dt;
+            if (pendingObjectiveVoiceTimer <= 0.0f && !difficultyBanner.empty())
+                speakOnly(GMSG_MISSION_OBJECTIVE, difficultyBanner);
+        }
         ratTimer -= dt;
         if (ratTimer <= 0.0f && state == STATE_PLAYING) {
             ratTimer = 28.0f + (float)(rand() % 160) / 10.0f;
@@ -5660,11 +5683,52 @@ struct Game {
         if (seconds > 0.0f && !storyLine.empty()) speakMessage(id, text);
     }
 
+    // Visual-only variant: the line appears and is counted, but the voice is handled by
+    // the caller (used when a case has its own longer narration).
+    void announceVisual(GameMsgId id, const std::string& text, float seconds) {
+        storyLine = text;
+        storyTimer = seconds;
+        storyDuration = seconds;
+        storySpeaker = MessageRegistry::key(id);
+        messages.note(id);
+    }
+
     // Voice-only path for banners that already have their own visual channel
     // (difficulty strip, boss warning, build tier). Keeps one switch for every sound bite.
     void speakOnly(GameMsgId id, const std::string& text) {
         messages.note(id);
         speakMessage(id, text);
+    }
+
+    // Speak an arbitrary recorded key (used by the per-case narrations, which live
+    // outside the message registry because each case has its own file).
+    bool speakKey(const std::string& key, const std::string& text, bool allowDuplicate = false) {
+        if (text.empty()) return false;
+        if (options.messageSpeechEnabled == 0) { ++messages.voicedSuppressed; return false; }
+        const bool duplicate = !allowDuplicate && text == announceLastText && (globalTime - announceLastAt) < 4.0f;
+        if (duplicate) return false;
+        if (!sound.speakMessage(key)) return false;
+        announceLastText = text;
+        announceLastAt = globalTime;
+        ++messages.voicedSent;
+        return true;
+    }
+
+    // The narration of one case: its own clip when it has been recorded, otherwise the
+    // generic "миссия начинается" line, so an older build never goes silent.
+    bool speakCaseBriefing(int mission, bool allowDuplicate = false) {
+        const CampaignMissionDef& def = CAMPAIGN_MISSIONS[std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, mission))];
+        if (options.messageSpeechEnabled == 0) { ++messages.voicedSuppressed; return false; }
+        if (speakKey(missionBriefKey(mission), def.briefing, allowDuplicate)) return true;
+        return speakMessage(GMSG_MISSION_BRIEFING, def.briefing), true;
+    }
+
+    // Called from the select screen: reading the case you just highlighted is the whole
+    // point of having a narration per case.
+    void noteMissionPreview() {
+        if (storyMissionCursor == briefPreviewMission) return;
+        briefPreviewMission = storyMissionCursor;
+        speakCaseBriefing(storyMissionCursor, true);
     }
 
     void speakMessage(GameMsgId id, const std::string& text) {
@@ -6812,6 +6876,10 @@ struct Game {
         selectedStoryMission = storyMissionCursor;
         campaignActView = campaignActOf(storyMissionCursor);
         state = STATE_MISSION_SELECT;
+        // Opening the campaign reads the case you are standing on, so the description is
+        // not just text you have to read: it is spoken like a case file.
+        speakCaseBriefing(storyMissionCursor, true);
+        briefPreviewMission = storyMissionCursor;
     }
 
     void launchStoryMission(int mission) {
@@ -7078,6 +7146,7 @@ struct Game {
             unlocked ? 0xFFFFFFFF : 0xFF9A939F, false);
         if (mouseClicked && backHover) state = STATE_HERO_SELECT;
         else if (mouseClicked && startHover && unlocked) launchStoryMission(selected);
+        noteMissionPreview();
     }
 
     void renderMissionSelectMenu(Renderer& r) {
@@ -7215,6 +7284,7 @@ struct Game {
             unlocked ? 0xFFFFFFFF : 0xFF9A939F, false);
         if (mouseClicked && backHover) state = STATE_HERO_SELECT;
         else if (mouseClicked && startHover && unlocked) launchStoryMission(selected);
+        noteMissionPreview();
     }
 
     void renderMissionComplete(Renderer& r) {
@@ -7880,6 +7950,7 @@ struct Game {
             "2.9.82 • КАЖДОЕ ДЕЛО — СВОЁ МЕСТО",
             "2.9.83 • ВЕРСИЯ, КАМПАНИЯ, СТРАЖИ",
             "2.9.84 • ЦВЕТ И КРЫСЫ",
+            "2.9.85 • ГОЛОС ДЕЛА И ВТОРАЯ ДЕСЯТКА",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -7961,6 +8032,7 @@ struct Game {
             "Пять мест вместо одной арены: Руины, Крипта, Собор, Пепельный трон и Сердце Архива отличаются кладкой пола, светом, огнём, ориентирами и воздухом. Endless проходит эти же места по ходу ночи.\n• Гарнизон у каждого места свой: крипта выставляет щиты и тяжеловесов, собор — стрелков, трон — броню.\n• Отряды приходят линией с одного края, а не бесконечной россыпью.\n• У каждой семьи своя походка и своя смерть: кости, слизь, искры, пепел.\n• Каждый страж метит пол своим знаком.",
             "Номер версии больше не берётся из локального файла: его читает src/version.h, поэтому сборка, заголовок окна и хроника больше не расходятся.\n• Кампания открывается на последнем доступном деле, а не на первом.\n• У каждого стража свой набор атак: Моргар бьёт волной и зовёт щитоносцев, Малакор льёт чуму и пускает самонаводящиеся сгустки, Кардинал идёт на рывок с узким веером, Азарот выпускает кольцо искр с проходом и спираль. Общих приёмов больше нет.",
             "Третий стиль иконок — «ЦВЕТ»: клинки синие, шар оранжевый, вихрь фиолетовый, молния золотая, аура алая, топор стальной, лёд бирюзовый, книга костяная, сапоги зелёные, магнит пурпурный. Один предмет — один цвет и один силуэт; остальные тридцать предметов — рунные печати в том же цвете.\n• Новая угроза: крысиная стая. Крысы не преследуют — они пересекают арену по прямой линией, кусают на бегу и уходят; их можно фармить по дороге.",
+            "Описания дел озвучены: у каждого Дела своя запись, она читается при выборе дела и при старте. Записаны первые десять; остальные пока читает общая фраза.\n• Вторая десятка иконок «ЦВЕТ» готова: сердце, перчатка, часы, монета, перо, око, печать, осколок луны, линза и рассвет.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");

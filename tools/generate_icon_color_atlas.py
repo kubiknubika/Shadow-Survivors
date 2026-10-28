@@ -363,6 +363,190 @@ GLYPHS = [glyph_blades, glyph_fire, glyph_vortex, glyph_bolt, glyph_blood,
           glyph_axe, glyph_frost, glyph_book, glyph_boots, glyph_magnet]
 
 
+# ── вторая десятка: артефакты и оружие Тира II–V ──────────────────────────────
+
+def glyph_heart(c):
+    mask = new_mask()
+    for y in range(SIZE):
+        for x in range(SIZE):
+            # сердце: две дуги сверху, клин снизу
+            dx, dy = x - 32, y - 30
+            big = ((x - 23) ** 2 + (y - 26) ** 2 <= 121) or ((x - 41) ** 2 + (y - 26) ** 2 <= 121)
+            tri = abs(x - 32) <= (52 - y) * 0.78 and y >= 26
+            if (big or tri) and 8 <= y <= 54:
+                mask[y][x] = True
+    mask_fill(c, mask, MAIN, 2, LIGHT)
+    # прожилки-кристаллы
+    c.line(32, 20, 32, 44, 2.4, OUTLINE)
+    c.line(32, 30, 24, 22, 2.0, OUTLINE)
+    c.line(32, 30, 40, 22, 2.0, OUTLINE)
+    c.disc(32, 34, 3.4, ACCENT)
+
+
+def glyph_gauntlet(c):
+    mask = new_mask()
+    for y in range(SIZE):
+        for x in range(SIZE):
+            body = 18 <= x <= 46 and 22 <= y <= 50
+            knuckles = 20 <= x <= 44 and 14 <= y <= 24
+            thumb = 14 <= x <= 20 and 30 <= y <= 40
+            if body or knuckles or thumb:
+                mask[y][x] = True
+    mask_fill(c, mask, MAIN, 2, LIGHT)
+    for i in range(4):
+        const = 21 + i * 7
+        c.line(const, 12, const, 24, 2.0, OUTLINE)
+        c.disc(const, 22, 2.4, ACCENT)
+    c.rect(18, 46, 46, 52, OUTLINE)
+    c.rect(19, 46, 45, 50, ACCENT)
+    for i in range(3):
+        c.line(24 + i * 8, 30, 24 + i * 8, 44, 1.4, OUTLINE)
+
+
+def glyph_watch(c):
+    c.ring(32, 36, 20, 4.0, OUTLINE)
+    c.ring(32, 36, 20, 2.4, MAIN)
+    c.disc(32, 36, 17, BG)
+    for k in range(12):
+        ang = k * math.pi / 6
+        r0 = 10 if k % 3 else 8
+        c.line(32 + math.cos(ang) * r0, 36 + math.sin(ang) * r0,
+               32 + math.cos(ang) * 15, 36 + math.sin(ang) * 15, 1.6 if k % 3 else 2.4,
+               LIGHT if k % 3 else WHITE)
+    c.line(32, 36, 32, 24, 3.0, ACCENT)
+    c.line(32, 36, 41, 40, 2.4, ACCENT)
+    c.disc(32, 36, 2.6, WHITE)
+    # цепочка и заводная головка
+    c.ring(32, 36, 23, 2.0, MAIN)
+    for k in range(3):
+        c.disc(32, 12 - k * 4, 2.6, OUTLINE)
+        c.disc(32, 12 - k * 4, 1.6, ACCENT)
+
+
+def glyph_coin(c):
+    c.disc(32, 33, 22, OUTLINE)
+    c.disc(32, 33, 19, MAIN)
+    c.ring(32, 33, 15, 2.0, LIGHT)
+    # череп
+    c.disc(32, 29, 8, LIGHT)
+    c.rect(25, 35, 39, 41, LIGHT)
+    c.disc(29, 29, 2.6, OUTLINE)
+    c.disc(35, 29, 2.6, OUTLINE)
+    for i in range(3):
+        c.line(28 + i * 4, 36, 28 + i * 4, 41, 1.4, OUTLINE)
+    # косой крест под монетой
+    c.line(10, 52, 22, 44, 2.2, ACCENT)
+    c.line(54, 52, 42, 44, 2.2, ACCENT)
+
+
+def glyph_feather(c):
+    mask = new_mask()
+    for y in range(SIZE):
+        for x in range(SIZE):
+            t = (y - 8) / 44.0
+            if t < 0 or t > 1:
+                continue
+            centre = 32 + 8 * math.sin(t * 2.6)
+            half = 9 * math.sin(min(1.0, t) * math.pi) ** 0.75
+            if abs(x - centre) <= half:
+                mask[y][x] = True
+    mask_fill(c, mask, MAIN, 2, LIGHT)
+    # стержень и бородки
+    for y in range(10, 54):
+        t = (y - 8) / 44.0
+        centre = 32 + 8 * math.sin(t * 2.6)
+        c.put(int(centre), y, OUTLINE)
+        if y % 6 == 0:
+            c.line(int(centre) - 6, y - 4, int(centre), y, 1.2, OUTLINE)
+            c.line(int(centre) + 6, y - 4, int(centre), y, 1.2, OUTLINE)
+    c.disc(32, 8, 3.0, ACCENT)
+
+
+def glyph_abyss_eye(c):
+    c.outlined_poly([(8, 32), (32, 14), (56, 32), (32, 50)], MAIN, OUTLINE, 1.6)
+    c.outlined_poly([(14, 32), (32, 20), (50, 32), (32, 44)], BG, MAIN, 1.0)
+    c.disc(32, 32, 9.0, OUTLINE)
+    c.disc(32, 32, 7.5, ACCENT)
+    c.disc(32, 32, 3.4, OUTLINE)
+    c.disc(32, 30, 2.0, WHITE)
+    # лучи
+    for k in range(6):
+        ang = -0.5 + k * 0.2
+        c.line(32 + math.cos(ang) * 22, 32 + math.sin(ang) * 22,
+               32 + math.cos(ang) * 30, 32 + math.sin(ang) * 30, 1.4, ACCENT)
+
+
+def glyph_seal_heart(c):
+    c.disc(32, 32, 22, OUTLINE)
+    c.disc(32, 32, 19, BG2)
+    c.ring(32, 32, 15, 2.0, MAIN)
+    mask = new_mask()
+    for y in range(SIZE):
+        for x in range(SIZE):
+            big = ((x - 27) ** 2 + (y - 28) ** 2 <= 49) or ((x - 37) ** 2 + (y - 28) ** 2 <= 49)
+            tri = abs(x - 32) <= (45 - y) * 0.8 and y >= 28
+            if (big or tri) and 18 <= y <= 45:
+                mask[y][x] = True
+    mask_fill(c, mask, ACCENT, 1)
+    for k in range(8):
+        ang = k * math.pi / 4
+        c.line(32 + math.cos(ang) * 16, 32 + math.sin(ang) * 16,
+               32 + math.cos(ang) * 22, 32 + math.sin(ang) * 22, 1.6, MAIN)
+
+
+def glyph_moon_shard(c):
+    # полумесяц, из которого выломан осколок
+    mask = new_mask()
+    for y in range(SIZE):
+        for x in range(SIZE):
+            outer = (x - 34) ** 2 + (y - 32) ** 2 <= 400
+            inner = (x - 24) ** 2 + (y - 30) ** 2 <= 330
+            if outer and not inner:
+                mask[y][x] = True
+    mask_fill(c, mask, MAIN, 2, LIGHT)
+    shard = [(46, 20), (56, 34), (44, 46)]
+    c.outlined_poly(shard, ACCENT, OUTLINE, 1.6)
+    c.line(50, 26, 46, 40, 1.6, OUTLINE)
+    c.disc(22, 46, 2.2, ACCENT)
+
+
+def glyph_lens(c):
+    c.ring(32, 30, 18, 4.0, OUTLINE)
+    c.ring(32, 30, 18, 2.2, MAIN)
+    c.disc(32, 30, 15, BG)
+    c.ring(32, 30, 10, 1.6, ACCENT)
+    # трещина по линзе
+    c.line(24, 20, 34, 30, 2.0, LIGHT)
+    c.line(34, 30, 28, 40, 2.0, LIGHT)
+    c.line(34, 30, 42, 34, 1.6, LIGHT)
+    # рукоять
+    c.line(42, 44, 52, 56, 6.0, OUTLINE)
+    c.line(42, 44, 52, 56, 3.2, ACCENT)
+
+
+def glyph_dawn(c):
+    # последний рассвет: половина солнца над линией горизонта
+    mask = new_mask()
+    for y in range(SIZE):
+        for x in range(SIZE):
+            if (x - 32) ** 2 + (y - 38) ** 2 <= 240 and y <= 38:
+                mask[y][x] = True
+    mask_fill(c, mask, MAIN, 2, LIGHT)
+    c.rect(12, 38, 52, 45, OUTLINE)
+    c.rect(13, 38, 51, 42, ACCENT)
+    for k in range(9):
+        ang = math.pi + k * math.pi / 8
+        c.line(32 + math.cos(ang) * 17, 38 + math.sin(ang) * 17,
+               32 + math.cos(ang) * 25, 38 + math.sin(ang) * 25, 2.4, OUTLINE)
+        c.line(32 + math.cos(ang) * 17, 38 + math.sin(ang) * 17,
+               32 + math.cos(ang) * 24, 38 + math.sin(ang) * 24, 1.2, ACCENT)
+    c.line(20, 49, 44, 49, 2.0, LIGHT)
+    c.line(24, 54, 40, 54, 1.6, LIGHT)
+
+GLYPHS_2 = [glyph_heart, glyph_gauntlet, glyph_watch, glyph_coin, glyph_feather,
+            glyph_abyss_eye, glyph_seal_heart, glyph_moon_shard, glyph_lens, glyph_dawn]
+
+
 def glyph_sigil(c, item):
     """Печать для предметов 10…39: кольцо, зубцы и узор, зависящий от номера."""
     c.ring(32, 32, 22, 3.0, OUTLINE)
@@ -406,6 +590,8 @@ def build_icon(item):
     frame(canvas, key)
     if item < 10:
         GLYPHS[item](canvas)
+    elif item < 20:
+        GLYPHS_2[item - 10](canvas)
     else:
         glyph_sigil(canvas, item)
     return canvas

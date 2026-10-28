@@ -15,6 +15,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REGISTRY = os.path.join(ROOT, "src", "messages.h")
 VOICE_DIR = os.path.join(ROOT, "audio", "voice")
+CAMPAIGN_MISSIONS = 28  # столько же, сколько дел в src/game.h
 
 ROW = re.compile(r'\{(GMSG_[A-Z0-9_]+),\s*"([a-z0-9_]+)",\s*(true|false),\s*"([^"]*)",\s*"([^"]*)"\}')
 
@@ -49,6 +50,19 @@ def main(argv):
         (present if path else missing).append((key, line))
 
     print(f"озвучивается: {len(present) + len(missing)}   на месте: {len(present)}   нет файла: {len(missing)}   молчит: {len(silent)}")
+
+    # Отдельный банк: у каждого Дела кампании своя запись описания.
+    briefs = 0
+    brief_missing = []
+    for i in range(CAMPAIGN_MISSIONS):
+        key = f"mission_brief_{i:02d}"
+        if any(os.path.exists(os.path.join(VOICE_DIR, key + ext)) for ext in (".wav", ".mp3")):
+            briefs += 1
+        else:
+            brief_missing.append(key)
+    print(f"описания дел: {briefs} из {CAMPAIGN_MISSIONS}")
+    if brief_missing and ("--verbose" in argv or len(brief_missing) <= 5):
+        print("  без записи: " + ", ".join(brief_missing))
     if missing:
         print("\nне хватает файлов в audio/voice/:")
         for key, line in missing:

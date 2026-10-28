@@ -116,6 +116,14 @@ struct VoiceBank {
 
     bool hasClip(const std::string& key) { return find(key) != nullptr; }
 
+    // Length of a recorded phrase in seconds (0 when it is missing). The game uses it to
+    // avoid stacking a second line on top of a long narration.
+    float clipSeconds(const std::string& key) {
+        const VoiceClip* clip = load(key);
+        if (!clip || outputRate <= 0) return 0.0f;
+        return (float)clip->samples.size() / (float)outputRate;
+    }
+
     // Minimal RIFF/WAVE reader: 16-bit PCM, mono or stereo. Returns mono samples and
     // the source sample rate. Anything else (compressed WAV, 8/24-bit) is rejected
     // and the MP3 path is tried instead.
