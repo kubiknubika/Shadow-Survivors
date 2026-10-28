@@ -142,6 +142,10 @@ if errorlevel 1 (
     exit /b 1
 )
 for %%F in ("%EXE%") do echo Size: %%~zF bytes >> "%LOG%"
+:: Одна и та же точка входа после каждой сборки: в корне рядом со старыми
+:: ShadowSurvivors_2.9.xx.exe оставался прежний ShadowSurvivors.exe, и запускали
+:: как раз его — игра «показывала» старую версию при новой сборке в папке.
+copy /y "%EXE%" "%BD%ShadowSurvivors.exe" >nul
 echo BUILD SUCCESS: ShadowSurvivors_!VER!.exe >> "%LOG%"
 
 :: The version is not bumped here any more: it is bumped in src\version.h when a
@@ -149,5 +153,6 @@ echo BUILD SUCCESS: ShadowSurvivors_!VER!.exe >> "%LOG%"
 echo [%date% %time%] Build finished >> "%LOG%"
 
 echo BUILD SUCCESS: ShadowSurvivors_!VER!.exe
+echo Запускать: ShadowSurvivors.exe ^(скопирован из этой сборки^)
 pause
 exit /b 0
