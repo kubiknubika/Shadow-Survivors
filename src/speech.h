@@ -11,10 +11,23 @@
 #include <string>
 #include <algorithm>
 
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
+// SAPI is used only when the toolchain actually ships the speech headers.
+// Every other case (Linux, MSVC without the Speech SDK, stripped MinGW) compiles
+// the no-op stub below, so a missing header can never break the build.
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  if defined(__has_include)
+#    if __has_include(<sapi.h>)
+#      define SHADOW_SPEECH_SAPI 1
+#    endif
+#  else
+#    define SHADOW_SPEECH_SAPI 1
+#  endif
 #endif
+
+#ifdef SHADOW_SPEECH_SAPI
 #include <windows.h>
 #include <sapi.h>
 #include <ole2.h>
@@ -42,7 +55,7 @@ struct SpeechEngine {
     std::string lastSpoken;
     std::string voiceLabel = "нет голоса";
 
-#ifdef _WIN32
+#ifdef SHADOW_SPEECH_SAPI
     ISpVoice* voice = nullptr;
     bool comInitialized = false;
 #endif
@@ -92,7 +105,7 @@ struct SpeechEngine {
         return clean;
     }
 
-#ifdef _WIN32
+#ifdef SHADOW_SPEECH_SAPI
     static std::wstring widen(const std::string& utf8) {
         if (utf8.empty()) return std::wstring();
         const int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), NULL, 0);
