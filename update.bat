@@ -20,6 +20,7 @@ set "SRC=%cd%\src"
 set "BUILD=%cd%\build"
 set "LOG=%BUILD%\update.log"
 set "STEP=%BUILD%\update_step.log"
+set "KEEP=%BUILD%\update.local.bat"
 set "HOLD=1"
 if /i "%~1"=="/nopause" set "HOLD=0"
 
@@ -88,15 +89,49 @@ echo You are on !BRANCH!. The release is built from !TARGET!, so switching over.
 echo Your own commits and files stay in !BRANCH! - nothing is deleted.
 git switch !TARGET! > "%STEP%" 2>&1
 if not errorlevel 1 goto switched
-echo ERROR: could not switch to !TARGET! - uncommitted changes or no local branch.
+git switch -c !TARGET! --track !REMOTE!/!TARGET! > "%STEP%.c" 2>&1
+if not errorlevel 1 goto switched
+
+rem Refused. The usual culprit: this very file was downloaded by hand, so it
+rem differs from the branch and git will not overwrite it during the switch.
+echo Switch refused. What git says:
 type "%STEP%"
-echo Try these steps:
-echo   git status
-echo   git stash -u
-echo   git switch -c !TARGET! --track !REMOTE!/!TARGET!
-echo   git stash pop
+del "%STEP%.c" >nul 2>&1
+set "BLOCKERS="
+for /f "tokens=2*" %%a in ('git status --porcelain 2^>nul') do if /i not "%%b"=="update.bat" set "BLOCKERS=1"
+if defined BLOCKERS goto switch_blocked
+rem Only update.bat is dirty. Keep the downloaded copy, clean the branch copy,
+rem switch, and put the downloaded one back after the pull.
+if not exist "update.bat" goto retry_switch
+copy /y "update.bat" "%KEEP%" >nul 2>&1
+git checkout -- update.bat > "%STEP%" 2>&1
+if not errorlevel 1 goto cleaner_done
+git checkout HEAD -- update.bat > "%STEP%" 2>&1
+if not errorlevel 1 goto cleaner_done
+del "update.bat" >nul 2>&1
+:cleaner_done
+echo update.bat on disk is newer than !BRANCH!: saved it to build\update.local.bat,
+echo restored the branch copy for the switch, and will put yours back afterwards.
+:retry_switch
+git switch !TARGET! > "%STEP%" 2>&1
+if not errorlevel 1 goto switched
+git switch -c !TARGET! --track !REMOTE!/!TARGET! > "%STEP%.c" 2>&1
+if not errorlevel 1 goto switched
+type "%STEP%"
+del "%STEP%.c" >nul 2>&1
+goto switch_blocked
+
+:switch_blocked
+echo.
+echo ERROR: cannot switch to !TARGET!. Uncommitted changes in these files:
+git status --short
+echo.
+echo Commit them or set them aside, then run update.bat again:
+echo   git stash -u        hides them until you run: git stash pop
+echo If a file is a local edit you want to keep, copy it somewhere first.
 echo On git older than 2.23 write checkout instead of switch.
 goto fail
+
 :switched
 set "BRANCH=!TARGET!"
 for /f "tokens=3" %%v in ('findstr /c:"#define GAME_VERSION " "%SRC%\version.h"') do set "VER_BEFORE=%%~v"
@@ -113,6 +148,21 @@ echo No upstream on !TARGET! - linking it to !REMOTE!/!TARGET!.
 git branch --set-upstream-to=!REMOTE!/!TARGET! > "%STEP%" 2>&1
 if errorlevel 1 goto fail_step
 :have_upstream
+rem The hand-downloaded updater is newer than the one in !TARGET!. If a future
+rem update touches update.bat, a local copy would block the pull, so put it
+rem aside the same way and copy it back before the build.
+if exist "!KEEP!" goto pull_now
+set "BLOCKERS="
+for /f "tokens=2*" %%a in ('git status --porcelain 2^>nul') do if /i not "%%b"=="update.bat" set "BLOCKERS=1"
+if defined BLOCKERS goto pull_now
+for /f "tokens=2" %%a in ('git status --porcelain -- update.bat 2^>nul') do if /i "%%a"=="update.bat" copy /y "update.bat" "!KEEP!" >nul 2>&1
+if not exist "!KEEP!" goto pull_now
+git checkout -- update.bat > "%STEP%" 2>&1
+if not errorlevel 1 goto updater_aside
+del "update.bat" >nul 2>&1
+:updater_aside
+echo Your update.bat is newer than !TARGET!'s: set aside for the pull, restored after.
+:pull_now
 git pull --ff-only > "%STEP%" 2>&1
 type "%STEP%"
 if not errorlevel 1 goto pulled
@@ -153,6 +203,13 @@ echo Updated: !HEAD_BEFORE! -^> !HEAD_AFTER!, version !VER_AFTER!
 >> "%LOG%" echo updated: !HEAD_BEFORE! -^> !HEAD_AFTER! version=!VER_AFTER!
 
 :build
+if not exist "%KEEP%" goto no_restore
+copy /y "%KEEP%" "update.bat" >nul 2>&1
+del "%KEEP%" >nul 2>&1
+echo.
+echo Kept your downloaded update.bat - it is newer than the one in !TARGET!.
+echo If a later update refuses to switch again:  git checkout -- update.bat
+:no_restore
 echo.
 echo [4/4] build !VER_AFTER!
 call "%~dp0build_windows.bat"
@@ -167,6 +224,8 @@ goto done
 :fail_step
 type "%STEP%"
 :fail
+if exist "%KEEP%" copy /y "%KEEP%" "update.bat" >nul 2>&1
+if exist "%KEEP%" del "%KEEP%" >nul 2>&1
 echo.
 echo Update did NOT complete. Log: %LOG%
 >> "%LOG%" echo FAILED - see the messages above
