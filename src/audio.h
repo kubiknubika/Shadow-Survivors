@@ -7,6 +7,8 @@
 #include <atomic>
 #include "music_composer.h"
 #include "boss_score.h"
+#include "external_music.h"
+#include "voice.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -62,6 +64,20 @@ struct SoundEngine {
     std::atomic<int> immediateMusicRequest{-1};
     std::atomic<float> sfxVolume{0.65f};
     std::atomic<float> musicVolume{0.42f};
+    // 0 = normal scene mapping, 1 = Soul Forge shop (it reuses the menu mode otherwise).
+    std::atomic<int> musicSceneHint{0};
+    // Выбор файла внутри сцены: номер боя для кампании, случайный шаффл для эндлеса.
+    std::atomic<int> musicVariantSeed{-1};
+    std::atomic<bool> musicShuffle{false};
+    // Scene-level trim for the music bus: 0.20 while a level-up card is open (80 % quieter).
+    std::atomic<float> musicSceneGain{1.0f};
+
+    // Player-supplied tracks from audio/. When a scene has a file it plays instead of
+    // the synthesised score below; otherwise the built-in score keeps the scene alive.
+    ExternalMusic externalMusic;
+    ExternalMusicCue externalCues[2]; // 0 = level-up sting, 1 = upgrade-picked sting
+    VoiceBank voice;                  // recorded announcer phrases from audio/voice/
+    float proceduralMusicGain = 0.0f;
 
     std::vector<int16_t> sfxSamples[SFX_COUNT];
     float cooldowns[SFX_COUNT] = {0};
@@ -88,6 +104,7 @@ struct SoundEngine {
     float sfxMuteGain = 1.0f;
     float musicDuckGain = 1.0f;
     float musicVolumeSmooth = 0.42f;
+    float musicSceneGainSmooth = 1.0f;
     float sfxVolumeSmooth = 0.65f;
     float bossMusicBlend = 0.0f; // retained for compatibility with the procedural score state
     uint32_t noiseRng = 987654321u;
@@ -500,6 +517,38 @@ struct SoundEngine {
         }
     }
 
+    // Which file (if any) covers the current music mode. Modes come from game.h:
+    // 0 exploration, 1 horde, 2 boss, 3 recovery, 4 victory, 5 menus/shop, 6 level-up, 7 game over.
+    static int externalSceneForMode(int mode, int sceneHint) {
+        if (mode == 5) return sceneHint == 1 ? MUSIC_SCENE_FORGE : MUSIC_SCENE_MENU;
+        if (mode == 2) return MUSIC_SCENE_BOSS;
+        if (mode == 4) return MUSIC_SCENE_VICTORY;
+        if (mode == 7) return MUSIC_SCENE_GAMEOVER;
+        return MUSIC_SCENE_GAMEPLAY; // run, horde, recovery and the level-up overlay keep one bed
+    }
+    bool externalMusicActive() const { return externalMusic.available(); }
+
+    // --- announcer: recorded phrases from audio/voice/ (see voice.h) ---
+    bool speakMessage(const std::string& key) { return voice.speak(key); }
+    bool hasVoiceClip(const std::string& key) { return voice.hasClip(key); }
+    int voiceSpokenCount() const { return voice.spokenCount; }
+    bool voiceEnabled() const { return voice.enabled; }
+    void setVoiceEnabled(bool on) { voice.setEnabled(on); }
+    bool voiceSpeaking() const { return voice.speaking(); }
+    int externalMusicTrackCount() const { return externalMusic.trackCount(); }
+    // Short read-out of which scenes actually have a file, for the settings screen.
+    std::string externalMusicSummary() const {
+        std::string out;
+        for (int s = 0; s < MUSIC_SCENE_COUNT; ++s) {
+            if (externalMusic.files[s].empty()) continue;
+            if (!out.empty()) out += " • ";
+            out += MUSIC_SCENE_TITLES[s];
+        }
+        return out;
+    }
+    void playLevelUpCue() { externalCues[0].trigger(); }
+    void playUpgradeCue() { externalCues[1].trigger(); }
+
     // Ten fully arranged score identities: their tempo, instrument families, grooves and dynamics differ.
     static constexpr double MUSIC_BPM = 96.0; // base tempo of the Ash theme
     static constexpr float MUSIC_BUS_GAIN = 0.80f;
@@ -602,8 +651,29 @@ struct SoundEngine {
         musicMuteGain += (muteTarget - musicMuteGain) * 0.00055f;
         const float volumeTarget = musicVolume.load(std::memory_order_relaxed);
         musicVolumeSmooth += (volumeTarget - musicVolumeSmooth) * 0.00045f;
+        // ~120 ms to settle, so opening or closing a level-up card ducks smoothly.
+        const float sceneGainTarget = std::max(0.0f, std::min(1.0f, musicSceneGain.load(std::memory_order_relaxed)));
+        musicSceneGainSmooth += (sceneGainTarget - musicSceneGainSmooth) * (1.0f / (44100.0f * 0.12f));
         if (!musicOn && musicMuteGain < 0.001f) return 0.0f;
 
+        // Player tracks in audio/ own the bus whenever the current scene has one.
+        // The built-in score is only rendered when no file covers the scene.
+        const int sceneMode = std::max(0, std::min(7, musicMode.load(std::memory_order_relaxed)));
+        externalMusic.variantSeed = musicVariantSeed.load(std::memory_order_relaxed);
+        externalMusic.shuffle = musicShuffle.load(std::memory_order_relaxed);
+        externalMusic.requestScene(externalSceneForMode(sceneMode, musicSceneHint.load(std::memory_order_relaxed)));
+        float music = externalMusic.render();
+        const bool trackOwnsBus = externalMusic.ownsMusicSlot();
+        const float proceduralTarget = trackOwnsBus ? 0.0f : 1.0f;
+        proceduralMusicGain += (proceduralTarget - proceduralMusicGain) * (1.0f / (44100.0f * 0.25f));
+        if (!trackOwnsBus) {
+            if (proceduralMusicGain > 0.001f) music = renderProceduralScore(t) * proceduralMusicGain;
+        }
+        return music * musicVolumeSmooth * musicMuteGain * musicSceneGainSmooth;
+    }
+
+    // The synthesised score (music_composer.h / boss_score.h) used when no file exists.
+    float renderProceduralScore(double t) {
         const int targetMode = std::max(0, std::min(7, musicMode.load(std::memory_order_relaxed)));
         const int targetVariant = std::max(0, std::min(9, musicVariant.load(std::memory_order_relaxed)));
         // Consume any explicit test-arena request; normal gameplay transitions use the same
@@ -646,7 +716,7 @@ struct SoundEngine {
         const double newTime = t - renderedMusicStartTime;
         const float oldScore = renderMusicArrangement(oldTime, previousMusicMode, previousMusicVariant, previousMusicTempoTier, noiseHigh, musicNoiseLow, previousMusicBossType);
         const float newScore = renderMusicArrangement(newTime, renderedMusicMode, renderedMusicVariant, renderedMusicTempoTier, noiseHigh, musicNoiseLow, renderedMusicBossType);
-        return mixTransitionScores(oldScore, newScore, blend, musicSequentialHandoff) * musicVolumeSmooth * musicMuteGain;
+        return mixTransitionScores(oldScore, newScore, blend, musicSequentialHandoff);
     }
 
     void mixBuffer(int16_t* outBuf, int numSamples) {
@@ -663,7 +733,9 @@ struct SoundEngine {
             ++liveVoices;
             if (sfxOn && voices[v].priority >= 4) importantVoice = true;
         }
-        const float duckTarget = importantVoice ? 0.64f : (liveVoices > 0 ? 0.84f : 1.0f);
+        if (!sfxOn) { externalCues[0].stop(); externalCues[1].stop(); voice.stop(); }
+        const bool announcing = sfxOn && voice.speaking();
+        const float duckTarget = (importantVoice || announcing) ? 0.60f : (liveVoices > 0 ? 0.84f : 1.0f);
         const float voiceHeadroom = liveVoices > 10 ? 0.78f : (liveVoices > 6 ? 0.88f : 1.0f);
         for (int i = 0; i < numSamples; ++i) {
             const float sfxTarget = sfxOn ? 1.0f : 0.0f;
@@ -674,6 +746,13 @@ struct SoundEngine {
             // Keep music as the bed, not the foreground: raise one-shot effects and let active voices duck the score gently.
             float mix = sampleMusic(musicTime) * musicDuckGain * MUSIC_BUS_GAIN;
             musicTime += invSr;
+            // Level-up / upgrade stings use the SFX bus, so [M] and the effects slider apply.
+            float cueSample = 0.0f;
+            for (int c = 0; c < 2; ++c) cueSample += externalCues[c].next();
+            if (cueSample != 0.0f) mix += cueSample * sfxVolumeSmooth * sfxMuteGain * 1.15f;
+            // The announcer is a one-shot on the same bus: honours [M] and the effects slider.
+            const float phrase = voice.next();
+            if (phrase != 0.0f) mix += phrase * sfxVolumeSmooth * sfxMuteGain * 1.20f;
 
             for (int v = 0; v < MAX_VOICES; ++v) {
                 ActiveVoice& vc = voices[v];
@@ -727,6 +806,11 @@ struct SoundEngine {
 #endif
 
     void init() {
+        externalMusic.setOutputRate(44100);
+        externalMusic.scan();
+        voice.setOutputRate(44100);
+        voice.scan();
+        loadExternalCues();
         (void)MusicComposer::allTracks(); // prewarm the immutable score table before the audio callback
         generateSfxBank();
 #ifdef _WIN32
@@ -754,7 +838,19 @@ struct SoundEngine {
 #endif
     }
 
+    void loadExternalCues() {
+        // The two UI stings live in the same folder as the tracks.
+        static const char* const cueKeys[2] = {"ss_levelup_ding", "ss_upgrade_pick"};
+        for (int i = 0; i < 2; ++i) {
+            std::vector<MusicPath> found;
+            externalMusic.findFiles(cueKeys[i], found);
+            if (!found.empty()) externalCues[i].load(found[0], 44100);
+        }
+    }
+
     void shutdown() {
+        voice.stop();
+        externalMusic.shutdown();
 #ifdef _WIN32
         if (running.load(std::memory_order_relaxed)) {
             running.store(false, std::memory_order_relaxed);

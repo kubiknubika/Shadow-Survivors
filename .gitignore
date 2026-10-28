@@ -1,0 +1,53 @@
+# ------------------------------------------------------------------ build output
+# build_windows.bat keeps every intermediate here: resource.rc, resource.o,
+# build.log and the freshly linked exe (plus a .pdb when built with -g).
+/build/
+# Legacy local build counter. The build now reads src/version.h, so this file is
+# ignored only in case an old checkout still has one lying around.
+version.txt
+*.o
+*.obj
+*.res
+*.pdb
+*.ilk
+*.exp
+*.lib
+src/resource.rc
+src/resource.o
+
+# ------------------------------------------------------------------ binaries
+# Every build is named after its version (ShadowSurvivors_2.9.72.exe), so the
+# pattern covers old and new ones. To ship a release in git, use: git add -f.
+*.exe
+
+# ------------------------------------------------- game runtime files (per machine)
+# The game writes these next to the .exe: progress, options and crash log.
+shadow_survivors.sav
+shadow_survivors.cfg
+crash.log
+*.log
+*.stackdump
+*.dmp
+*.mdmp
+
+# --------------------------------------------------------------- OS metadata
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# -------------------------------------------------------------------- editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.kate-swp
+compile_commands.json
+.clangd
+.cache/
+
+# ------------------------------------------------ python (generate_*_atlas.py)
+__pycache__/
+*.pyc

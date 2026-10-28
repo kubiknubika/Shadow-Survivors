@@ -6,6 +6,7 @@
 #include <time.h>
 #include <exception>
 #include <string>
+#include "version.h"
 #include "game.h"
 
 static Game g_game;
@@ -135,6 +136,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (!repeat) {
                 if (wParam == VK_F11) {
                     toggleFullscreen(hwnd);
+                } else if (wParam == VK_F3) {
+                    g_game.debugOverlay = !g_game.debugOverlay; // F3: technical overlay, Minecraft style
                 } else if (wParam == VK_SHIFT) {
                     g_game.onKeyPress(32); // Shift also triggers Dash!
                 } else if (wParam == VK_LEFT && g_game.state == STATE_MENU) {
@@ -171,6 +174,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+static std::wstring windowTitle() {
+    // GAME_VERSION is injected by build_windows.bat, so the title can never go stale again.
+    const char* utf8 = "Пепел Тьмы: Выжившие " GAME_VERSION " — F3: отладка, F11: полный экран, F12: арена музыки босса";
+    const int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (len <= 1) return L"Shadow Survivors";
+    std::wstring wide((size_t)(len - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, &wide[0], len);
+    return wide;
+}
+
 static void writeCrashLog(const std::string& msg) {
     FILE* f = fopen("crash.log", "w");
     if (f) {
@@ -183,17 +196,18 @@ static void writeCrashLog(const std::string& msg) {
 static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* pException) {
     std::string msg = "ShadowSurvivors crashed with an unhandled exception.\n\n";
     if (pException && pException->ExceptionRecord) {
+        // buf must hold a full 64-bit address ("0x" + 16 hex digits + NUL).
+        char buf[32];
         msg += "Exception code: 0x";
-    char buf[16];
-    sprintf(buf, "%08lX", pException->ExceptionRecord->ExceptionCode);
-    msg += buf;
-    msg += "\n";
-    if (pException->ExceptionRecord->ExceptionAddress) {
-        msg += "Exception address: 0x";
-        sprintf(buf, "%p", pException->ExceptionRecord->ExceptionAddress);
+        sprintf(buf, "%08lX", (unsigned long)pException->ExceptionRecord->ExceptionCode);
         msg += buf;
         msg += "\n";
-    }
+        if (pException->ExceptionRecord->ExceptionAddress) {
+            msg += "Exception address: 0x";
+            sprintf(buf, "%p", (void*)pException->ExceptionRecord->ExceptionAddress);
+            msg += buf;
+            msg += "\n";
+        }
     }
     msg += "\nSee crash.log for details.";
     writeCrashLog(msg);
@@ -205,7 +219,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     SetUnhandledExceptionFilter(CrashHandler);
 
     try {
-    writeCrashLog("ShadowSurvivors starting...\nWinMain entered");
     srand((unsigned int)time(NULL));
 
     // Enable High-DPI awareness so the adaptive logical canvas stays crisp on every monitor.
@@ -240,10 +253,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     int winX = std::max(0, (scrW - winW) / 2);
     int winY = std::max(0, (scrH - winH) / 2);
 
+    const std::wstring title = windowTitle();
     HWND hwnd = CreateWindowExW(
         0,
         L"ShadowSurvivorsWndClass",
-        L"Пепел Тьмы: Выжившие 2.9.53 — F11: полный экран, F12: арена музыки босса",
+        title.c_str(),
         style,
         winX, winY, winW, winH,
         NULL, NULL, hInstance, NULL

@@ -1,0 +1,20 @@
+# cmd.exe needs CRLF in batch files; a LF-only checkout breaks multi-line blocks.
+*.bat text eol=crlf
+
+# Sources and docs stay LF everywhere.
+*.c    text eol=lf
+*.cpp  text eol=lf
+*.h    text eol=lf
+*.md   text eol=lf
+*.py   text eol=lf
+*.rc   text eol=lf
+*.txt  text eol=lf
+
+# Assets must never be normalised.
+*.png  binary
+*.ico  binary
+*.mp3  binary
+*.exe  binary
+*.o    binary
+*.sav  binary
+*.cfg  binary
