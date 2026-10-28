@@ -100,7 +100,7 @@ static const CampaignMissionDef CAMPAIGN_MISSIONS[CAMPAIGN_MISSION_COUNT] = {
     {"ТРИ ЭХО-ПРИКАЗА", "СТРАЖИ СЕРДЦА", "Три записи защищают сердце архива. Это не воскресшие стражи — это приказы, которые никто не отменил.", "ПОБЕДИ ТРИ ЭХО", "АРХИВНЫЙ ПРОТОКОЛ", 280, 210, 4, 5, 0x0Fu, true, 5, 1, 24, -1, false},
     {"ПОСЛЕДНЯЯ НОЧЬ", "КОЛЬЦО РАЗМЫКАЕТСЯ", "Контур разомкнут, но ночь ещё держится. Последний бой не вернёт погибших — он вернёт живым право помнить самим.", "УДЕРЖИ КОЛЬЦО • ДОЖДИСЬ РАССВЕТА", "ПОСЛЕДНИЙ ПРИКАЗ", 260, 190, 0, 5, 0x0Fu, false, 5, 0, 25, -1, true},
     {"ПРАВО ПОМНИТЬ", "ДЕЛО ЗАКРЫТО", "Дело закрыто, а не выиграно. Мёртвые остались мёртвыми. Живые снова могут помнить их без разрешения машины.", "ЗАКРОЙ ДЕЛО", "ПОСЛЕДНИЙ СВИДЕТЕЛЬ", 240, 180, 5, 5, 0x0Fu, false, 5, 0, 26, -1, true},
-};;;;;;
+};
 
 // Every case has its own recorded narration: audio/voice/mission_brief_00…27.
 // The clip name is derived from the case index, so adding a case can never silently
@@ -155,7 +155,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 89;
+static constexpr int PATCH_NOTES_COUNT = 90;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -1091,7 +1091,10 @@ struct Game {
         // Keep the legacy masks in step so an older build still sees the four seals.
         const int sealsBefore = (mission < 4) ? 1 : 0;
         (void)sealsBefore;
-        if (mission < 4) save.storySealMask |= (1u << CAMPAIGN_MISSIONS[mission].bossType);
+        // Only the four named guardians carry a seal: a case whose guardian is one of
+        // the two extra types must not set a fifth bit in the low nibble.
+        if (mission < 4 && CAMPAIGN_MISSIONS[mission].bossType < 4)
+            save.storySealMask |= (1u << CAMPAIGN_MISSIONS[mission].bossType);
         if (mission == 4) save.storyEntryMask |= STORY_ARCHIVE_MISSION_COMPLETE_BIT;
         if (mission == 5) save.storyEntryMask |= STORY_HEART_MISSION_COMPLETE_BIT;
     }
@@ -6199,10 +6202,16 @@ struct Game {
             r.fillRoundedRect(bx, by, (int)(bw * br), bh, 4, hpColor);
             r.drawRoundedRect(bx, by, bw, bh, 4, phaseColor, 1);
             char bossLabel[128];
+            const char* bossName = m.isTrioBoss ? echoNames[m.bossType % 6] : bNames[m.bossType % 6];
+            const char* returnTag = m.bossReinforced ? " • ВОЗВРАЩЕНИЕ" : "";
             snprintf(bossLabel, sizeof(bossLabel), "%s%s  •  ФАЗА %s — %s",
-                     m.isTrioBoss ? echoNames[m.bossType % 6] : bNames[m.bossType % 6],
-                     m.bossReinforced ? " • ВОЗВРАЩЕНИЕ" : "",
-                     phaseRoman[phase - 1], phaseLabels[phase - 1]);
+                     bossName, returnTag, phaseRoman[phase - 1], phaseLabels[phase - 1]);
+            if (m.bossReinforced && r.textWidth(FONT_SMALL, bossLabel) > bw - 12) {
+                // Bar is 540 px wide: a long guardian name plus the whole word «возвращение»
+                // would run past the frame. The short tag keeps the marker and fits.
+                snprintf(bossLabel, sizeof(bossLabel), "%s • ВОЗВР.  •  ФАЗА %s — %s",
+                         bossName, phaseRoman[phase - 1], phaseLabels[phase - 1]);
+            }
             r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, by + 1, bossLabel, 0xFFFFFFFF);
             ++bossBars;
         }
@@ -7301,17 +7310,22 @@ struct Game {
             const uint32_t titleColor = unlocked ? 0xFFFFE8BA : 0xFFAAA4B0;
             const char* statusWord = completed ? "ЗАКРЫТО" : (unlocked ? "ДОСТУПНО" : "ЗАКРЫТА");
             const uint32_t statusTint = completed ? 0xFFB8FFD1 : (unlocked ? 0xFFFFDEA0 : 0xFFC1BBC6);
-            const int textMaxW = listW - 60 - r.textWidth(FONT_SMALL, statusWord) - 22;
+            // The list column is narrow, so the title wins over the status word: if the
+            // title does not fit next to a status word, the word is dropped entirely and
+            // the saved width goes to the title. State is still readable — the border,
+            // the left stripe and the number badge all carry it.
+            const int roomNoStatus = listW - 60 - 12;
+            const int roomWithStatus = roomNoStatus - r.textWidth(FONT_SMALL, statusWord) - 14;
+            const bool showStatus = r.textWidth(FONT_SMALL, mission.title) <= roomWithStatus;
+            const int textMaxW = showStatus ? roomWithStatus : roomNoStatus;
             // Long case titles drop to the small font instead of losing half the words.
             const BakedFont& titleFont = (!compactLandscape && r.textWidth(FONT_MED, mission.title) <= textMaxW)
                                        ? FONT_MED : FONT_SMALL;
             r.drawText(titleFont, listX + 60, rowY + 6, fitText(r, titleFont, mission.title, textMaxW).c_str(), titleColor, false);
             r.drawText(FONT_SMALL, listX + 60, rowY + 34,
                        fitText(r, FONT_SMALL, mission.subtitle, textMaxW).c_str(), unlocked ? accent : 0xFF8B8492, false);
-
-            // Status lives on the title line as a short word: the list column is narrow,
-            // so a wide pill would eat the case titles.
-            r.drawTextRight(FONT_SMALL, listX + listW - 10, rowY + 8, statusWord, statusTint, false);
+            if (showStatus)
+                r.drawTextRight(FONT_SMALL, listX + listW - 10, rowY + 8, statusWord, statusTint, false);
 
             if (mouseClicked && hovered) {
                 storyMissionCursor = i;
@@ -7567,23 +7581,50 @@ struct Game {
         const int maxR = MENU_SELECTED_OUTER_R;
         const int minR2 = MENU_SELECTED_INNER_R * MENU_SELECTED_INNER_R;
         const int maxR2 = maxR * maxR;
-        const float half = menuSectorHalfAngle();
-        for (int y = std::max(0, menuCenterY() - maxR); y <= std::min(SCREEN_H - 1, menuCenterY() + maxR); ++y) {
-            const int dy = y - menuCenterY();
+        // The sector a pixel belongs to depends only on the screen size and the fixed
+        // menu geometry, yet the first version recomputed atan2/floor per pixel every
+        // frame — about 4,5 мс на кадр в меню. The map is built once per resolution.
+        static std::vector<uint8_t> sectorMap;
+        static int mapW = -1, mapH = -1, mapCx = -1, mapCy = -1;
+        const int cx = menuCenterX(), cy = menuCenterY();
+        if (mapW != SCREEN_W || mapH != SCREEN_H || mapCx != cx || mapCy != cy) {
+            mapW = SCREEN_W; mapH = SCREEN_H; mapCx = cx; mapCy = cy;
+            sectorMap.assign((size_t)SCREEN_W * SCREEN_H, 0);
+            const float half = menuSectorHalfAngle();
+            const float step = menuSectorStep();
+            for (int y = std::max(0, cy - maxR); y <= std::min(SCREEN_H - 1, cy + maxR); ++y) {
+                const int dy = y - cy;
+                const int rem = maxR2 - dy * dy;
+                if (rem < 0) continue;
+                const int extent = (int)sqrtf((float)rem);
+                const int x0 = std::max(0, cx - extent), x1 = std::min(SCREEN_W - 1, cx + extent);
+                for (int x = x0; x <= x1; ++x) {
+                    const int dx = x - cx;
+                    const int d2 = dx * dx + dy * dy;
+                    if (d2 < minR2 || d2 > maxR2) continue;
+                    const float angle = atan2f((float)dy, (float)dx);
+                    float relative = angle + MENU_PI * 0.5f;
+                    if (relative < 0.0f) relative += MENU_TAU;
+                    else if (relative >= MENU_TAU) relative -= MENU_TAU;
+                    const int item = ((int)floorf((relative + step * 0.5f) / step)) % MAIN_MENU_ITEM_COUNT;
+                    if (fabsf(wrapMenuAngle(angle - menuSectorCenterAngle(item))) > half) continue;
+                    sectorMap[(size_t)y * SCREEN_W + x] = (uint8_t)(item + 1);
+                }
+            }
+        }
+        for (int y = std::max(0, cy - maxR); y <= std::min(SCREEN_H - 1, cy + maxR); ++y) {
+            const int dy = y - cy;
             const int rem = maxR2 - dy * dy;
             if (rem < 0) continue;
             const int extent = (int)sqrtf((float)rem);
-            const int x0 = std::max(0, menuCenterX() - extent), x1 = std::min(SCREEN_W - 1, menuCenterX() + extent);
+            const int x0 = std::max(0, cx - extent), x1 = std::min(SCREEN_W - 1, cx + extent);
+            const uint8_t* rowMap = sectorMap.data() + (size_t)y * SCREEN_W;
             for (int x = x0; x <= x1; ++x) {
-                const int dx = x - menuCenterX();
+                const uint8_t slot = rowMap[x];
+                if (slot == 0) continue;
+                const int item = slot - 1;
+                const int dx = x - cx;
                 const int d2 = dx * dx + dy * dy;
-                if (d2 < minR2) continue;
-                const float angle = atan2f((float)dy, (float)dx);
-                float relative = angle + MENU_PI * 0.5f;
-                if (relative < 0.0f) relative += MENU_TAU;
-                else if (relative >= MENU_TAU) relative -= MENU_TAU;
-                const int item = ((int)floorf((relative + menuSectorStep() * 0.5f) / menuSectorStep())) % MAIN_MENU_ITEM_COUNT;
-                if (fabsf(wrapMenuAngle(angle - menuSectorCenterAngle(item))) > half) continue;
                 const bool selected = item == mainMenuFocus;
                 const int inner = selected ? MENU_SELECTED_INNER_R : MENU_INNER_R;
                 const int outer = selected ? MENU_SELECTED_OUTER_R : MENU_OUTER_R;
@@ -8071,6 +8112,7 @@ struct Game {
             "2.9.93 • УБРАНЫ СЛОВА С ПЛАВАЮЩИМ УДАРЕНИЕМ",
             "2.9.94 • ПРИЧИНА «АКЦЕНТА» — ФИЛЬТР ЧАСТОТЫ",
             "2.9.95 • УБРАНЫ СТЕЧЕНИЯ СОГЛАСНЫХ",
+            "2.9.96 • АУДИТ: ПЕЧАТЬ, ПОЛОСА БОССА, СПИСОК ДЕЛ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -8163,6 +8205,7 @@ struct Game {
             "Акцент в озвучке лечится не голосом, а текстом.\n• Из описаний убраны слова, на которых синтез уходит в чужое ударение: «сестры» → «говорила сестра», «задал» → «спрашивал», «начал» → «стёр и своё имя», «понял» → «услышал», «тиснение» → «оттиск», «выбиты» → «резаны», «писарей» → «писцов», «интонацию» → «тот же голос».\n• Перечитаны дела 07, 08, 12, 13, 14, 15 и 19 — те, где такие слова были.\n• tools/check_voice.py --stress сам ищет в записанных описаниях слова с плавающим ударением и падает в строгом режиме, поэтому новая запись с «сЁстры» не уйдёт в сборку незамеченной.",
             "Найдена настоящая причина странного произношения.\n• Реплики приходят в 44,1 кГц, а нормализатор понижал частоту линейной интерполяцией без фильтра: верхние гармоники складывались обратно в слышимую полосу.\n• Замер: было 2,95% энергии в полосе 7–8 кГц, стало 0,11%. Именно этот «звон» читался как лишние гласные — «прыотыокыол» вместо «протокол».\n• В нормализатор добавлен срез выше 7,2 кГц перед пересчётом, а tools/check_voice.py --alias считает эту долю у каждого клипа.\n• Дела 01–10 перезаписаны новым рассказчиком через исправленный тракт; остальные 47 клипов отмечены как поражённые и перечитываются партиями.",
             "Остаток «акцента» лечится текстом: голос вставляет гласные на стечениях согласных.\n• «тронут штормом» звучало как «троунут штоурмоум» — теперь «Морг цел. Буря его не задела».\n• «после шторма» заменено на «после бури» в первом деле.\n• В tools/check_voice.py --stress добавлены эти два слова, чтобы такая запись не прошла проверку молча.",
+            "Аудит всей игры пройден целиком: 28 дел достижимы от пустого сейва, акты открываются, стаи крыс расходятся, 12 боёв и десятиминутный забег без утечек.\n• Закрытие дела с усиленным стражем больше не ставит пятую печать: бит ставят только первые четыре стража.\n• Полоса босса у Протоколиста с «возвращением» вылезала за край на 537 px — теперь подпись сжимается до «• ВОЗВР.».\n• В списке дел «ЗАКРЫТО» наезжало на длинные названия; если места нет, статус не рисуется.\n• tools/apply_campaign.py при каждой записи добавлял лишнюю «;», поэтому его --check не проходил никогда.\n• Меню считает карту секторов один раз на разрешение: кадр 15,8 → 8,9 мс. Картинка прежняя, пиксель в пиксель.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");

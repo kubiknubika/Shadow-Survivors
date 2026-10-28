@@ -51,7 +51,13 @@ def main(argv):
     start = text.index(TABLE)
     end = table_end(text, start)
     rows = generated_rows()
-    new_text = text[:start] + TABLE + "\n" + rows + "\n};" + text[end:]
+    # В файле после «}» таблицы стоят лишние точки с запятой (};;;;...). Без их
+    # пропуска каждая запись добавляла ещё одну «;», и --check не проходил никогда.
+    tail = text[end:]
+    skip = 0
+    while skip < len(tail) and tail[skip] in "; \t":
+        skip += 1
+    new_text = text[:start] + TABLE + "\n" + rows + "\n};" + tail[skip:]
     for needle in REQUIRED:                 # ничего лишнего не вырезали
         if needle not in new_text:
             raise SystemExit(f"после замены пропало: {needle}")
