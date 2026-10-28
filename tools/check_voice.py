@@ -32,7 +32,12 @@ def main(argv):
         return 1
     present, missing, silent = [], [], []
     for enum, key, voiced, line, _note in rows:
-        path = os.path.join(VOICE_DIR, key + ".mp3")
+        path = None
+        for ext in (".wav", ".mp3"):
+            candidate = os.path.join(VOICE_DIR, key + ext)
+            if os.path.exists(candidate):
+                path = candidate
+                break
         flag = voiced == "true"
         if not flag:
             silent.append((key, line))
@@ -41,17 +46,17 @@ def main(argv):
             continue
         if not line:
             print(f"! {key}: помечено как «озвучивается», но текст фразы пуст")
-        (present if os.path.exists(path) else missing).append((key, line))
+        (present if path else missing).append((key, line))
 
     print(f"озвучивается: {len(present) + len(missing)}   на месте: {len(present)}   нет файла: {len(missing)}   молчит: {len(silent)}")
     if missing:
         print("\nне хватает файлов в audio/voice/:")
         for key, line in missing:
-            print(f"  {key}.mp3   — {line}")
+            print(f"  {key}.wav/mp3   — {line}")
     if present:
         print("\nзаписано:")
         for key, line in present:
-            print(f"  {key}.mp3   — {line}")
+            print(f"  {key}.wav/mp3   — {line}")
     if silent:
         print("\nнамеренно без голоса:")
         for key, _ in silent:
