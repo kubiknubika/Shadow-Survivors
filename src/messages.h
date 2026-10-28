@@ -73,7 +73,7 @@ struct GameMsgDef {
 // Every row must have a key and a note; `voiced` is the explicit decision.
 static const GameMsgDef GAME_MESSAGES[GMSG_COUNT] = {
     {GMSG_BOSS_PHASE,         "boss_phase",         true,  "Новая фаза боя.", "смена фазы босса — важное событие боя"},
-    {GMSG_BREAKTHROUGH_START, "breakthrough",       true,  "Прорыв, держись!", "начало прорыва, меняет правила боя"},
+    {GMSG_BREAKTHROUGH_START, "breakthrough",       true,  "Прорыв. Держись.", "начало прорыва, меняет правила боя"},
     {GMSG_BREAKTHROUGH_HELD,  "breakthrough_held",  true,  "Прорыв отбит.", "прорыв отбит"},
     {GMSG_EVOLUTION,          "evolution",          true,  "Симбиоз пробуждён.", "симбиоз оружия — меняет сборку"},
     {GMSG_HOSTILE_HORDE,      "hostile_horde",      true,  "Особая орда идёт на тебя!", "особая орда"},
@@ -89,7 +89,7 @@ static const GameMsgDef GAME_MESSAGES[GMSG_COUNT] = {
     {GMSG_TRIO_INTRO,         "trio_intro",         true,  "Три эха защищают сердце архива.", "финальное трио"},
     {GMSG_MISSION_OBJECTIVE,  "mission_objective",  true,  "Цель обновлена.", "цель миссии"},
     {GMSG_BOSS_SUMMON,        "boss_summon",        true,  "Страж зовёт подмогу.", "босс призывает помощь"},
-    {GMSG_BOSS_ABILITY,       "boss_ability",       true,  "Уходи из зоны удара!", "способность босса"},
+    {GMSG_BOSS_ABILITY,       "boss_ability",       true,  "Зона удара! Уходи!", "способность босса"},
     {GMSG_PHOENIX_REVIVE,     "phoenix_revive",     true,  "Феникс возрождает тебя.", "возрождение феникса"},
     {GMSG_PLAYER_DEATH,       "player_death",       true,  "Твоя искра погасла.", "гибель героя"},
     {GMSG_BUILD_TIER_UP,      "build_tier_up",      true,  "Сборка поднялась на тир выше.", "повышение тира сборки"},

@@ -37,7 +37,13 @@ def registry_rows():
     return ROW.findall(text)
 
 
-LEVEL_RMS_BAND = (3000, 4600)   # коридор RMS, в который попадает штатная запись
+# Коридор громкости. Сам по себе RMS не отвечает на жалобу «слишком тихо»: фраза
+# с высоким пик-фактором укладывается в RMS и всё равно слышна тише соседей
+# (замер: rms 3750 при crest 7,4 против rms 3767 при crest 4,7). Поэтому громкость
+# проверяется вместе с плотностью: --dense в normalize_voice.py приводит оба числа
+# к общему коридору банка.
+LEVEL_RMS_BAND = (4650, 5400)
+CREST_BAND = (3.3, 5.4)         # пик/RMS: выше — фраза «пустая» и слышится тише
 # Все реплики читает один рассказчик. Его медианная высота тона 93–119 Гц; клип,
 # который вылез из этого коридора, записан другим голосом — и это слышно в игре,
 # даже если громкость и формат в порядке. Поэтому тембр тоже проверяется.
@@ -108,9 +114,12 @@ def clip_levels():
                 data = w.readframes(w.getnframes())
             if channels == 2:
                 data = audioop.tomono(data, 2, 0.5, 0.5)
-            out.append((name, rate, channels, audioop.rms(data, 2)))
+            rms = audioop.rms(data, 2)
+            peak = audioop.max(data, 2) if rms else 0
+            crest = round(peak / rms, 2) if rms else 0.0
+            out.append((name, rate, channels, rms, crest))
         except Exception as exc:  # битый файл не должен валить проверку целиком
-            out.append((name, 0, 0, -1))
+            out.append((name, 0, 0, -1, 0.0))
             print(f"! {name}: не читается ({exc})")
     return out
 
@@ -214,16 +223,19 @@ def main(argv):
     if "--levels" in argv:
         levels = clip_levels()
         low, high = LEVEL_RMS_BAND
-        for name, rate, channels, rms in levels:
+        c_low, c_high = CREST_BAND
+        for name, rate, channels, rms, crest in levels:
             if rate and (rate != 16000 or channels != 1):
                 levels_bad.append((name, f"формат {rate} Гц/{channels} кан."))
             elif rms >= 0 and not (low <= rms <= high):
                 levels_bad.append((name, f"громкость rms={rms} вне коридора {low}..{high}"))
+            elif crest and not (c_low <= crest <= c_high):
+                levels_bad.append((name, f"пик-фактор {crest} вне коридора {c_low}..{c_high} — слышится тише банка"))
         print(f"уровни: проверено {len(levels)} записей, вне коридора {len(levels_bad)}")
         for name, why in levels_bad:
             print(f"  ! {name}: {why}")
         if levels_bad:
-            print("  лечится: python3 tools/normalize_voice.py audio/voice/<файл>.wav")
+            print("  лечится: python3 tools/normalize_voice.py --dense audio/voice/<файл>.wav")
 
     voice_bad = []
     if "--voice" in argv:

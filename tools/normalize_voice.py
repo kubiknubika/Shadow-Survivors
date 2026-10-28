@@ -40,7 +40,14 @@ TAIL = 0.100
 JOIN_GAP = 0.260          # пауза между кусками при --join: вдох, а не склейка
 RMS_TARGET = 0.115
 RMS_TARGET_LOUD = 0.140   # --loud: короткие боевые выкрики, которые иначе слышны тише
+RMS_TARGET_DENSE = 0.135  # --dense: реплики с высоким пик-фактором
 PEAK_LIMIT = 0.89
+# Пик-фактор (пик/RMS) — вот что слышится как тишина при равном RMS. У старых
+# записей он 4,7–5,2, у свежих коротких фраз доходил до 7,4: формально громкость
+# «в коридоре», а на слух тише соседей. Поэтому --dense приводит не только RMS,
+# но и пик-фактор: цель 0,160 по RMS при потолке 0,70 даёт crest ≈ 4,7.
+RMS_TARGET_DENSE = 0.160
+PEAK_LIMIT_DENSE = 0.70
 
 
 def read(path):
@@ -138,30 +145,30 @@ def ramp(data, seconds, rising):
     return bytes(out)
 
 
-def normalize(data, target=RMS_TARGET):
+def normalize(data, target=RMS_TARGET, peak_limit=PEAK_LIMIT):
     """Выравнивает громкость по RMS, а не по пику: иначе фразы звучат по-разному."""
     if np is not None:
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         peak = float(np.max(np.abs(samples))) or 1.0
         rms = float(np.sqrt(np.mean(samples ** 2))) or 1.0
         gain = target / rms
-        if peak * gain <= PEAK_LIMIT:
+        if peak * gain <= peak_limit:
             samples = samples * gain
         else:
             # Короткая фраза с резким пиком не давала добрать громкость: прежний
             # min() просто оставлял клип тише остальных (замер: 2723 при 3767).
             # Мягкое колено возвращает уровень, не срезая пик в ноль.
             x = samples * gain
-            knee = 0.55 * PEAK_LIMIT
+            knee = 0.55 * peak_limit
             ax = np.abs(x)
-            soft = np.where(ax <= knee, ax, knee + (PEAK_LIMIT - knee) * np.tanh((ax - knee) / (PEAK_LIMIT - knee)))
+            soft = np.where(ax <= knee, ax, knee + (peak_limit - knee) * np.tanh((ax - knee) / (peak_limit - knee)))
             samples = np.sign(x) * soft
         data = np.clip(samples * 32767.0, -32768, 32767).astype(np.int16).tobytes()
     else:
         import audioop
         peak = audioop.max(data, 2) or 1
         rms = audioop.rms(data, 2) or 1
-        gain = min(target / (rms / 32768.0), (PEAK_LIMIT * 32768.0) / peak)
+        gain = min(target / (rms / 32768.0), (peak_limit * 32768.0) / peak)
         data = audioop.mul(data, 2, gain)
     data = ramp(data, FADE_IN, True)
     data = ramp(data, FADE_OUT, False)
@@ -184,8 +191,11 @@ def join(out_path, parts, target=RMS_TARGET):
     print(f"{os.path.basename(out_path):32s} {seconds:5.2f} с  из {len(parts)} кусков")
 
 
-def process(path, target=RMS_TARGET):
-    data = normalize(trim(read(path)), target)
+def process(path, target=RMS_TARGET, dense=False):
+    if dense:
+        data = normalize(trim(read(path)), RMS_TARGET_DENSE, PEAK_LIMIT_DENSE)
+    else:
+        data = normalize(trim(read(path)), target)
     with wave.open(path, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
@@ -203,6 +213,7 @@ def process(path, target=RMS_TARGET):
 
 def main():
     loud = "--loud" in sys.argv
+    dense = "--dense" in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if "--join" in sys.argv:
         if len(args) < 3:
@@ -221,7 +232,10 @@ def main():
         print(__doc__)
         return 1
     for p in paths:
-        process(p, RMS_TARGET_LOUD if loud else RMS_TARGET)
+        if dense:
+            process(p, RMS_TARGET_DENSE, dense=True)
+        else:
+            process(p, RMS_TARGET_LOUD if loud else RMS_TARGET)
     return 0
 
 
