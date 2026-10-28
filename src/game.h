@@ -142,7 +142,90 @@ static constexpr int MONSTER_TYPE_COUNT = 11;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 75;
+static constexpr int PATCH_NOTES_COUNT = 76;
+
+// ── Arena identity ──────────────────────────────────────────────────────────────
+// Each act is a different place, not the same floor with a new tint: stone, mortar,
+// floor seals, fire colour, landmark props and the drifting air all change together.
+// Two missions can never read as one arena re-skinned.
+struct ArenaTheme {
+    const char* name;
+    uint32_t floorA, floorB, floorDetail, mortar;
+    uint32_t runeOuter, runeInner;
+    uint32_t flame, flameCore;
+    uint32_t mote;         // drifting air colour
+    uint32_t lightTint;    // broad ambient wash over the battlefield
+    float moteSpeed;       // px/s vertical drift (negative = rises)
+    int moteCount;
+    int propKind;
+};
+static const ArenaTheme ARENA_THEMES[5] = {
+    // I — Руины: cold mossy stone, violet seals, slow dust falling through brazier light.
+    {"РУИНЫ", 0xFF141120, 0xFF1A1529, 0xFF211B33, 0xFF0B0813,
+     0xFF765BC0, 0xFFAE91FF, 0xFFFF7018, 0xFFFFE050,
+     0xFFC7BAFF, 0xFF2B2350, 34.0f, 26, 0},
+    // II — Крипта: wet bone-stained brick, candlelight, dry ash sifting down.
+    {"КРИПТА", 0xFF1A1018, 0xFF22131C, 0xFF301722, 0xFF0D070C,
+     0xFFB54B62, 0xFFFF8290, 0xFF7CE4F0, 0xFFE8FFFF,
+     0xFFE8D6C4, 0xFF3A1722, 22.0f, 30, 1},
+    // III — Собор: teal glass and light shafts, cold blue fire, motes rising.
+    {"СОБОР", 0xFF0D1A22, 0xFF122330, 0xFF193444, 0xFF05111A,
+     0xFF38A5B8, 0xFF80E8F2, 0xFF6AD8FF, 0xFFE0FBFF,
+     0xFF9FE8FF, 0xFF123A4E, -18.0f, 34, 2},
+    // IV — Пепельный трон: charcoal and ember, fast rising sparks.
+    {"ПЕПЕЛЬНЫЙ ТРОН", 0xFF1E120D, 0xFF27160E, 0xFF3C2112, 0xFF120A06,
+     0xFFD48B3A, 0xFFFFC974, 0xFFFF6A18, 0xFFFFD070,
+     0xFFFFB070, 0xFF48200E, -46.0f, 40, 3},
+    // V — Сердце Архива: ink-blue stacks, pale glyph light, drifting pages.
+    {"СЕРДЦЕ АРХИВА", 0xFF111027, 0xFF171439, 0xFF221D4C, 0xFF080617,
+     0xFF6E7BE8, 0xFFB9C6FF, 0xFFA8C8FF, 0xFFFFFFFF,
+     0xFFDCE2FF, 0xFF1B1A46, -8.0f, 28, 4},
+};
+
+// Monster rosters are per place, not global: the crypt sends shields and brutes, the
+// cathedral sends shooters, the ash throne sends heavy elites. This is what makes one
+// fight feel different from the next, not only the wallpaper behind it.
+static int pickActMonsterType(int theme, int maxType) {
+    static const int ROSTER[5][MONSTER_TYPE_COUNT] = {
+        {50, 30, 20,  0,  0,  0,  0,  0,  0, 0, 0},
+        {18, 26, 14, 20, 12, 10,  0,  0,  0, 0, 0},
+        {10, 14,  8, 20, 10, 10, 16,  0, 12, 0, 0},
+        {14,  8, 12, 12, 20, 10, 14, 10,  0, 0, 0},
+        {10,  8, 10, 14, 16, 10, 10, 10, 10, 2, 0},
+    };
+    const int t = std::max(0, std::min(4, theme));
+    const int cap = std::max(0, std::min(MONSTER_TYPE_COUNT - 1, maxType));
+    int total = 0;
+    for (int i = 0; i <= cap; ++i) total += ROSTER[t][i];
+    if (total <= 0) return rand() % (cap + 1);
+    int roll = rand() % total;
+    for (int i = 0; i <= cap; ++i) {
+        roll -= ROSTER[t][i];
+        if (roll < 0) return i;
+    }
+    return cap;
+}
+
+// Each family dies in its own way: bone shards, slime splatter, ash, sparks, pages.
+struct DeathBurst { uint32_t color; uint32_t accent; int count; };
+static DeathBurst monsterDeathBurst(int type, bool elite) {
+    static const DeathBurst bursts[MONSTER_TYPE_COUNT] = {
+        {0xFFFF8B60, 0xFF7A3A2A, 10}, // 0 — ember imp
+        {0xFFE8E0C8, 0xFF6B6478, 11}, // 1 — skeleton: bone shards
+        {0xFF72E05C, 0xFF2F6B34, 10}, // 2 — slime: green splatter
+        {0xFFB08CFF, 0xFF4A3570, 10}, // 3 — cultist: violet sparks
+        {0xFFC8A070, 0xFF5A3F28, 12}, // 4 — brute
+        {0xFF7CE8FF, 0xFF2A6C86, 10}, // 5 — frost wraith
+        {0xFFFFD06A, 0xFF7A5A24, 10}, // 6 — warden
+        {0xFFFF6A6A, 0xFF6B1F2A, 13}, // 7 — heavy knight
+        {0xFF9AD8FF, 0xFF2C4C7A, 10}, // 8 — archer
+        {0xFFFF9A3A, 0xFF6B3412, 14}, // 9 — ogre
+        {0xFFFFC65E, 0xFF6B4A1C, 11}, // 10 — matryoshka
+    };
+    DeathBurst b = bursts[std::max(0, std::min(MONSTER_TYPE_COUNT - 1, type))];
+    if (elite) { b.count += 6; b.accent = 0xFFFFC64A; }
+    return b;
+}
 
 struct ItemDef {
     int id;
@@ -598,6 +681,7 @@ struct Game {
     float measuredKillsPerSecond = 0.0f;
     float lowActionTimer = 0.0f;
     float eventCooldown = 35.0f;
+    float squadTimer = 16.0f;      // next themed squad push
     // Quiet hunt ("тихая охота") is an *opportunity*, not a wall: a finite pack walks the
     // trail, drops coins as it dies, and pays a bounty if the whole pack is cleared.
     // The breakthrough is the wall: timed, unavoidable and it blocks progression.
@@ -1663,6 +1747,19 @@ struct Game {
     }
 
     int getDifficultyCycle() const { return breakthroughCount; }
+    // Which place this fight happens in. Campaign missions follow their act; Endless
+    // walks through the same five places as the night goes on, so the arena itself
+    // changes under the player instead of repeating one palette forever.
+    int currentArenaTheme() const {
+        if (gameMode == MODE_STORY) {
+            int act = 1;
+            if (selectedStoryMission >= 0 && selectedStoryMission < CAMPAIGN_MISSION_COUNT)
+                act = CAMPAIGN_MISSIONS[selectedStoryMission].act;
+            return std::max(0, std::min(4, act - 1));
+        }
+        return std::max(0, std::min(4, (int)(runTime / 150.0f)));
+    }
+
     int getDifficultySegment() const {
         if (breakthroughActive) return 1;
         if (recoveryTimer > 0.0f) return 2;
@@ -1899,6 +1996,7 @@ struct Game {
         smartSpawnChance[0] = smartSpawnChance[1] = smartSpawnChance[2] = 0.01f;
         smartStrengthMultiplier[0] = smartStrengthMultiplier[1] = smartStrengthMultiplier[2] = 1.0f;
         pendingResonatorBurst = 0; pendingMatryoshkaSplits.clear(); eventCooldown = 35.0f;
+        squadTimer = 14.0f;
         huntActive = false; huntPackTotal = huntPackRemaining = 0; huntTimer = 0.0f; huntCoinsDropped = 0;
         measuredKillsPerSecond = 0.0f; lowActionTimer = 0.0f; killWindowTimer = 0.0f;
         particles.clear();
@@ -2178,6 +2276,20 @@ struct Game {
     }
 
     // Ordinary foes enter from beyond the full camera rectangle and stay hidden until they walk in.
+    // Squads arrive together from one edge, in a readable line: that is the difference
+    // between "enemies trickle in" and "something is coming for you".
+    bool chooseSideSpawnPoint(int side, float along, float margin, float& outX, float& outY) const {
+        const float outerX = SCREEN_W * 0.5f + margin + 26.0f;
+        const float outerY = SCREEN_H * 0.5f + margin + 26.0f;
+        float dx = along, dy = 0.0f;
+        if (side == 0) { dx = -outerX; dy = along; }
+        else if (side == 1) { dx = outerX; dy = along; }
+        else if (side == 2) { dx = along; dy = -outerY; }
+        else { dx = along; dy = outerY; }
+        outX = playerX + dx; outY = playerY + dy;
+        return isWorldPointOffscreen(outX, outY, margin * 0.6f);
+    }
+
     bool chooseOffscreenSpawnPoint(float minimumDistance, float margin, float& outX, float& outY) const {
         const float outerX = SCREEN_W * 0.5f + margin + 18.0f;
         const float outerY = SCREEN_H * 0.5f + margin + 18.0f;
@@ -2245,7 +2357,36 @@ struct Game {
         bossRushTimer = BOSS_RUSH_SECONDS;
     }
 
-    void spawnMonster(int type, bool isElite, bool isBoss, int bossType = 0) {
+    // A squad is a small authored group: it enters from one edge in a line, so the player
+    // reads "shield wall coming from the left" instead of an endless random trickle.
+    void spawnSquad() {
+        const int theme = currentArenaTheme();
+        const int maxType = std::min(9, 1 + (int)(runTime / 20.0f) + theme * 2);
+        const int side = rand() % 4;
+        int type = 0, count = 4;
+        bool elites = false;
+        if (theme == 0)      { type = 0; count = 4; }                       // imps, loose line
+        else if (theme == 1) { type = 1; count = 5; }                       // skeleton patrol
+        else if (theme == 2) { type = maxType >= 8 ? 8 : 3; count = 4; }    // firing line
+        else if (theme == 3) { type = 4; count = 3; elites = true; }        // armoured push
+        else                 { type = 6; count = 4; }                       // archive wardens
+        type = std::min(type, maxType);
+        const float spacing = 62.0f;
+        for (int i = 0; i < count; ++i) {
+            const float along = (i - (count - 1) * 0.5f) * spacing;
+            spawnMonster(type, elites && i % 2 == 0, false, 0, side, along);
+        }
+        // A second half-squad from the opposite edge turns the push into a pincer in the
+        // later acts, and stays a single readable line in the first one.
+        if (theme >= 2 && (rand() % 100) < (theme == 2 ? 45 : 70)) {
+            const int otherType = std::min(theme == 4 ? 3 : 2, maxType);
+            const int opposite = (side + 2) % 4;
+            for (int i = 0; i < 3; ++i)
+                spawnMonster(otherType, false, false, 0, opposite, (i - 1) * spacing);
+        }
+    }
+
+    void spawnMonster(int type, bool isElite, bool isBoss, int bossType = 0, int squadSide = -1, float squadAlong = 0.0f) {
         // Keep the hard world cap inclusive of bosses and summoned units. A boss may
         // displace one regular enemy at the ceiling rather than pushing beyond 520.
         if (monsters.size() >= 520) {
@@ -2259,9 +2400,13 @@ struct Game {
         // Reserve room for the full sprite, its ground shadow and the HUD; reject unsafe points rather than clamping them.
         const float spawnMargin = isBoss ? 78.0f : 64.0f;
         const float minimumDistance = isBoss ? 360.0f : 440.0f;
-        const bool placed = isBoss
-            ? chooseVisibleSpawnPoint(minimumDistance, spawnMargin, m.x, m.y)
-            : chooseOffscreenSpawnPoint(minimumDistance, spawnMargin, m.x, m.y);
+        bool placed = false;
+        if (squadSide >= 0) placed = chooseSideSpawnPoint(squadSide, squadAlong, spawnMargin, m.x, m.y);
+        if (!placed) {
+            placed = isBoss
+                ? chooseVisibleSpawnPoint(minimumDistance, spawnMargin, m.x, m.y)
+                : chooseOffscreenSpawnPoint(minimumDistance, spawnMargin, m.x, m.y);
+        }
         if (!placed) return;
         m.facing = m.x < playerX ? 1 : -1;
         m.vx = 0.0f;
@@ -3183,6 +3328,12 @@ struct Game {
             if (!superResolvingUltimate)
                 superCharge = std::min(100.0f, superCharge + (m.isBoss ? 12.0f : (m.isElite ? 2.0f : 0.50f)) * getSuperGainMultiplier());
             if (m.isBoss) spawnParticles(m.x, m.y, 40, 0xFFFF9020, 190.0f, 4);
+            else {
+                // Every family dies in its own material: bone shards, slime, sparks, ash.
+                const DeathBurst burst = monsterDeathBurst(m.type, m.isElite);
+                spawnParticles(m.x, m.y, burst.count, burst.color, m.isElite ? 150.0f : 108.0f, 4, true);
+                if (burst.count > 9) spawnParticles(m.x, m.y, 4, burst.accent, 62.0f, 3, false);
+            }
             if (m.isSmart) addFloatingText(m.x, m.y - 28.0f, "РАЗУМНЫЙ ПОВЕРЖЕН", 0xFF7CE8FF, true);
 
             // Blood Aura's soul-steal scales into a real sustain build at high ranks.
@@ -3864,13 +4015,23 @@ struct Game {
         spawnAccumulator += spawnRate * dt;
         while (spawnAccumulator >= 1.0f) {
             spawnAccumulator -= 1.0f;
-            int maxType = std::min(9, 1 + (int)(runTime / 20.0f));
-            int t = rand() % (maxType + 1);
+            // Which enemies show up is a property of the place, not a global dice roll:
+            // the crypt fields shields and brutes, the cathedral its shooters, the ash
+            // throne heavy elites. Strength still unlocks with the run clock.
+            // The place also decides how advanced its garrison is: the ruins open with
+            // imps and skeletons, the archive heart opens with wardens and shooters.
+            const int maxType = std::min(9, 1 + (int)(runTime / 20.0f) + currentArenaTheme() * 2);
+            int t = pickActMonsterType(currentArenaTheme(), maxType);
             const bool matryoshkaSpawn = runTime >= 150.0f && (rand() % 10000) < 250;
             if (matryoshkaSpawn) t = MATRYOSHKA_ENEMY_TYPE;
             const float eliteChance = (runTime < 90.0f ? 6.0f : (runTime < 240.0f ? 12.0f : 18.0f)) + getEnemyOathEliteChancePercent();
             bool elite = !matryoshkaSpawn && (runTime > 25.0f) && ((rand() % 10000) < (int)roundf(eliteChance * 100.0f));
             spawnMonster(t, elite, false);
+        }
+        squadTimer -= dt;
+        if (squadTimer <= 0.0f && state == STATE_PLAYING) {
+            squadTimer = 17.0f + (float)(rand() % 90) / 10.0f;
+            spawnSquad();
         }
 
         // Story campaigns are standalone missions: each has one clearly scheduled final encounter.
@@ -4601,6 +4762,7 @@ struct Game {
     // =========================================================================
 
     void renderWorld(Renderer& r, float camX, float camY) {
+        const int themeIndex = currentArenaTheme();
         // 1. Tiled Dark Fantasy Cobblestone Floor + Glowing Rune Circles & Torches
         int tileSize = 64;
         int startTileX = (int)floorf(camX / tileSize) - 1;
@@ -4613,15 +4775,74 @@ struct Game {
                 int sx = tx * tileSize - (int)camX;
                 int sy = ty * tileSize - (int)camY;
                 uint32_t h = (uint32_t)(tx * 73856093 ^ ty * 19349663);
-                int biome = std::min(3, (int)(runTime / 90.0f));
-                static const uint32_t floorA[4] = {0xFF151122, 0xFF1B101A, 0xFF101B26, 0xFF24130E};
-                static const uint32_t floorB[4] = {0xFF181426, 0xFF24131D, 0xFF142330, 0xFF301A10};
-                static const uint32_t floorDetail[4] = {0xFF1C172C, 0xFF321523, 0xFF1C303B, 0xFF47200F};
-                uint32_t baseCol = ((tx + ty) & 1) ? floorA[biome] : floorB[biome];
-                if ((h & 7) == 0) baseCol = floorDetail[biome];
+                const ArenaTheme& theme = ARENA_THEMES[themeIndex];
+                uint32_t baseCol = ((tx + ty) & 1) ? theme.floorA : theme.floorB;
+                if ((h & 7) == 0) baseCol = theme.floorDetail;
                 r.fillRect(sx, sy, tileSize, tileSize, baseCol);
-                // Subtle stone mortar border
-                r.drawRect(sx, sy, tileSize, tileSize, 0xFF0E0B18, 1);
+                // Mortar follows the place: cold violet grout in the ruins, soot in the ash.
+                r.drawRect(sx, sy, tileSize, tileSize, theme.mortar, 1);
+                // Cut-stone bevel on a third of the tiles: the floor reads as masonry, not noise.
+                if ((h & 3) == 1) {
+                    r.drawLine(sx + 2, sy + 2, sx + tileSize - 3, sy + 2, theme.floorDetail, 1, 130);
+                    r.drawLine(sx + 2, sy + 2, sx + 2, sy + tileSize - 3, theme.floorDetail, 1, 110);
+                }
+                // Each place paves its floor differently — this is the first thing that tells
+                // the player "new case, new place" before a single enemy appears.
+                switch (theme.propKind) {
+                    case 0: // Руины: hairline cracks running through the slabs.
+                        if ((h & 7) == 2) {
+                            r.drawLine(sx + 12, sy + 8, sx + 30, sy + 26, theme.mortar, 1, 150);
+                            r.drawLine(sx + 30, sy + 26, sx + 44, sy + 22, theme.mortar, 1, 120);
+                        }
+                        break;
+                    case 1: // Крипта: sunken tomb slabs with a shallow groove.
+                        if ((h & 7) == 5) {
+                            r.fillRect(sx + 8, sy + 12, tileSize - 16, tileSize - 24, theme.floorDetail, 190);
+                            r.drawRect(sx + 8, sy + 12, tileSize - 16, tileSize - 24, theme.mortar, 1, 160);
+                            r.drawLine(sx + tileSize / 2, sy + 18, sx + tileSize / 2, sy + tileSize - 18, theme.mortar, 1, 120);
+                        }
+                        break;
+                    case 2: // Собор: polished marble with a pale inlay line.
+                        if ((h & 3) == 0) r.drawLine(sx + 4, sy + tileSize - 6, sx + tileSize - 6, sy + 4, theme.floorDetail, 2, 150);
+                        break;
+                    case 3: // Пепельный трон: scorched slabs and a glowing seam.
+                        if ((h & 7) == 3) {
+                            r.fillRoundedRect(sx + 10, sy + 14, 30, 18, 6, 0xFF160D09, 210);
+                            if ((h & 32) == 0) r.drawLine(sx + 16, sy + 22, sx + 38, sy + 28, theme.flame, 1, 130, true);
+                        }
+                        break;
+                    default: // Сердце Архива: ruled catalogue squares.
+                        if ((h & 7) == 6) {
+                            r.drawRect(sx + 10, sy + 10, tileSize - 20, tileSize - 20, theme.runeOuter, 1, 90);
+                            r.drawLine(sx + 16, sy + 22, sx + tileSize - 16, sy + 22, theme.runeInner, 1, 60);
+                        }
+                        break;
+                }
+                // Ground clutter: rubble, bones, candle stubs, ash, loose folios.
+                if ((h & 15) == 9) {
+                    const int cx0 = sx + 12 + (int)((h >> 5) % 34);
+                    const int cy0 = sy + 14 + (int)((h >> 9) % 30);
+                    switch (theme.propKind) {
+                        case 0:
+                            r.fillCircle(cx0, cy0, 3, theme.floorDetail);
+                            r.fillCircle(cx0 + 7, cy0 + 3, 2, theme.mortar);
+                            break;
+                        case 1:
+                            r.fillRect(cx0 - 5, cy0 - 1, 11, 2, 0xFFB6AC98, 220);
+                            r.fillRect(cx0 - 2, cy0 - 4, 2, 6, 0xFFB6AC98, 200);
+                            break;
+                        case 2:
+                            r.fillRect(cx0 - 3, cy0 - 6, 6, 10, 0xFF8FE8FF, 120);
+                            break;
+                        case 3:
+                            r.fillRoundedRect(cx0 - 6, cy0 - 3, 13, 6, 3, 0xFF3A2318, 220);
+                            break;
+                        default:
+                            r.fillRect(cx0 - 4, cy0 - 5, 9, 10, 0xFFDCD8F0, 190);
+                            r.drawRect(cx0 - 4, cy0 - 5, 9, 10, theme.runeOuter, 1, 120);
+                            break;
+                    }
+                }
 
                 // World props must never be stacked on each other. A seal keeps its tile only
                 // when it wins the hash against its right/bottom neighbours, so seals always
@@ -4639,28 +4860,28 @@ struct Game {
                 };
                 // Moss / stone detail patches
                 if ((h & 15) == 3) {
-                    static const uint32_t groundMarks[4] = {0xFF263326, 0xFF51202A, 0xFF24505A, 0xFF59301A};
-                    r.fillRoundedRect(sx + 14, sy + 18, 22, 14, 4, groundMarks[biome]);
+                    static const uint32_t groundMarks[5] = {0xFF263326, 0xFF51202A, 0xFF24505A, 0xFF59301A, 0xFF2C2A66};
+                    r.fillRoundedRect(sx + 14, sy + 18, 22, 14, 4, groundMarks[themeIndex]);
                 } else if (sealWins(tx, ty)) {
                     // Ancient floor seal: independently phased, breathing rings with radial cuts and a rotating glyph.
                     const int rcx = sx + 32, rcy = sy + 32;
-                    const uint32_t runeOuter[4] = {0xFF765BC0, 0xFFB54B62, 0xFF38A5B8, 0xFFD48B3A};
-                    const uint32_t runeInner[4] = {0xFFAE91FF, 0xFFFF8290, 0xFF80E8F2, 0xFFFFC974};
+                    const uint32_t runeOuter = theme.runeOuter;
+                    const uint32_t runeInner = theme.runeInner;
                     const float seedPhase = (float)(h & 1023u) * 0.0061359f;
                     const float phase = globalTime * 0.72f + seedPhase;
                     const float counterPhase = -globalTime * 0.46f + seedPhase * 0.7f;
                     const int breath = (int)(sinf(globalTime * 1.65f + seedPhase) * 2.0f);
-                    r.addGlow(rcx, rcy, 24 + breath, runeOuter[biome], 22);
-                    r.drawCircleRing(rcx, rcy, 25 + breath, 2, runeOuter[biome], 92, true);
-                    r.drawCircleRing(rcx, rcy, 17 - breath / 2, 1, runeInner[biome], 125, true);
-                    r.drawCircleRing(rcx, rcy, 8 + (int)(sinf(globalTime * 2.0f + seedPhase) * 1.0f), 1, runeOuter[biome], 145, true);
+                    r.addGlow(rcx, rcy, 24 + breath, runeOuter, 22);
+                    r.drawCircleRing(rcx, rcy, 25 + breath, 2, runeOuter, 92, true);
+                    r.drawCircleRing(rcx, rcy, 17 - breath / 2, 1, runeInner, 125, true);
+                    r.drawCircleRing(rcx, rcy, 8 + (int)(sinf(globalTime * 2.0f + seedPhase) * 1.0f), 1, runeOuter, 145, true);
                     for (int tick = 0; tick < 12; ++tick) {
                         const float a = phase + tick * 0.5235988f;
                         const float r1 = (tick % 3 == 0) ? 18.0f : 20.0f;
                         const float r2 = (tick % 3 == 0) ? 27.0f : 24.0f;
                         r.drawLine(rcx + (int)(cosf(a) * r1), rcy + (int)(sinf(a) * r1),
                                    rcx + (int)(cosf(a) * r2), rcy + (int)(sinf(a) * r2),
-                                   runeInner[biome], tick % 3 == 0 ? 2 : 1, tick % 3 == 0 ? 135 : 88, true);
+                                   runeInner, tick % 3 == 0 ? 2 : 1, tick % 3 == 0 ? 135 : 88, true);
                     }
                     int gx[4], gy[4];
                     for (int point = 0; point < 4; ++point) {
@@ -4669,7 +4890,7 @@ struct Game {
                         gy[point] = rcy + (int)(sinf(a) * (point % 2 == 0 ? 12.0f : 6.0f));
                     }
                     for (int point = 0; point < 4; ++point)
-                        r.drawLine(gx[point], gy[point], gx[(point + 1) % 4], gy[(point + 1) % 4], runeInner[biome], 1, 105, true);
+                        r.drawLine(gx[point], gy[point], gx[(point + 1) % 4], gy[(point + 1) % 4], runeInner, 1, 105, true);
                 }
             }
         }
@@ -4716,12 +4937,13 @@ struct Game {
                 if (sx < -120 || sx > SCREEN_W + 120 || sy < -120 || sy > SCREEN_H + 120) continue;
                 if (landmarkNear(wx, wy, 132)) continue; // a landmark already owns this spot
                 int flicker = (int)(sinf(globalTime * 11.0f + btx * 3.1f + bty * 1.7f) * 10.0f);
-                uint32_t flame = (runTime < 90.0f ? 0xFFFF7018 : runTime < 180.0f ? 0xFF50D8E8 : runTime < 270.0f ? 0xFFFF3060 : 0xFFFFA020);
+                const ArenaTheme& theme = ARENA_THEMES[themeIndex];
+                const uint32_t flame = theme.flame;
                 r.addGlow(sx, sy - 10, 95 + flicker, flame, 110);
                 r.drawShadow(sx, sy + 12, 12, 5);
                 r.fillRoundedRect(sx - 7, sy - 4, 14, 16, 3, 0xFF3E384A);
                 r.fillCircle(sx, sy - 9, 7, flame);
-                r.fillCircle(sx, sy - 11, 4, 0xFFFFE050);
+                r.fillCircle(sx, sy - 11, 4, theme.flameCore);
             }
         }
 
@@ -4729,7 +4951,8 @@ struct Game {
         int landmarkCell = 320;
         int lx0 = (int)floorf(camX / landmarkCell) - 1;
         int ly0 = (int)floorf(camY / landmarkCell) - 1;
-        int biomeNow = std::min(3, (int)(runTime / 90.0f));
+        // Each place has its own landmark: a broken arch, a bone cairn, a glass pillar in a
+        // shaft of light, a charred obelisk, or a stack of archive folios.
         for (int gy = ly0; gy <= ly0 + SCREEN_H / landmarkCell + 2; ++gy) {
             for (int gx = lx0; gx <= lx0 + SCREEN_W / landmarkCell + 2; ++gx) {
                 int wx = 0, wy = 0;
@@ -4737,29 +4960,92 @@ struct Game {
                 if (torchNear(wx, wy, 132)) continue; // a brazier already owns this spot
                 int x = wx - (int)camX, y = wy - (int)camY;
                 if (x < -60 || x > SCREEN_W + 60 || y < -90 || y > SCREEN_H + 60) continue;
-                if (biomeNow == 0) {
-                    r.fillRect(x - 5, y - 22, 10, 34, 0xFF554958);
-                    r.fillRect(x - 22, y - 22, 44, 6, 0xFF756078);
-                    r.drawRect(x - 22, y - 22, 44, 36, 0xFF392C48, 2);
-                    r.drawCircleRing(x, y - 6, 12, 1, 0xFF70508A, 95);
-                } else if (biomeNow == 1) {
-                    r.drawLine(x - 10, y + 18, x, y - 24, 0xFF70404A, 5);
-                    r.drawLine(x, y - 8, x - 22, y - 24, 0xFF70404A, 4);
-                    r.drawLine(x, y - 12, x + 22, y - 30, 0xFF70404A, 4);
-                    r.drawLine(x, y + 4, x + 15, y - 7, 0xFF70404A, 3);
-                    r.drawCircleRing(x, y + 18, 18, 1, 0xFF9C3040, 100);
-                } else if (biomeNow == 2) {
-                    r.addGlow(x, y - 4, 34, 0xFF38D8F0, 55);
-                    r.drawLine(x, y + 20, x - 3, y - 34, 0xFF7ACBDD, 7);
-                    r.drawLine(x - 3, y - 8, x - 17, y - 20, 0xFFB0F4FF, 3);
-                    r.drawLine(x - 2, y + 1, x + 16, y - 15, 0xFF74D8F0, 4);
+                const ArenaTheme& theme = ARENA_THEMES[themeIndex];
+                if (theme.propKind == 0) {
+                    // Руины: a collapsed arch, its keystone still wedged in place.
+                    r.fillRect(x - 26, y - 26, 12, 44, 0xFF4B4058);
+                    r.fillRect(x + 14, y - 26, 12, 44, 0xFF4B4058);
+                    r.fillRect(x - 30, y - 34, 60, 9, 0xFF5F5270);
+                    r.drawRect(x - 26, y - 26, 12, 44, theme.mortar, 1);
+                    r.drawRect(x + 14, y - 26, 12, 44, theme.mortar, 1);
+                    r.fillRoundedRect(x - 8, y + 8, 16, 8, 2, 0xFF2A3A2A); // moss at the foot
+                    r.drawCircleRing(x, y - 6, 15, 1, theme.runeOuter, 70);
+                } else if (theme.propKind == 1) {
+                    // Крипта: a cairn of skulls and ribs.
+                    r.fillCircle(x - 7, y + 2, 8, 0xFFD9CFB8);
+                    r.fillCircle(x + 8, y + 4, 7, 0xFFC8BCA4);
+                    r.fillCircle(x + 1, y - 12, 8, 0xFFE4DBC6);
+                    r.fillRect(x - 2, y - 10, 3, 3, 0xFF231A1A);
+                    r.fillRect(x + 4, y - 10, 3, 3, 0xFF231A1A);
+                    r.fillRect(x - 18, y + 10, 36, 3, 0xFF9C9280);
+                    r.fillRect(x - 14, y + 15, 28, 3, 0xFF887E6E);
+                    r.addGlow(x, y - 4, 26, theme.runeOuter, 40);
+                } else if (theme.propKind == 2) {
+                    // Собор: a stained-glass pillar with a cold shaft of light above it.
+                    r.fillRect(x - 12, y - 46, 24, 66, 0xFF1B3A48);
+                    r.drawRect(x - 12, y - 46, 24, 66, 0xFF2F6C84, 2);
+                    for (int pane = 0; pane < 4; ++pane) {
+                        const uint32_t glass[4] = {0xFF3FA8C8, 0xFF68D8F0, 0xFF3F7AC8, 0xFF7FE8FF};
+                        r.fillRect(x - 8, y - 42 + pane * 16, 16, 11, glass[pane], 190);
+                    }
+                    r.addGlow(x, y - 30, 46, theme.flame, 58);
+                    r.fillRect(x - 16, y + 20, 32, 6, 0xFF20424F);
+                    for (int streak = 0; streak < 3; ++streak)
+                        r.drawLine(x - 22 + streak * 8, y - 54, x - 34 + streak * 12, y - 96,
+                                   theme.runeInner, 2, 26, true);
+                } else if (theme.propKind == 3) {
+                    // Пепельный трон: a charred obelisk with a burning seam.
+                    r.fillRect(x - 11, y - 40, 22, 60, 0xFF3A271C);
+                    r.fillRect(x - 15, y - 46, 30, 9, 0xFF543725);
+                    r.drawRect(x - 11, y - 40, 22, 60, 0xFF120C08, 2);
+                    r.drawLine(x, y - 34, x, y + 12, theme.flame, 2, 150, true);
+                    r.addGlow(x, y + 16, 32, theme.flame, 52);
+                    for (int crack = 0; crack < 3; ++crack)
+                        r.drawLine(x - 7 + crack * 7, y - 20 + crack * 9, x - 2 + crack * 7, y - 8 + crack * 9,
+                                   0xFF8A4A20, 1, 140);
                 } else {
-                    r.fillRect(x - 12, y - 22, 24, 43, 0xFF594132);
-                    r.fillRect(x - 17, y - 26, 34, 8, 0xFF816044);
-                    r.drawRect(x - 12, y - 22, 24, 43, 0xFF34241C, 2);
-                    r.addGlow(x, y + 20, 28, 0xFFFF5818, 55);
+                    // Сердце Архива: stacked folios and a floating index tablet.
+                    for (int shelf = 0; shelf < 3; ++shelf)
+                        r.fillRect(x - 20, y + 16 - shelf * 9, 40, 8, 0xFF2A2560, 245);
+                    for (int book = 0; book < 6; ++book) {
+                        const uint32_t spine[3] = {0xFF6E7BE8, 0xFF8C6EE8, 0xFF4E6EC8};
+                        r.fillRect(x - 18 + book * 6, y - 12, 5, 12, spine[book % 3]);
+                    }
+                    r.addGlow(x, y - 26, 34, theme.runeOuter, 58);
+                    r.drawCircleRing(x, y - 26, 13, 1, theme.runeInner, 150, true);
+                    r.drawLine(x - 9, y - 26, x + 9, y - 26, theme.runeInner, 1, 130, true);
                 }
             }
+        }
+
+        // Ambient air: dust in the ruins, sifting ash in the crypt, rising motes in the
+        // cathedral, embers in the ash throne, drifting pages in the archive heart.
+        {
+            const ArenaTheme& theme = ARENA_THEMES[themeIndex];
+            const float spanX = (float)SCREEN_W + 120.0f, spanY = (float)SCREEN_H + 120.0f;
+            for (int i = 0; i < theme.moteCount; ++i) {
+                const uint32_t seed = (uint32_t)(i * 2654435761u);
+                const float phase = (float)(seed & 1023u) / 1024.0f;
+                const float drift = theme.moteSpeed * (0.6f + phase * 0.8f);
+                float my = fmodf(phase * spanY + globalTime * drift, spanY);
+                if (my < 0.0f) my += spanY;
+                const float mx = fmodf(phase * spanX * 1.7f + sinf(globalTime * 0.4f + phase * 6.28f) * 26.0f
+                                       + globalTime * 9.0f * (phase - 0.5f), spanX);
+                const int px = (int)mx - 60, py = (int)my - 60;
+                const int twinkle = 40 + (int)(38.0f * (0.5f + 0.5f * sinf(globalTime * 1.6f + phase * 9.0f)));
+                if (theme.propKind == 4) {
+                    // Pages: small pale rectangles that tumble as they drift.
+                    const int tilt = (int)(sinf(globalTime * 1.2f + phase * 7.0f) * 3.0f);
+                    r.fillRoundedRect(px, py + tilt, 7, 9, 2, theme.mote, twinkle / 2);
+                } else if (theme.propKind == 3) {
+                    r.fillRect(px, py, 2, 3, theme.mote, twinkle);
+                    r.fillCircle(px, py, 1, theme.flame, twinkle);
+                } else {
+                    r.fillCircle(px, py, theme.propKind == 2 ? 2 : 1, theme.mote, twinkle);
+                }
+            }
+            // A wide, very soft wash of the place's own light ties the palette together.
+            r.fillRect(0, 0, SCREEN_W, SCREEN_H, theme.lightTint, 16);
         }
 
         int pScreenX = (int)(playerX - camX);
@@ -7434,6 +7720,7 @@ struct Game {
             "2.9.72 • МУЗЫКА ИЗ audio/", "2.9.73 • КУЗНИЦА И ТИХИЙ УРОВЕНЬ", "2.9.74 • ГОЛОС, F3 И ЧИСТЫЙ МИР",
             "2.9.75 • ГОЛОС ИЗ ФАЙЛОВ", "2.9.76–2.9.80 • СЮЖЕТ, СЛОВАРЬ И ГОЛОС",
             "2.9.81 • ТИХИЕ РЕПЛИКИ В УГЛУ",
+            "2.9.82 • КАЖДОЕ ДЕЛО — СВОЁ МЕСТО",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -7512,6 +7799,7 @@ struct Game {
             "Озвучка сообщений больше не пользуется системным синтезатором Windows: все фразы —\nзаписанные файлы в audio/voice/, имя файла равно ключу сообщения из реестра.\nФразы идут по шине эффектов, музыка приглушается, пока реплика звучит.\nНет файла — строка молчит, а F3 и настройки показывают, сколько фраз не записано.\ntools/check_voice.py сверяет реестр с папкой; VOICE_LINES.md — таблица всех фраз.\nМетка щита на мобах — дуга со стороны блока вместо «диаметра» рядом с мобом.",
 "Главное за 2.9.76–2.9.80.\n• Кампания: 28 дел в пяти актах — нуар-детектив с уликами, допросами копий и четырьмя печатями. Сценарий — STORY.md.\n• Сейв v7 хранит прогресс маской из 28 дел; старые сейвы переносятся, ветки требуют оба следа.\n• Выход босса очищает арену, затем секунду спавн идёт ×5. Тихая охота — возможность, прорыв — стена.\n• Словарь терминов по G. Озвучка: 36 фраз, все записаны и выровнены по громкости.",
             "Боевые сообщения живут только в голосе и в левом нижнем углу: страж, фаза босса, тир сборки, сложность, тихая охота и сюжетная строка собраны в одну стопку плашек. Центр поля больше ничем не перекрывается.\n• Элитные и особые враги получили янтарный отсвет и светящийся силуэт — их видно в толпе.\n• Тихая охота не путает итог: у победы и у провала отдельные фразы и отдельная озвучка.",
+            "Пять мест вместо одной арены: Руины, Крипта, Собор, Пепельный трон и Сердце Архива отличаются кладкой пола, светом, огнём, ориентирами и воздухом. Endless проходит эти же места по ходу ночи.\n• Гарнизон у каждого места свой: крипта выставляет щиты и тяжеловесов, собор — стрелков, трон — броню.\n• Отряды приходят линией с одного края, а не бесконечной россыпью.\n• У каждой семьи своя походка и своя смерть: кости, слизь, искры, пепел.\n• Каждый страж метит пол своим знаком.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");

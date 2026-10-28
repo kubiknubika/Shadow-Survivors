@@ -434,6 +434,34 @@ struct Renderer {
         drawBakedSprite(spr, cx - dx, cy - dy, flipX, hitFlash, frozen, alphaScale);
     }
 
+    // Nearest-neighbour stretch with the full sprite treatment (flip, flash, freeze).
+    // Two crisp frames plus squash-and-stretch read as real animation; two frames alone
+    // read as a slideshow.
+    void drawBakedSpriteStretched(const BakedSprite* spr, int cx, int cy, float scaleX, float scaleY,
+                                  bool flipX = false, bool hitFlash = false, bool frozen = false, int alphaScale = 255) {
+        if (!spr) return;
+        const int w = std::max(1, (int)(spr->width * scaleX));
+        const int h = std::max(1, (int)(spr->height * scaleY));
+        const int x = cx - w / 2, y = cy - h / 2;
+        const int x0 = std::max(0, x), y0 = std::max(0, y);
+        const int x1 = std::min(SCREEN_W, x + w), y1 = std::min(SCREEN_H, y + h);
+        for (int py = y0; py < y1; ++py) {
+            const int sy = std::min(spr->height - 1, ((py - y) * spr->height) / h);
+            const uint32_t* row = spr->pixels + sy * spr->width;
+            for (int px = x0; px < x1; ++px) {
+                const int dx = px - x;
+                const int sx = std::min(spr->width - 1, (flipX ? (w - 1 - dx) : dx) * spr->width / w);
+                uint32_t c = row[sx];
+                int a = (c >> 24) & 0xFF;
+                if (a <= 10) continue;
+                a = (a * alphaScale) >> 8;
+                if (hitFlash) c = lerpColor(c, 0xFFFFE8B0, 0.72f);
+                else if (frozen) c = lerpColor(c, 0xFF50E8FF, 0.55f);
+                blendPixel(px, py, c, a);
+            }
+        }
+    }
+
     void drawBakedSpriteScaled(const BakedSprite* spr, int x, int y, int w, int h, int alphaScale = 255) {
         if (!spr || w <= 0 || h <= 0) return;
         const int x0 = std::max(0, x), y0 = std::max(0, y);
@@ -627,9 +655,44 @@ struct Renderer {
         }
     }
 
+    // Every family carries itself differently: imps jitter, skeletons march, slimes hop,
+    // wraiths hover, brutes plant their feet. The silhouette alone is not the identity —
+    // the way it moves is, and that is what stops a swarm reading as one repeated blob.
+    struct MonsterMotion {
+        float bobAmp;      // vertical breathing in px
+        float bobFreq;     // cycles per second
+        float swayAmp;     // horizontal sway in px
+        float swayFreq;
+        float hoverY;      // constant lift (flyers)
+        float fps;         // animation frames per second
+        int shadowW, shadowH;
+        float squash;      // squash-and-stretch strength (0 = rigid)
+    };
+    static const MonsterMotion& monsterMotion(int type) {
+        static const MonsterMotion profiles[11] = {
+            {2.0f, 9.0f, 1.2f, 3.2f, 0.0f, 7.5f, 11, 4, 0.05f}, // 0 — imp: nervous, twitchy
+            {1.0f, 5.0f, 0.0f, 1.0f, 0.0f, 5.0f, 12, 5, 0.00f},  // 1 — skeleton: steady march
+            {3.2f, 6.5f, 0.0f, 1.0f, 0.0f, 6.5f, 13, 5, 0.14f},  // 2 — slime: hop and squash
+            {1.4f, 2.4f, 1.6f, 1.1f, -2.0f, 4.2f, 11, 4, 0.04f}, // 3 — cultist: glides, robes sway
+            {1.0f, 3.0f, 0.6f, 1.0f, 0.0f, 4.0f, 16, 6, 0.05f},  // 4 — brute: heavy, planted
+            {2.2f, 2.0f, 2.0f, 0.9f, -7.0f, 3.6f, 12, 4, 0.07f}, // 5 — wraith: floats above the floor
+            {1.2f, 4.0f, 0.8f, 1.4f, 0.0f, 4.6f, 13, 5, 0.03f},  // 6 — warden
+            {0.8f, 3.4f, 0.0f, 1.0f, 0.0f, 3.8f, 15, 6, 0.02f},  // 7 — knight: barely bobs
+            {1.3f, 5.2f, 1.0f, 2.2f, 0.0f, 5.4f, 12, 5, 0.04f},  // 8 — archer: light on its feet
+            {2.0f, 2.8f, 2.4f, 1.2f, 0.0f, 3.4f, 18, 7, 0.09f},  // 9 — ogre: heavy stomp
+            {1.6f, 4.2f, 0.0f, 1.0f, 0.0f, 4.4f, 15, 6, 0.00f},  // 10 — matryoshka: rigid, doll-like
+        };
+        return profiles[std::max(0, std::min(10, type))];
+    }
+
     void drawMonsterSprite(int cx, int cy, int type, float animTime, bool hitFlash, bool isElite, bool frozen = false, bool flipX = false) {
-        const int frame = ((int)(animTime * 6.5f + cx * 0.04f)) & 1;
+        const MonsterMotion& motion = monsterMotion(type);
+        const int frame = ((int)(animTime * motion.fps + cx * 0.04f)) & 1;
         const BakedSprite* spr = MONSTER_SPRITES[type % 11][frame];
+        const int bob = (int)(sinf(animTime * motion.bobFreq * 6.2831853f) * motion.bobAmp);
+        const int sway = (int)(sinf(animTime * motion.swayFreq * 6.2831853f) * motion.swayAmp);
+        cx += sway;
+        cy += bob + (int)motion.hoverY;
         if (isElite) {
             // Elite / extra mobs: a breathing amber halo under the silhouette plus a light gold
             // wash on the body, so they read as "different" at a glance in a full-screen swarm.
@@ -639,8 +702,15 @@ struct Renderer {
         }
         int fx = 0, fy = 0;
         bakedSpriteVisualOffset(spr, fx, fy);
-        drawShadow(cx, cy + 16 - fy, 12, 5);
-        drawBakedSpriteCentred(spr, cx, cy, flipX, hitFlash, frozen, 255);
+        drawShadow(cx, cy + 16 - fy, motion.shadowW, motion.shadowH);
+        if (motion.squash > 0.001f && !hitFlash) {
+            // Squash on the fall, stretch on the rise — volume-preserving, so it never pops.
+            const float beat = sinf(animTime * motion.bobFreq * 6.2831853f);
+            drawBakedSpriteStretched(spr, cx, cy, 1.0f + motion.squash * beat, 1.0f - motion.squash * beat,
+                                     flipX, hitFlash, frozen, 255);
+        } else {
+            drawBakedSpriteCentred(spr, cx, cy, flipX, hitFlash, frozen, 255);
+        }
         if (isElite && !hitFlash) {
             const float pulse = 0.5f + 0.5f * sinf(animTime * 4.2f);
             drawBakedSpriteWash(spr, cx, cy, flipX, 0xFFFFC64A, 78 + (int)(26.0f * pulse));
@@ -651,6 +721,44 @@ struct Renderer {
         int auraRad = 40 + (int)(sinf(animTime * 7.0f) * 5.0f);
         uint32_t auraCol = enraged ? 0xFFFF2040 : ((bossType == 0) ? 0xFFFFB028 : (bossType == 1 ? 0xFF80FF40 : (bossType == 2 ? 0xFFFF3068 : 0xFFFF6818)));
         drawCircleRing(cx, cy + 24, auraRad, 3, auraCol, 210, true);
+        // Each guardian brands the floor with its own sigil: gate bar, broken vial, ledger,
+        // and archive wheel. Same silhouette family, four clearly different presences.
+        const int bossId = bossType & 3;
+        const int ticks = (bossId == 0) ? 4 : (bossId == 1 ? 5 : (bossId == 2 ? 6 : 8));
+        const float spin = animTime * (bossId == 3 ? 0.55f : (bossId == 2 ? 0.30f : 0.42f));
+        for (int i = 0; i < ticks; ++i) {
+            const float a = spin + i * (6.2831853f / ticks);
+            const float r0 = auraRad * 0.94f, r1 = auraRad * (1.14f + (i % 2 ? 0.06f : 0.0f));
+            drawLine(cx + (int)(cosf(a) * r0), cy + 24 + (int)(sinf(a) * r0 * 0.42f),
+                     cx + (int)(cosf(a) * r1), cy + 24 + (int)(sinf(a) * r1 * 0.42f),
+                     auraCol, i % 2 ? 1 : 2, i % 2 ? 90 : 150, true);
+        }
+        if (bossId == 0) {
+            // Моргар: gate bars rooted in the floor.
+            for (int bar = -1; bar <= 1; ++bar)
+                drawLine(cx + bar * 13, cy + 40, cx + bar * 13, cy + 8, auraCol, 2, 70);
+        } else if (bossId == 1) {
+            // Малакор: a broken vial, its contents pooling outward.
+            drawCircleRing(cx, cy + 34, auraRad / 2, 1, auraCol, 85, true);
+            for (int bubble = 0; bubble < 3; ++bubble) {
+                const int bx = cx + (int)(cosf(animTime * 1.7f + bubble * 2.1f) * 22.0f);
+                const int by = cy + 30 + (int)(sinf(animTime * 2.3f + bubble) * 6.0f);
+                fillCircle(bx, by, 2, auraCol, 120);
+            }
+        } else if (bossId == 2) {
+            // Кардинал: ruled ledger lines crossing the sigil.
+            for (int line = -2; line <= 2; ++line)
+                drawLine(cx - 46, cy + 24 + line * 9, cx + 46, cy + 24 + line * 9, auraCol, 1, 55);
+        } else {
+            // Азарот: a toothed archive wheel with a slow inner counter-rotation.
+            drawCircleRing(cx, cy + 24, (int)(auraRad * 0.66f), 1, auraCol, 110,
+                           true);
+            for (int tooth = 0; tooth < 12; ++tooth) {
+                const float a = -spin * 0.7f + tooth * 0.5235988f;
+                const int rr = (int)(auraRad * 0.72f);
+                fillRect(cx + (int)(cosf(a) * rr), cy + 24 + (int)(sinf(a) * rr * 0.42f), 2, 2, auraCol, 120);
+            }
+        }
         addGlow(cx, cy, 62, auraCol, enraged ? 190 : 140);
         int frame = ((int)(animTime * 4.5f)) & 1;
         int fx = 0, fy = 0;
