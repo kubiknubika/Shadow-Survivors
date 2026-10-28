@@ -29,6 +29,7 @@ FADE_OUT = 0.060
 PRE_ROLL = 0.080
 TAIL = 0.100
 RMS_TARGET = 0.115
+RMS_TARGET_LOUD = 0.140   # --loud: короткие боевые выкрики, которые иначе слышны тише
 PEAK_LIMIT = 0.89
 
 
@@ -127,13 +128,13 @@ def ramp(data, seconds, rising):
     return bytes(out)
 
 
-def normalize(data):
+def normalize(data, target=RMS_TARGET):
     """Выравнивает громкость по RMS, а не по пику: иначе фразы звучат по-разному."""
     if np is not None:
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         peak = float(np.max(np.abs(samples))) or 1.0
         rms = float(np.sqrt(np.mean(samples ** 2))) or 1.0
-        gain = RMS_TARGET / rms
+        gain = target / rms
         if peak * gain <= PEAK_LIMIT:
             samples = samples * gain
         else:
@@ -150,15 +151,15 @@ def normalize(data):
         import audioop
         peak = audioop.max(data, 2) or 1
         rms = audioop.rms(data, 2) or 1
-        gain = min(RMS_TARGET / (rms / 32768.0), (PEAK_LIMIT * 32768.0) / peak)
+        gain = min(target / (rms / 32768.0), (PEAK_LIMIT * 32768.0) / peak)
         data = audioop.mul(data, 2, gain)
     data = ramp(data, FADE_IN, True)
     data = ramp(data, FADE_OUT, False)
     return data
 
 
-def process(path):
-    data = normalize(trim(read(path)))
+def process(path, target=RMS_TARGET):
+    data = normalize(trim(read(path)), target)
     with wave.open(path, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
@@ -175,6 +176,7 @@ def process(path):
 
 
 def main():
+    loud = "--loud" in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     paths = []
     for a in args:
@@ -183,7 +185,7 @@ def main():
         print(__doc__)
         return 1
     for p in paths:
-        process(p)
+        process(p, RMS_TARGET_LOUD if loud else RMS_TARGET)
     return 0
 
 

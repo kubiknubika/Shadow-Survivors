@@ -30,6 +30,52 @@ inline uint32_t lerpColor(uint32_t c1, uint32_t c2, float t) {
     return makeRGB(r1 + (int)((r2 - r1) * t), g1 + (int)((g2 - g1) * t), b1 + (int)((b2 - b1) * t));
 }
 
+struct ItemTone { uint32_t bg, edge, glow; };
+// Тон сорока предметов: подложка, рамка, свечение. Смысл важнее красоты:
+// игрок должен узнавать предмет по цвету и не путать соседние.
+static const ItemTone ITEM_TONE[40] = {
+    {0xFF111821, 0xFF4480C4, 0xFF78A5D7},  // 00 серебряные клинки — сталь
+    {0xFF26150C, 0xFFF35F16, 0xFFFA8C55},  // 01 огненный шар — огонь
+    {0xFF1B0F23, 0xFF9530D8, 0xFFB469E6},  // 02 рунический вихрь — руны
+    {0xFF26220C, 0xFFF3CE16, 0xFFFADF55},  // 03 цепная молния — молния
+    {0xFF250D11, 0xFFEA1E40, 0xFFF45C75},  // 04 кровавая аура — кровь
+    {0xFF221410, 0xFFCC5E3C, 0xFFDE8B72},  // 05 боевой топор — ржавый металл
+    {0xFF0D2125, 0xFF21C6E7, 0xFF5ED9F1},  // 06 ледяное кольцо — лёд
+    {0xFF1F1B13, 0xFFB89650, 0xFFCFB581},  // 07 книга мудрости — пергамент
+    {0xFF112118, 0xFF44C479, 0xFF78D7A0},  // 08 сапоги ветра — ветер
+    {0xFF240E23, 0xFFDB2DD5, 0xFFE967E4},  // 09 магнитный амулет — магнетизм
+    {0xFF230F18, 0xFFD5337F, 0xFFE46BA4},  // 10 сердце титана
+    {0xFF24100E, 0xFFE13A27, 0xFFED7062},  // 11 перчатка берсерка — ярость
+    {0xFF231E0F, 0xFFD8B130, 0xFFE6C969},  // 12 часы вечности — латунь
+    {0xFF22230F, 0xFFD0D533, 0xFFE0E46B},  // 13 проклятая монета
+    {0xFF26180C, 0xFFF37D16, 0xFFFAA255},  // 14 пепел феникса — пламя
+    {0xFF160E24, 0xFF6B27E1, 0xFF9562ED},  // 15 око Бездны
+    {0xFF1E1814, 0xFFAD7C5B, 0xFFC6A289},  // 16 печать Пепельного Сердца — пепел
+    {0xFF250D1E, 0xFFE721AC, 0xFFF15EC5},  // 17 кровавый осколок луны
+    {0xFF0E1D24, 0xFF27A3E1, 0xFF62BFED},  // 18 линза разлома
+    {0xFF261C0C, 0xFFED991B, 0xFFF6B75A},  // 19 клятва последнего рассвета
+    {0xFF172111, 0xFF77C444, 0xFF9ED778},  // 20 клеймо охотника — лес
+    {0xFF0F231F, 0xFF33D5B5, 0xFF6BE4CC},  // 21 руна возврата
+    {0xFF112120, 0xFF44C4C0, 0xFF78D7D4},  // 22 сердце последнего эха
+    {0xFF0F0F23, 0xFF3333D5, 0xFF6B6BE4},  // 23 покров междумирья
+    {0xFF0D1B25, 0xFF2191E7, 0xFF5EB2F1},  // 24 осколок кометы
+    {0xFF1E1022, 0xFFAF3CCC, 0xFFC872DE},  // 25 рунный разворот
+    {0xFF0C1326, 0xFF1B53ED, 0xFF5A83F6},  // 26 копьё разлома
+    {0xFF24200E, 0xFFE1BC27, 0xFFEDD162},  // 27 звезда пепла
+    {0xFF14181E, 0xFF5B7FAD, 0xFF89A4C6},  // 28 зеркало уклонения
+    {0xFF25240D, 0xFFE7E021, 0xFFF1ED5E},  // 29 печать разоблачения
+    {0xFF10221C, 0xFF39D09D, 0xFF6FE0BB},  // 30 чаша переполнения
+    {0xFF211115, 0xFFCA3E64, 0xFFDC7490},  // 31 осколок последнего удара
+    {0xFF251B0D, 0xFFE79121, 0xFFF1B25E},  // 32 ключ пепельного ритма
+    {0xFF0C1F26, 0xFF1BB5ED, 0xFF5ACCF6},  // 33 призма перекрёстного огня
+    {0xFF26110C, 0xFFED3E1B, 0xFFF6745A},  // 34 угольный фитиль
+    {0xFF12201E, 0xFF4ABEAF, 0xFF7CD3C8},  // 35 осколок оттепели
+    {0xFF111321, 0xFF3E51CA, 0xFF7482DC},  // 36 печать обратного тока
+    {0xFF1C1121, 0xFF9944C4, 0xFFB878D7},  // 37 знак палача
+    {0xFF230F0F, 0xFFD53333, 0xFFE46B6B},  // 38 печать возмездия
+    {0xFF16131F, 0xFF6F50B8, 0xFF9881CF},  // 39 руна свидетеля
+};
+
 struct Renderer {
     uint32_t* pixels;
 
@@ -992,130 +1038,216 @@ struct Renderer {
             // seal chain hanging from the belt
             for (int i = 0; i < 3; ++i) CR(cx + 12, cy + 16 + i * 8 - lift, 3, 1, ink, 190, true);
         } else if (id == 3) {
-            // АЗАРОТ — сердце Архива: не человек, а парящее ядро с кольцами и свитками.
-            const uint32_t metal = tint(0xFF5B4A86), metalLit = tint(0xFF9B84D0), metalDark = tint(0xFF2A2140);
-            const uint32_t core = tint(enraged ? 0xFFFF6A3C : 0xFFFFB45C);
-            const int bob = (int)(sinf(animTime * 1.9f) * 5.0f);
-            const int oy = cy - 8 + bob;
-            // floating scroll arms
-            for (int i = 0; i < 4; ++i) {
-                const float a = animTime * 1.1f + i * 1.5708f;
-                const int ax = cx + (int)(cosf(a) * 40.0f);
-                const int ay = oy + (int)(sinf(a) * 22.0f);
-                DL(cx, oy, ax, ay, metalDark, 3, alpha);
-                FR(ax - 8, ay - 5, 16, 10, 3, metal, alpha);
-                FR(ax - 6, ay - 3, 12, 6, 2, metalLit, alpha);
+            // АЗАРОТ — пепельный архивариус. Раньше это было маленькое парящее ядро с
+            // кольцами: в бою оно читалось как подбираемый предмет, а не как страж.
+            // Теперь это высокая фигура в балахоне с горящим сердцем в груди, короной
+            // из пепельных осколков, руками-углями и вихрем пепла вокруг.
+            const uint32_t robe = tint(0xFF3A2B58), robeLit = tint(0xFF6A5495), robeDark = tint(0xFF1B142B);
+            const uint32_t ash = tint(0xFF6E6076), ashLit = tint(0xFFB4A6C0);
+            const uint32_t core = tint(enraged ? 0xFFFF5A2A : 0xFFFFB45C);
+            const float pulse = 0.5f + 0.5f * sinf(animTime * 3.1f);
+            const int bob = (int)(sinf(animTime * 1.4f) * 4.0f);
+            const int oy = cy + bob;
+            const int sway = (int)(sinf(animTime * 0.9f) * 3.0f);
+            // тень под парящей фигурой
+            FX(cx - 40, cy + 58, 80, 9, 0xFF08060E, 90);
+            // рваный подол балахона — живёт, шевелится
+            for (int i = 0; i < 7; ++i) {
+                const int hx = cx - 33 + i * 11 + (int)(sinf(animTime * 1.3f + i) * 2.0f);
+                FX(hx, cy + 40 + (i % 3) * 3, 9, 18, robeDark, alpha);
             }
-            // three rings, each squashed to read as orbiting in perspective
-            for (int ring = 0; ring < 3; ++ring) {
-                const int rr = 34 + ring * 10;
-                const float spin = animTime * (0.6f + ring * 0.35f) + ring * 1.05f;
-                for (int seg = 0; seg < 22; ++seg) {
-                    const float a0 = spin + seg * 6.2831853f / 22.0f;
-                    const int sx = cx + (int)(cosf(a0) * rr);
-                    const int sy = oy + (int)(sinf(a0) * rr * (0.34f + ring * 0.06f));
-                    FC(sx, sy, ring == 0 ? 2 : 1, ring == 0 ? metalLit : metal, 200);
+            // тело-балахон
+            FR(cx - 32 + sway, oy - 8, 64, 54, 16, robeDark, alpha);
+            FR(cx - 26 + sway, oy - 4, 52, 46, 14, robe, alpha);
+            FR(cx - 26 + sway, oy - 4, 8, 46, 4, robeLit, alpha);   // блик ткани
+            // плечи-пластины
+            FR(cx - 52 + sway, oy - 20, 26, 20, 8, ash, alpha);
+            FR(cx + 26 + sway, oy - 20, 26, 20, 8, ash, alpha);
+            FR(cx - 50 + sway, oy - 18, 22, 8, 4, ashLit, alpha);
+            FR(cx + 28 + sway, oy - 18, 22, 8, 4, ashLit, alpha);
+            // руки-угли, тянутся вниз и в стороны
+            for (int side = -1; side <= 1; side += 2) {
+                const int hx = cx + side * (40 + sway) + (int)(sinf(animTime * 1.1f + side) * 3.0f);
+                const int hy = oy + 26 + (int)(cosf(animTime * 1.1f + side) * 3.0f);
+                DL(cx + side * 26 + sway, oy - 12, hx, hy, robeDark, 6, alpha);
+                DL(cx + side * 26 + sway, oy - 12, hx, hy, robe, 4, alpha);
+                FC(hx, hy, 6, ash, alpha);
+                FC(hx, hy, 3, core, 220);
+            }
+            // горящее сердце в груди
+            FC(cx + sway, oy + 14, 17, robeDark, alpha);
+            FC(cx + sway, oy + 14, 13, core, (int)(150 + 90 * pulse));
+            FC(cx + sway, oy + 14, 7, 0xFFFFF0C8, 235);
+            FX(cx + sway - 20, oy + 30, 40, 3, core, (int)(60 + 60 * pulse));
+            // голова в капюшоне
+            FR(cx - 21 + sway, oy - 60, 42, 46, 14, robeDark, alpha);
+            FR(cx - 15 + sway, oy - 52, 30, 30, 10, 0xFF0B0812, alpha);
+            FX(cx - 10 + sway, oy - 42, 7, 4, core, 240);
+            FX(cx + 3 + sway, oy - 42, 7, 4, core, 240);
+            // корона из пепельных осколков: высота каждого живёт своей фазой
+            for (int i = -2; i <= 2; ++i) {
+                const int hgt = 10 + (int)(6.0f + 5.0f * sinf(animTime * 2.0f + i * 0.8f));
+                const int bx2 = cx + sway + i * 11;
+                DL(bx2, oy - 58, bx2 + i * 3, oy - 58 - hgt, ashLit, 3, alpha);
+                FC(bx2 + i * 3, oy - 58 - hgt, 2, core, 230);
+            }
+            // вихрь пепла вокруг фигуры — эллипс, читается как орбита
+            for (int ring = 0; ring < 2; ++ring) {
+                const int rr = 56 + ring * 14;
+                const float spin = animTime * (0.7f + ring * 0.5f);
+                for (int seg = 0; seg < 24; ++seg) {
+                    const float a0 = spin + seg * 6.2831853f / 24.0f;
+                    const int sxp = cx + (int)(cosf(a0) * rr);
+                    const int syp = oy + 4 + (int)(sinf(a0) * rr * 0.3f);
+                    FX(sxp, syp, 2 + (seg % 2), 2, ring == 0 ? ashLit : ash, 170);
                 }
             }
-            // core body
-            FR(cx - 22, oy - 24, 44, 48, 18, metalDark, alpha);
-            FR(cx - 17, oy - 19, 34, 38, 14, metal, alpha);
-            // the lens eye
-            FC(cx, oy, 12, metalLit, alpha);
-            FC(cx, oy, 9, core, alpha);
-            FC(cx, oy, 4, 0xFFFFFFFF, alpha);
-            // lid plates
-            FR(cx - 20, oy - 26, 40, 7, 3, metalLit, alpha);
-            FR(cx - 20, oy + 19, 40, 7, 3, metalLit, alpha);
-            // teeth around the lens
-            for (int i = 0; i < 10; ++i) {
-                const float a = animTime * 0.5f + i * 0.6283f;
-                FX(cx + (int)(cosf(a) * 16) - 1, oy + (int)(sinf(a) * 16) - 1, 2, 2, metalLit, alpha);
+            // поднимающиеся угли
+            for (int i = 0; i < 9; ++i) {
+                const float t2 = fmodf(animTime * 0.45f + i * 0.111f, 1.0f);
+                const int eY = cy + 46 - (int)(t2 * 118.0f);
+                const int eX = cx + (int)(sinf(t2 * 9.0f + i) * (10.0f + t2 * 26.0f));
+                FC(eX, eY, 1 + (int)(t2 * 2.0f), core, (int)(200 * (1.0f - t2)));
             }
         } else if (id == 4) {
-            // ПРОТОКОЛИСТ — не тело, а стойка с раскрытым томом: две каменные скрижали,
-            // между ними светящаяся строка, вокруг летают перья. Он не бьёт вблизи —
-            // он пишет через арену строки, между которыми надо успеть встать.
+            // ПРОТОКОЛИСТ — писарь, который пишет строки прямо через арену. Раньше это
+            // были две скрижали на ножке и выходил «раскрытый том», а не страж.
+            // Теперь это высокая фигура в каменной мантии со скрижалью-лицом и огромным
+            // томом перед ней: строки на страницах ползут вверх, как в живой записи.
             const uint32_t stone = tint(0xFF4A5566), stoneLit = tint(0xFF8798AD), stoneDark = tint(0xFF232B36);
             const uint32_t ink = tint(enraged ? 0xFF6AF0FF : 0xFF49C8E8);
-            const int float_ = (int)(sinf(animTime * 1.7f) * 4.0f);
-            const int oy = cy + 6 + float_;
-            // base pillar
-            FR(cx - 14, oy + 34, 28, 26, 6, stoneDark, alpha);
-            FR(cx - 10, oy + 30, 20, 10, 5, stone, alpha);
-            // two open pages left and right, hinged at the spine
+            const int sway = (int)(sinf(animTime * 0.8f) * 3.0f);
+            const int bob = (int)(sinf(animTime * 1.5f) * 3.0f);
+            const int oy = cy + bob;
+            // тень
+            FX(cx - 38, cy + 58, 76, 9, 0xFF08060E, 90);
+            // мантия
+            FR(cx - 34 + sway, oy - 6, 68, 62, 14, stoneDark, alpha);
+            FR(cx - 28 + sway, oy - 2, 56, 54, 12, stone, alpha);
+            FR(cx - 28 + sway, oy - 2, 7, 54, 3, stoneLit, alpha);
+            // наплечник-скрижаль
+            FR(cx - 48 + sway, oy - 34, 96, 20, 8, stoneLit, alpha);
+            FR(cx - 44 + sway, oy - 30, 88, 8, 4, stone, alpha);
+            for (int i = 0; i < 4; ++i) FC(cx - 34 + i * 22 + sway, oy - 26, 2, ink, 200);
+            // капюшон и скрижаль-лицо с прорезью чернил
+            FR(cx - 22 + sway, oy - 78, 44, 48, 14, stoneDark, alpha);
+            FR(cx - 16 + sway, oy - 70, 32, 32, 8, 0xFF0E1219, alpha);
+            for (int ln = 0; ln < 3; ++ln) {
+                const int ly = oy - 64 + ln * 9;
+                const int lw = 20 - ln * 4;
+                const float glow = 0.5f + 0.5f * sinf(animTime * 4.0f - ln * 1.2f);
+                FX(cx - 8 + sway, ly, lw, 2, ink, (int)(110 + 140 * glow));
+            }
+            // рука с пером
+            {
+                const int ax = cx - 46 + sway, ay = oy - 6;
+                DL(cx - 26 + sway, oy - 18, ax, ay, stone, 6, alpha);
+                DL(cx - 26 + sway, oy - 18, ax, ay, stoneLit, 3, alpha);
+                const float qa = animTime * 2.2f;
+                DL(ax, ay, ax - 10 + (int)(sinf(qa) * 6.0f), ay - 26, stoneLit, 2, alpha);
+                FC(ax - 10 + (int)(sinf(qa) * 6.0f), ay - 28, 3, ink, 230);
+            }
+            // большой том перед фигурой: страницы дышат, строки ползут вверх
+            const int bookY = oy + 26;
+            const int flutter = (int)(sinf(animTime * 5.0f) * 2.0f);
+            FR(cx - 40, bookY - 20, 80, 44, 6, 0xFF2B2119, alpha);      // переплёт
+            FR(cx - 37, bookY - 17, 74, 38, 4, 0xFF4A382A, alpha);
             for (int side = -1; side <= 1; side += 2) {
-                const int bx = cx + side * 12;
-                FR(bx - (side > 0 ? 0 : 34), oy - 40, 34, 74, 6, stoneDark, alpha);
-                FR(bx - (side > 0 ? 2 : 30), oy - 36, 30, 66, 5, stone, alpha);
-                // written lines that pulse faster when enraged
-                for (int ln = 0; ln < 6; ++ln) {
-                    const float pulse = 0.55f + 0.45f * sinf(animTime * 3.0f + ln * 0.9f + (side > 0 ? 0.6f : 0.0f));
-                    const int w = 18 - (ln % 3) * 4;
-                    FX(bx - (side > 0 ? 8 : 26) + (ln % 2 ? 0 : 3), oy - 28 + ln * 10, w, 2, ink, (int)(90 + 150 * pulse));
+                const int pw = 33;
+                const int px3 = side < 0 ? cx - 35 : cx + 2;
+                const int ph = 32 + (side > 0 ? flutter : -flutter);
+                FR(px3, bookY - ph / 2, pw, ph, 3, 0xFFDCD2BC, alpha);
+                FR(px3 + 2, bookY - ph / 2 + 2, pw - 4, ph - 4, 2, 0xFFF6EFDD, alpha);
+                const int scroll = (int)(animTime * 9.0f) % 6;
+                for (int ln = 0; ln < 5; ++ln) {
+                    const int ly = bookY - ph / 2 + 5 + ln * 6 - scroll;
+                    if (ly < bookY - ph / 2 + 2 || ly > bookY + ph / 2 - 3) continue;
+                    FX(px3 + 5, ly, pw - 10, 1, 0xFF3A4652, 220);
                 }
             }
-            // spine and halo between the tablets
-            FR(cx - 4, oy - 40, 8, 74, 3, stoneLit, alpha);
-            FC(cx, oy - 44, 7, ink, alpha);
-            FC(cx, oy - 44, 3, 0xFFFFFFFF, alpha);
-            // orbiting quills
+            FR(cx - 3, bookY - 22, 6, 46, 3, stoneLit, alpha);
+            FC(cx, bookY - 26, 5, ink, 230);
+            // чернильные капли падают с тома
             for (int i = 0; i < 3; ++i) {
-                const float a = animTime * 1.35f + i * 2.0944f;
-                const int qx = cx + (int)(cosf(a) * 46.0f);
-                const int qy = oy - 10 + (int)(sinf(a) * 20.0f);
+                const float t2 = fmodf(animTime * 0.6f + i * 0.33f, 1.0f);
+                FX(cx - 16 + i * 16, bookY + 20 + (int)(t2 * 30.0f), 2, 3, ink, (int)(200 * (1.0f - t2)));
+            }
+            // перья-перья вокруг: летят по орбите с хвостом
+            for (int i = 0; i < 4; ++i) {
+                const float a = animTime * 1.2f + i * 1.5708f;
+                const int qx = cx + (int)(cosf(a) * 58.0f);
+                const int qy = oy - 6 + (int)(sinf(a) * 30.0f);
+                for (int tr = 1; tr <= 3; ++tr) {
+                    const float a2 = a - tr * 0.16f;
+                    FC(cx + (int)(cosf(a2) * 58.0f), oy - 6 + (int)(sinf(a2) * 30.0f), 2, ink, 120 - tr * 30);
+                }
                 DL(qx, qy, qx + (int)(cosf(a + 1.2f) * 16.0f), qy + (int)(sinf(a + 1.2f) * 16.0f), stoneLit, 2, alpha);
                 FC(qx, qy, 3, ink, alpha);
             }
         } else {
-            // КОПИЯ-ДВОЙНИК — два стеклянных слепка одного человека. Передний читается
-            // полностью, задний стоит со сдвигом и просвечивает. Он не пишет и не бьёт
-            // площадью: он меняется местами с копией и бьёт сразу из двух точек.
+            // КОПИЯ-ДВОЙНИК — два стеклянных слепка одного человека. Раньше это были
+            // тонкие палочки с кружками: силуэт не читался как страж. Теперь у обоих
+            // тел есть масса, плечи, трещины и ядро, а двойник отстаёт по фазе и
+            // «просвечивает», поэтому сразу видно, кто настоящий.
             const uint32_t glass = tint(0xFF4E7C8A), glassLit = tint(0xFFB4E8F4), glassDark = tint(0xFF16242A);
             const uint32_t core = tint(enraged ? 0xFFFF5A7A : 0xFF8FF0FF);
-            const int sway = (int)(sinf(animTime * 2.4f) * 4.0f);
-            const int off = 40 + sway;
-            // ---- the mirror twin: same build, dimmer, behind and to the right
-            const int tx = cx + off, ty = cy - 4;
-            FR(tx - 15, ty - 14 - lift, 30, 54, 12, glassDark, 150);
-            FR(tx - 11, ty - 10 - lift, 22, 46, 10, glass, 170);
-            FC(tx, ty - 26 - lift, 11, glassLit, 170);
-            FC(tx, ty - 26 - lift, 7, glassDark, 160);
-            DL(tx - 14, ty + 4 - lift, tx - 24, ty + 22 - lift, glassLit, 3, 150);
-            DL(tx + 14, ty + 4 - lift, tx + 24, ty + 22 - lift, glassLit, 3, 150);
-            DL(tx - 8, ty + 38 - lift, tx - 6, ty + 50 - lift, glass, 4, 150);
-            DL(tx + 8, ty + 38 - lift, tx + 6, ty + 50 - lift, glass, 4, 150);
-            // ---- the real body in front
-            FR(cx - 18, cy - 16 - lift, 36, 58, 14, glassDark, alpha);
-            FR(cx - 14, cy - 12 - lift, 28, 48, 12, glass, alpha);
-            FR(cx - 14, cy - 12 - lift, 6, 48, 3, glassLit, alpha);
-            FR(cx + 8, cy - 12 - lift, 6, 48, 3, glassLit, alpha);
-            // neck and head, filled so it cannot read as a floating ring
-            FR(cx - 7, cy - 24 - lift, 14, 12, 4, glassLit, alpha);
-            FC(cx, cy - 34 - lift, 12, glassLit, alpha);
-            FC(cx, cy - 34 - lift, 9, glass, alpha);
-            FC(cx - 4, cy - 36 - lift, 3, core, alpha);
-            FC(cx + 4, cy - 36 - lift, 3, core, alpha);
-            // arms
-            DL(cx - 13, cy - 6 - lift, cx - 26, cy + 16 - lift, glassLit, 4, alpha);
-            DL(cx + 13, cy - 6 - lift, cx + 24, cy + 16 - lift, glassLit, 4, alpha);
-            // legs
-            DL(cx - 6, cy + 38 - lift, cx - 8, cy + 52 - lift, glass, 4, alpha);
-            DL(cx + 6, cy + 38 - lift, cx + 8, cy + 52 - lift, glass, 4, alpha);
-            // cracks across the glass
-            for (int i = 0; i < 4; ++i) {
-                const float a = animTime * 0.8f + i * 1.57f;
-                DL(cx, cy - 2 - lift, cx + (int)(cosf(a) * 20.0f), cy + (int)(sinf(a) * 24.0f), core, 1, 140);
-            }
-            // the tether: a dotted axis between the two bodies
-            for (int i = 0; i < 5; ++i)
-                FX(cx + 14 + i * 5, cy - 6 - lift, 2, 2 + (i % 2), core, 190);
-            // floating shards
-            for (int i = 0; i < 6; ++i) {
-                const float a = animTime * 1.1f + i * 1.0472f;
-                const int sx2 = cx + (int)(cosf(a) * 44.0f);
-                const int sy2 = cy - 4 + (int)(sinf(a) * 34.0f);
-                FX(sx2 - 2, sy2 - 2, 4, 4, core, 200);
+            const float pulse = 0.5f + 0.5f * sinf(animTime * 3.4f);
+            const int sway = (int)(sinf(animTime * 1.6f) * 3.0f);
+            const int bob = (int)(sinf(animTime * 2.1f) * 3.0f);
+            const int oy = cy + bob;
+            // тень у настоящего тела
+            FX(cx - 34, cy + 56, 68, 9, 0xFF08060E, 80);
+            auto glassBody = [&](int bx, int by, int a, bool mirror, float phase) {
+                const int legSwing = (int)(sinf(animTime * 2.4f + phase) * 3.0f);
+                // ноги
+                FR(bx - 15, by + 26, 12, 30 + legSwing, 4, glassDark, a);
+                FR(bx + 3, by + 26, 12, 30 - legSwing, 4, glassDark, a);
+                FR(bx - 15, by + 24, 12, 14, 4, glass, a);
+                FR(bx + 3, by + 24, 12, 14, 4, glass, a);
+                // торс — трапеция из двух плит
+                FR(bx - 24, by - 20, 48, 50, 14, glassDark, a);
+                FR(bx - 19, by - 16, 38, 42, 12, glass, a);
+                FR(bx - 19, by - 16, 7, 42, 3, glassLit, a);          // блик стекла
+                FR(bx + 12, by - 16, 5, 42, 2, glassLit, (a * 2) / 3);
+                // плечи
+                FC(bx - 22, by - 18, 8, glass, a);
+                FC(bx + 22, by - 18, 8, glass, a);
+                // голова: два глаза и пустота между ними
+                FR(bx - 7, by - 32, 14, 10, 4, glassLit, a);
+                FC(bx, by - 42, 15, glassDark, a);
+                FC(bx, by - 42, 12, glassLit, a);
+                FC(bx, by - 42, 8, glassDark, (a * 3) / 4);
+                FC(bx - 4, by - 43, 3, core, a);
+                FC(bx + 4, by - 43, 3, core, a);
+                // руки, слегка в стороны
+                DL(bx - 20, by - 8, bx - 30, by + 16, glassLit, 5, a);
+                DL(bx + 20, by - 8, bx + 30, by + 16, glassLit, 5, a);
+                DL(bx - 30, by + 16, bx - 28, by + 26, glass, 4, a);
+                DL(bx + 30, by + 16, bx + 28, by + 26, glass, 4, a);
+                // ядро в груди
+                FC(bx, by + 4, 9, glassDark, a);
+                FC(bx, by + 4, 6, core, (int)((a * (0.55f + 0.45f * pulse))));
+                // трещины
+                for (int i = 0; i < 3; ++i) {
+                    const float ang = (mirror ? -1.0f : 1.0f) * (0.7f + i * 0.9f) + animTime * 0.4f;
+                    DL(bx, by + 2, bx + (int)(cosf(ang) * 22.0f), by + (int)(sinf(ang) * 26.0f), core, 1, 130);
+                }
+            };
+            // двойник: та же фигура, отстаёт по фазе и просвечивает сквозь
+            const int tx = cx + 46 + sway;
+            glassBody(tx, oy - 4, 120, true, 1.1f);
+            // трос между двумя телами
+            for (int i = 0; i < 6; ++i)
+                FX(cx + 22 + i * 5, oy + 2 + (int)(sinf(animTime * 3.0f + i) * 2.0f), 2, 2, core, 170);
+            // настоящее тело
+            glassBody(cx + sway, oy, alpha, false, 0.0f);
+            // осколки на орбите
+            for (int i = 0; i < 8; ++i) {
+                const float a2 = animTime * 1.15f + i * 0.785f;
+                const int sxp = cx + sway + (int)(cosf(a2) * 54.0f);
+                const int syp = oy - 2 + (int)(sinf(a2) * 40.0f);
+                const int sz = (i % 3 == 0) ? 4 : 3;
+                FX(sxp - sz / 2, syp - sz / 2, sz, sz, i % 2 ? core : glassLit, 190);
             }
         }
     }
@@ -1202,6 +1334,15 @@ struct Renderer {
         drawBossFigure(cx, cy, bossType, animTime, hitFlash, true, true);
     }
 
+    // ── Тон предмета ───────────────────────────────────────────────────────────
+    // Один предмет — один смысловой цвет. Раньше палитра шла по кругу из десяти
+    // оттенков (предметы 00, 10, 20, 30 были одного цвета) и половина цветов не
+    // имела отношения к предмету. Здесь сорок разных оттенков, и каждый выбран по
+    // смыслу: огонь оранжевый, лёд бирюзовый, молния золотая, кровь алая, магнетизм
+    // пурпурный, бумага пергаментная, ветер зелёный.
+    //   bg   — подложка, edge — рамка, glow — свечение
+    static bool isPassiveItem(int id) { return !((id >= 0 && id <= 6) || (id >= 24 && id <= 27)); }
+
     void drawWeaponIcon(int cx, int cy, int weaponId, int size = 22, bool evolved = false) {
         static const uint32_t glowColors[40] = {
             0xFF40D0FF,0xFFFF6818,0xFF43D9F4,0xFF40B8FF,0xFFFF2850,
@@ -1216,41 +1357,63 @@ struct Renderer {
         const int id = std::max(0, std::min(39, weaponId));
         // Арт-наборы для любого предмета 00–39: ИИ-АРТ или набор «ЦВЕТ», где первые
         // десять предметов различаются цветом и силуэтом, а не общей рамкой.
+        const ItemTone& tone = ITEM_TONE[id];
+        // Активные и пассивные предметы носят разные подложки: у оружия — угловатая
+        // стальная пластина с бликом сверху, у артефакта — круглая каменная шайба.
+        // Форма видна на 22 px раньше цвета, поэтому слоты больше не путаются.
+        const bool passive = isPassiveItem(id);
+        const uint32_t frameBg = evolved ? 0xFF3A1828 : tone.bg;
+        const uint32_t frameBorder = evolved ? 0xFFFFD838 : (passive ? tone.edge : 0xFF8FA6C8);
+        const uint32_t glow = evolved ? 0xFFFFB820 : tone.glow;
         if (skillIconStyle >= 1) {
-            const uint32_t frameBg = evolved ? 0xFF3A1828 : 0xFF181228;
-            const uint32_t frameBorder = evolved ? 0xFFFFD838 : 0xFF685890;
-            const uint32_t glow = evolved ? 0xFFFFB820 : glowColors[id];
-            fillRoundedRect(cx - size, cy - size, size * 2, size * 2, 7, frameBg);
-            addGlow(cx, cy, size + (evolved ? 9 : 3), glow, evolved ? 145 : 65);
+            addGlow(cx, cy, size + (evolved ? 9 : 3), glow, evolved ? 145 : 68);
+            if (passive) {
+                fillCircle(cx, cy, size, frameBg);
+                drawCircleRing(cx, cy, size, passive ? 2 : 3, frameBorder, 235, false);
+            } else {
+                fillRoundedRect(cx - size, cy - size, size * 2, size * 2, 7, frameBg);
+                fillRect(cx - size + 3, cy - size + 2, size * 2 - 6, std::max(1, size / 10), 0xFFA9C0E0, 120);
+            }
             const BakedIconImage& image = skillIconStyle == 2 ? SKILL_ICONS_COLOR[id] : SKILL_ICONS_AI[id];
             const int side = std::max(1, size * 2 - 8);
             const int left = cx - side / 2, top = cy - side / 2;
-            const int corner = std::max(2, side / 11);
+            const int corner = passive ? 0 : std::max(2, side / 11);
             for (int y = 0; y < side; ++y) {
                 const int sy = y * image.height / side;
                 for (int x = 0; x < side; ++x) {
-                    int dx = 0, dy = 0;
-                    if (x < corner) dx = corner - x;
-                    else if (x >= side - corner) dx = x - (side - corner - 1);
-                    if (y < corner) dy = corner - y;
-                    else if (y >= side - corner) dy = y - (side - corner - 1);
-                    if (dx > 0 && dy > 0 && dx * dx + dy * dy > corner * corner) continue;
+                    if (passive) {
+                        // Круглая маска: артефакт не выглядит как оружие.
+                        const int dxp = x - side / 2, dyp = y - side / 2;
+                        if (dxp * dxp + dyp * dyp > (side / 2) * (side / 2)) continue;
+                    } else {
+                        int dx = 0, dy = 0;
+                        if (x < corner) dx = corner - x;
+                        else if (x >= side - corner) dx = x - (side - corner - 1);
+                        if (y < corner) dy = corner - y;
+                        else if (y >= side - corner) dy = y - (side - corner - 1);
+                        if (dx > 0 && dy > 0 && dx * dx + dy * dy > corner * corner) continue;
+                    }
                     const int sx = x * image.width / side;
                     const uint8_t index = image.pixels[sy * image.width + sx];
                     putPixel(left + x, top + y, image.palette[index]);
                 }
             }
-            drawRoundedRect(cx - size, cy - size, size * 2, size * 2, 7, frameBorder, evolved ? 3 : 2);
+            if (!passive) drawRoundedRect(cx - size, cy - size, size * 2, size * 2, 7, frameBorder, evolved ? 3 : 2);
+            else drawCircleRing(cx, cy, size, evolved ? 3 : 2, frameBorder, 245, false);
             return;
         }
-        const uint32_t bg = evolved ? 0xFF3A1828 : 0xFF181228;
-        const uint32_t border = evolved ? 0xFFFFD838 : 0xFF685890;
-        const uint32_t accent = glowColors[id];
+        const uint32_t bg = frameBg;
+        const uint32_t border = frameBorder;
+        const uint32_t accent = tone.edge;
         const int t = std::max(2, size / 8);
         const int thin = std::max(1, size / 13);
-        fillRoundedRect(cx - size, cy - size, size * 2, size * 2, 7, bg);
-        drawRoundedRect(cx - size, cy - size, size * 2, size * 2, 7, border, evolved ? 3 : 2);
-        addGlow(cx, cy, size + (evolved ? 9 : 3), evolved ? 0xFFFFB820 : accent, evolved ? 145 : 65);
+        if (passive) { fillCircle(cx, cy, size, bg); drawCircleRing(cx, cy, size, 2, border, 235, false); }
+        else {
+            fillRoundedRect(cx - size, cy - size, size * 2, size * 2, 7, bg);
+            drawRoundedRect(cx - size, cy - size, size * 2, size * 2, 7, border, evolved ? 3 : 2);
+            fillRect(cx - size + 3, cy - size + 2, size * 2 - 6, std::max(1, size / 10), 0xFFA9C0E0, 120);
+        }
+        addGlow(cx, cy, size + (evolved ? 9 : 3), evolved ? 0xFFFFB820 : glow, evolved ? 145 : 65);
         auto L = [&](int x1, int y1, int x2, int y2, uint32_t color, int width = -1, int alpha = 255) {
             drawLine(x1, y1, x2, y2, color, width > 0 ? width : t, alpha, true);
         };

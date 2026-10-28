@@ -66,6 +66,9 @@ struct SoundEngine {
     std::atomic<float> musicVolume{0.42f};
     // 0 = normal scene mapping, 1 = Soul Forge shop (it reuses the menu mode otherwise).
     std::atomic<int> musicSceneHint{0};
+    // Выбор файла внутри сцены: номер боя для кампании, случайный шаффл для эндлеса.
+    std::atomic<int> musicVariantSeed{-1};
+    std::atomic<bool> musicShuffle{false};
     // Scene-level trim for the music bus: 0.20 while a level-up card is open (80 % quieter).
     std::atomic<float> musicSceneGain{1.0f};
 
@@ -656,6 +659,8 @@ struct SoundEngine {
         // Player tracks in audio/ own the bus whenever the current scene has one.
         // The built-in score is only rendered when no file covers the scene.
         const int sceneMode = std::max(0, std::min(7, musicMode.load(std::memory_order_relaxed)));
+        externalMusic.variantSeed = musicVariantSeed.load(std::memory_order_relaxed);
+        externalMusic.shuffle = musicShuffle.load(std::memory_order_relaxed);
         externalMusic.requestScene(externalSceneForMode(sceneMode, musicSceneHint.load(std::memory_order_relaxed)));
         float music = externalMusic.render();
         const bool trackOwnsBus = externalMusic.ownsMusicSlot();

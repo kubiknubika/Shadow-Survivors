@@ -67,6 +67,7 @@ struct ExternalMusicTrack {
     int outRate = 44100;
     double step = 1.0;                        // input frames per output frame
     double frac = 0.0;
+    bool finished = false;                    // файл дочитан до конца
     int16_t frameBuf[MINIMP3_MAX_SAMPLES_PER_FRAME] = {0};
 
     bool openFile(const MusicPath& file, int outputRate) {
@@ -83,6 +84,7 @@ struct ExternalMusicTrack {
         outRate = outputRate;
         step = (double)rate / (double)std::max(1, outputRate);
         rd = 0; avail = 0; frac = 0.0;
+        finished = false;
         return true;
     }
 
@@ -94,18 +96,15 @@ struct ExternalMusicTrack {
         avail = 0; rd = 0; frac = 0.0;
     }
 
-    // Decodes one MP3 block into the ring; loops the file at the end.
+    // Decodes one MP3 block into the ring. По концу файла дорожка не зацикливается
+    // здесь: владелец (ExternalMusic) решает — повторить её или поставить следующую.
     bool decodeBlock() {
         if (!open) return false;
         int got = (int)mp3dec_ex_read(&dec, frameBuf, MINIMP3_MAX_SAMPLES_PER_FRAME);
         if (got <= 0) {
-            // End of file: start the same track over instead of falling silent.
-            const MusicPath file = path;
-            const int reopenRate = outRate;
             closeFile();
-            if (!openFile(file, reopenRate)) return false;
-            got = (int)mp3dec_ex_read(&dec, frameBuf, MINIMP3_MAX_SAMPLES_PER_FRAME);
-            if (got <= 0) return false;
+            finished = true;
+            return false;
         }
         const int frames = got / channels;
         for (int i = 0; i < frames && avail < RING; ++i) {
@@ -213,6 +212,13 @@ struct ExternalMusic {
     float env = 0.0f;
     int lastVariant = -1;
     uint32_t rngState = 0x2545F491u;
+    // Как выбирать трек внутри сцены:
+    //   variantSeed >= 0 и !shuffle — детерминированно по номеру боя (кампания):
+    //   разные дела получают разные записи, и возврат в дело не меняет музыку;
+    //   shuffle — эндлес: случайный трек, а по его концу — следующий случайный.
+    int variantSeed = -1;
+    bool shuffle = false;
+    int finishedCounter = 0;
 
     uint32_t random() {
         rngState ^= rngState << 13;
@@ -333,12 +339,31 @@ struct ExternalMusic {
     bool startScene(int scene) {
         if (!hasTrack(scene)) return false;
         std::vector<MusicPath>& list = files[scene];
-        size_t pick = list.size() > 1 ? (size_t)(random() % list.size()) : 0;
-        if (list.size() > 1 && (int)pick == lastVariant) pick = (pick + 1) % list.size();
+        size_t pick = 0;
+        if (!shuffle && variantSeed >= 0) {
+            // Детерминированный выбор: каждое дело кампании звучит своей записью.
+            pick = (size_t)(variantSeed % (int)list.size());
+        } else if (list.size() > 1) {
+            pick = (size_t)(random() % list.size());
+            if ((int)pick == lastVariant) pick = (pick + 1) % list.size();
+        }
         lastVariant = (int)pick;
         if (!track.openFile(list[pick], outputRate)) return false;
         currentScene = scene;
+        env = 0.0f;
         return true;
+    }
+
+    // Следующий трек той же сцены — для эндлеса: плейлист не повторяет только что
+    // отыгранную запись и не зацикливается на одной.
+    bool startNextOfScene() {
+        if (!hasTrack(currentScene)) return false;
+        std::vector<MusicPath>& list = files[currentScene];
+        if (list.empty()) return false;
+        size_t pick = (size_t)(random() % list.size());
+        if (list.size() > 1 && (int)pick == lastVariant) pick = (pick + 1) % list.size();
+        lastVariant = (int)pick;
+        return track.openFile(list[pick], outputRate);
     }
 
     void advanceEnvelope() {
@@ -361,9 +386,18 @@ struct ExternalMusic {
     }
 
     float render() {
+        // Трек дочитан: в эндлесе ставим следующий случайный, иначе повторяем файл.
+        if (track.finished) {
+            track.finished = false;
+            ++finishedCounter;
+            const bool advanced = shuffle ? startNextOfScene() : track.openFile(track.path, outputRate);
+            if (advanced) { env = 0.0f; phase = 2; }   // короткое нарастание вместо щелчка
+        }
         advanceEnvelope();
         if (!track.open) return 0.0f;
-        return track.nextSample() * env;
+        const float sample = track.nextSample();
+        if (track.finished) return 0.0f;
+        return sample * env;
     }
 
     void shutdown() {

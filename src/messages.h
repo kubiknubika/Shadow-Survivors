@@ -109,7 +109,7 @@ static const GameMsgDef GAME_MESSAGES[GMSG_COUNT] = {
     {GMSG_STORY_ACT4,         "story_act4",         true,  "Акт четвёртый: архив.", "открытие акта IV"},
     {GMSG_STORY_ACT5,         "story_act5",         true,  "Акт пятый: сердце архива.", "открытие акта V"},
     {GMSG_STORY_CASE_CLOSED,  "story_case_closed",  true,  "Дело закрыто. Следующее откроется само.", "итог дела, открывает следующее"},
-    {GMSG_STORY_BRANCH,       "story_branch",       true,  "Выбор ветки. Второй след всё равно придётся пройти.", "экран выбора ветки"},
+    {GMSG_STORY_BRANCH,       "story_branch",       true,  "Выбор ветки. Один след останется непройденным.", "экран выбора ветки"},
     {GMSG_STORY_NO_NAME,      "story_no_name",      true,  "Свидетель без имени. В реестре такой строки нет.", "первое дело"},
     {GMSG_STORY_COPY_WARNING, "story_copy_warning", true,  "Это копия. Она отвечает лучше оригинала.", "копия Свидетеля"},
     {GMSG_HUNT_CLEARED,       "hunt_cleared",       true,  "Стая уничтожена. Награда забрана.", "итог тихой охоты: стая добита"},

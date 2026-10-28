@@ -92,10 +92,10 @@ static const CampaignMissionDef CAMPAIGN_MISSIONS[CAMPAIGN_MISSION_COUNT] = {
     {"ПЕЧАТЬ ИМЕНИ", "ПЕЧАТЬ III • ИМЯ", "Кардинал вымарывал имена, называя забвение милосердием. Он не учёл одного: люди помнят друг друга без разрешения Архива.", "СЛОМАЙ ПЕЧАТЬ ИМЕНИ", "КАРДИНАЛ", 240, 180, 2, 3, 0x03u, false, 3, 0, 15, 16, false},
     {"ПЕПЕЛЬНЫЙ ТРОН", "КАБИНЕТ АРХИВАРИУСА", "Азарот запустил Архив, чтобы никто не исчез. Машина услышала его буквально: заперла ночь в цикле, а людей — в копиях.", "ВОЙДИ В КАБИНЕТ • ОТКРОЙ ДЕЛО АЗАРОТА", "СЕКРЕТАРЬ АРХИВА", 240, 180, 4, 4, 0x07u, false, 4, 0, 17, -1, false},
     {"КОПИЯ СВИДЕТЕЛЯ", "ДВОЙНИК С МОИМ ГОЛОСОМ", "В деле подшита копия показаний — с моим голосом и моими словами. Копия утверждает, что она и есть Свидетель. Проверить можно только одним способом.", "ОТЛИЧИ КОПИЮ ОТ СЕБЯ", "КОПИЯ СВИДЕТЕЛЯ", 240, 180, 5, 4, 0x07u, false, 4, 2, 18, -1, false},
-    {"ДОПРОС МАШИНЫ", "ПРОТОКОЛ БЕЗ СЛЕДОВАТЕЛЯ", "Машина не лжёт — она повторяет. Я задал ей вопрос о ночи шторма и получил в ответ собственный рапорт, написанный до того, как я его написал.", "ДОПРОСИ АРХИВ • НАЙДИ АВТОРА", "ПРОТОКОЛИСТ", 240, 180, 4, 4, 0x07u, false, 4, 0, 19, -1, false},
+    {"ДОПРОС МАШИНЫ", "ПРОТОКОЛ БЕЗ СЛЕДОВАТЕЛЯ", "Машина не лжёт — она повторяет. Я спросил её о ночи бури и получил в ответ собственный рапорт, написанный до того, как я его написал.", "ДОПРОСИ АРХИВ • НАЙДИ АВТОРА", "ПРОТОКОЛИСТ", 240, 180, 4, 4, 0x07u, false, 4, 0, 19, -1, false},
     {"ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "ПЕЧАТЬ IV • СВИДЕТЕЛЬСТВО", "Азарот хранит копии, а не людей. Печать Свидетельства — последний засов: пока она цела, Архив считает свои записи единственными свидетелями.", "СЛОМАЙ ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "АЗАРОТ", 270, 200, 3, 4, 0x07u, false, 4, 0, 20, -1, false},
-    {"СОХРАНИТЬ КОПИЮ", "ВЫБОР • ПАМЯТЬ ВМЕСТО ЧЕЛОВЕКА", "Копия сестры Малакора всё ещё в Архиве. Сжечь — и он потеряет последнее, что звучит её голосом. Сохранить — и Архив получит право решать, кого помнить.", "ЗАЩИТИ АРХИВ ОТ ЗАЧИСТКИ", "ИНСПЕКТОР ЗАЧИСТКИ", 230, 170, 0, 4, 0x07u, false, 4, 3, 21, -1, true},
-    {"СЖЕЧЬ КОПИЮ", "ВЫБОР • ПРАВО НА УТРАТУ", "Копия сестры Малакора всё ещё в Архиве. Некоторые вещи должны умереть полностью, иначе живые не смогут отпустить.", "УНИЧТОЖЬ КОПИЮ • ВОЗЬМИ ПЕПЕЛ", "ХРАНИТЕЛЬ КОПИЙ", 230, 170, 5, 4, 0x07u, false, 4, 3, 21, -1, true},
+    {"СОХРАНИТЬ КОПИЮ", "ВЫБОР • ПАМЯТЬ ВМЕСТО ЧЕЛОВЕКА", "Копия голоса Малакора всё ещё в Архиве. Сжечь — и он потеряет последнее, что звучит его голосом. Сохранить — и Архив получит право решать, кого помнить.", "ЗАЩИТИ АРХИВ ОТ ЗАЧИСТКИ", "ИНСПЕКТОР ЗАЧИСТКИ", 230, 170, 0, 4, 0x07u, false, 4, 3, 21, -1, true},
+    {"СЖЕЧЬ КОПИЮ", "ВЫБОР • ПРАВО НА УТРАТУ", "Копия голоса Малакора всё ещё в Архиве. Некоторые вещи должны умереть полностью, иначе живые не смогут отпустить.", "УНИЧТОЖЬ КОПИЮ • ВОЗЬМИ ПЕПЕЛ", "ХРАНИТЕЛЬ КОПИЙ", 230, 170, 5, 4, 0x07u, false, 4, 3, 21, -1, true},
     {"РЕЗЕРВНАЯ КОПИЯ ПРИКАЗА", "АРХИВ ЗАЩИЩАЕТ СЕБЯ", "В сердце Архива осталась запись последнего приказа Азарота. Это не воскресший Азарот — это машинная копия его команды, и она снова запускает цикл.", "НАЙДИ И УНИЧТОЖЬ КОПИЮ", "КОПИЯ АЗАРОТА", 260, 190, 5, 5, 0x0Fu, false, 5, 2, 22, -1, false},
     {"ТРИ ЭХО-ПРИКАЗА", "СТРАЖИ СЕРДЦА", "Три записи защищают сердце архива. Это не воскресшие стражи — это приказы, которые никто не отменил.", "ПОБЕДИ ТРИ ЭХО", "АРХИВНЫЙ ПРОТОКОЛ", 280, 210, 4, 5, 0x0Fu, true, 5, 1, 24, -1, false},
     {"ПОСЛЕДНЯЯ НОЧЬ", "КОЛЬЦО РАЗМЫКАЕТСЯ", "Контур разомкнут, но ночь ещё держится. Последний бой не вернёт погибших — он вернёт живым право помнить самим.", "УДЕРЖИ КОЛЬЦО • ДОЖДИСЬ РАССВЕТА", "ПОСЛЕДНИЙ ПРИКАЗ", 260, 190, 0, 5, 0x0Fu, false, 5, 0, 25, -1, true},
@@ -155,7 +155,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 91;
+static constexpr int PATCH_NOTES_COUNT = 92;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -513,6 +513,9 @@ struct SaveData {
     uint32_t campaignMissionsDone = 0;
     // v7: bit (act-1) = the opening scene of that act has been shown.
     uint32_t seenActIntros = 0;
+    // v7 (tail): сколько раз кампания начиналась заново через «НОВАЯ НОЧЬ».
+    // Каждый ресет очищает маску дел и умножает золото в делах кампании.
+    int campaignCycle = 0;
 };
 
 struct UIButton {
@@ -604,6 +607,12 @@ struct Game {
         messages.missingClips = voiceMissing;
     }
     bool debugOverlay = false;     // F3 technical read-out
+    // Дебаг-меню (F9). Открывается только по коду v404, чтобы его нельзя было
+    // включить случайным нажатием и испортить себе прогресс.
+    bool cheatPromptOpen = false;  // ввод кода
+    bool cheatMenuOpen = false;    // само меню
+    std::string cheatCode;
+    bool cheatGodMode = false;
     float fpsSmooth = 60.0f;
     float frameMsSmooth = 16.7f;
     int debugPeakEntities = 0;
@@ -770,7 +779,7 @@ struct Game {
         sound.setVoiceEnabled(options.messageSpeechEnabled != 0);
         refreshVoiceStats();
         loadSave();
-        initRun(0);
+        initRun(0, false);
         patchNotesPage = PATCH_NOTES_COUNT - 1;
         state = options.patchNotesHiddenVersion == PATCH_NOTES_VERSION ? STATE_MENU : STATE_PATCH_NOTES;
     }
@@ -1067,13 +1076,45 @@ struct Game {
         return CAMPAIGN_MISSIONS[std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, selectedStoryMission))];
     }
 
+    // ── Ветки ───────────────────────────────────────────────────────────────────
+    // Четыре пары дел — это выбор, а не два обязательных шага. Раньше вторая ветка
+    // требовалась как пререквизит, поэтому игрок проходил обе подряд, не выбирая.
+    static int campaignBranchSibling(int mission) {
+        static const int pairs[4][2] = {{4, 5}, {8, 9}, {15, 16}, {22, 23}};
+        for (int i = 0; i < 4; ++i) {
+            if (pairs[i][0] == mission) return pairs[i][1];
+            if (pairs[i][1] == mission) return pairs[i][0];
+        }
+        return -1;
+    }
+    static bool isCampaignBranchMission(int mission) { return campaignBranchSibling(mission) >= 0; }
+    // Ветка закрыта, если брат по паре уже пройден: один след на прохождение.
+    bool isCampaignMissionLockedByBranch(int mission) const {
+        const int sibling = campaignBranchSibling(mission);
+        return sibling >= 0 && isCampaignMissionCompleted(sibling);
+    }
+    // «×2 золота» после первого ресета, дальше ×3 и ×4 — но не больше.
+    int campaignGoldMultiplier() const {
+        if (gameMode != MODE_STORY) return 1;
+        return 1 + std::max(0, std::min(3, save.campaignCycle));
+    }
+    void awardGold(int amount) {
+        if (amount == 0) return;
+        const int scaled = amount * campaignGoldMultiplier();
+        save.gold += scaled;
+        runGold += scaled;
+    }
+
     bool isCampaignMissionUnlocked(int mission) const {
         if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return false;
         const CampaignMissionDef& def = CAMPAIGN_MISSIONS[mission];
+        if (isCampaignMissionLockedByBranch(mission)) return false; // второй след уже не выбрать
         if (def.prereqA < 0) return true; // the case that opens an act is always reachable
-        if (!isCampaignMissionCompleted(def.prereqA)) return false;
-        if (def.prereqB >= 0 && !isCampaignMissionCompleted(def.prereqB)) return false;
-        return true;
+        // Два пререквизита — развилка: достаточно ЛЮБОГО из них. Так пара
+        // «ВЕТКА А / ВЕТКА Б» действительно выбирается, а не проходится целиком.
+        if (isCampaignMissionCompleted(def.prereqA)) return true;
+        if (def.prereqB >= 0 && isCampaignMissionCompleted(def.prereqB)) return true;
+        return false;
     }
 
     // Which case actually opens this one — used by the dossier line "нужно закрыть дело №".
@@ -1933,7 +1974,7 @@ struct Game {
         superResolvingUltimate = false;
     }
 
-    void initRun(int heroIdx) {
+    void initRun(int heroIdx, bool speakBanners = true) {
         selectedHero = std::max(0, std::min(4, heroIdx));
         runTime = 0.0f;
         resonatorSpawnTimer = 22.0f;
@@ -1953,6 +1994,11 @@ struct Game {
         sound.musicTempoTier.store(0,std::memory_order_relaxed);
         breakthroughEscalation = 0.0f;
         currentRunChapter = gameMode == MODE_STORY ? selectedCampaignMission().chapter : 0;
+        // Разным боям — разная музыка: в кампании запись выбирается по номеру дела
+        // (одно и то же дело всегда звучит одинаково), в эндлесе — случайный плейлист,
+        // который переключается на следующий трек, когда предыдущий доиграл.
+        sound.musicVariantSeed.store(gameMode == MODE_STORY ? selectedStoryMission + 1 : -1);
+        sound.musicShuffle.store(gameMode == MODE_ENDLESS);
         bossTrioStarted = false; bossTrioSpawned = trioBossesDefeated = 0;
         storyMissionBossSpawned = false; missionCompletePending = false;
         buildTierUpTimer = 0.0f; buildTierUpValue = 1;
@@ -2003,7 +2049,14 @@ struct Game {
         memset(itemLevels, 0, sizeof(itemLevels));
         memset(evolvedWeapons, 0, sizeof(evolvedWeapons));
         superCharge = 0.0f; superActive = false; superTimer = 0.0f;
-        if (gameMode == MODE_STORY) {
+        if (!speakBanners) {
+            // Игра готовит сцену для меню: озвучка и плашки боя здесь не звучат.
+            // Раньше init() вызывал полноценный initRun(0), и при запуске игры ещё до
+            // меню звучало «Пепел после бури… Дозор не отвечает».
+            difficultyBanner.clear();
+            difficultyBannerTimer = 0.0f;
+            pendingObjectiveVoiceTimer = 0.0f;
+        } else if (gameMode == MODE_STORY) {
             // When this case has its own recording, the generic "миссия начинается" line
             // stays silent so it cannot clip the narration by a fraction of a second.
             const bool ownNarration = sound.voice.hasClip(missionBriefKey(selectedStoryMission));
@@ -2442,21 +2495,28 @@ struct Game {
         const float len = std::max(0.001f, sqrtf(dirX * dirX + dirY * dirY));
         dirX /= len; dirY /= len;
         const int count = 8 + rand() % 5;
-        // The line is perpendicular to the travel direction, so the pack reads as a wave.
-        const float perpX = -dirY, perpY = dirX;
+        // Стая — это кучка, а не шеренга: раньше крысы вставали на перпендикулярную
+        // линию с шагом 34 px и читались как строй. Теперь точки берутся в круге
+        // радиусом ~54 px вокруг точки входа, с плотным ядром и редкими отставшими.
+        const float packR = 54.0f;
         for (int i = 0; i < count; ++i) {
             const size_t before = monsters.size();
             spawnMonster(RAT_ENEMY_TYPE, false, false);
             if (monsters.size() == before) continue;
             Monster& rat = monsters.back();
-            const float offset = (i - (count - 1) * 0.5f) * 34.0f;
-            const float jitter = ((rand() % 21) - 10) * 0.8f;
-            rat.x = startX + perpX * offset + dirX * jitter;
-            rat.y = startY + perpY * offset + dirY * jitter;
-            rat.ratDirX = dirX; rat.ratDirY = dirY;
+            // Золотой угол даёт равномерное заполнение, не слипаясь в одну точку.
+            const float ang = i * 2.39996323f + ((rand() % 100) / 100.0f) * 0.4f;
+            const float rad = packR * sqrtf((i + 0.6f) / count) * (0.75f + ((rand() % 100) / 100.0f) * 0.5f);
+            rat.x = startX + cosf(ang) * rad;
+            rat.y = startY + sinf(ang) * rad * 0.8f;
+            const float scatter = ((rand() % 100) / 100.0f - 0.5f) * 0.16f;
+            const float cs = cosf(scatter), sn = sinf(scatter);
+            rat.ratDirX = dirX * cs - dirY * sn;
+            rat.ratDirY = dirX * sn + dirY * cs;
             rat.ratLife = 6.5f;
-            rat.ratPhase = (rand() % 100) * 0.1f;
-            rat.facing = dirX >= 0.0f ? 1 : -1;
+            rat.ratPhase = (rand() % 200) * 0.1f;
+            rat.facing = rat.ratDirX >= 0.0f ? 1 : -1;
+            rat.ratHeading = atan2f(rat.ratDirY, rat.ratDirX);
         }
     }
 
@@ -2711,7 +2771,7 @@ struct Game {
         if (huntPackRemaining <= 0) {
             huntActive = false;
             const int bounty = 40 + (int)runTime / 10;
-            save.gold += bounty; runGold += bounty;
+            awardGold(bounty);
             addFloatingText(playerX, playerY - 60.0f, "СТАЯ УНИЧТОЖЕНА", 0xFFFFD874, true);
             spawnParticles(playerX, playerY, 30, 0xFFFFD874, 180.0f, 4, true);
             announce(GMSG_HUNT_CLEARED, "СТАЯ УНИЧТОЖЕНА: НАГРАДА ЗАБРАНА", 3.0f);
@@ -2797,8 +2857,7 @@ struct Game {
             }
         }
         chestBonusGold = (int)roundf((45 + (rand() % 45)) * getGoldMultiplier());
-        runGold += chestBonusGold;
-        save.gold += chestBonusGold;
+        awardGold(chestBonusGold);
         writeSave();
         state = STATE_CHEST;
     }
@@ -2806,7 +2865,7 @@ struct Game {
     // One recorded line per case that needs a spoken cue beyond the scheduled briefing.
     void speakMissionFlavour(int mission) {
         const CampaignMissionDef& def = CAMPAIGN_MISSIONS[std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, mission))];
-        if (def.kind == 3) speakOnly(GMSG_STORY_BRANCH, "Выбор ветки. Второй след всё равно придётся пройти.");
+        if (def.kind == 3) speakOnly(GMSG_STORY_BRANCH, "Выбор ветки. Один след останется непройденным.");
         else if (mission == 0) speakOnly(GMSG_STORY_NO_NAME, "Свидетель без имени. В реестре такой строки нет.");
         else if (def.kind == 2) speakOnly(GMSG_STORY_COPY_WARNING, "Это копия. Она отвечает лучше оригинала.");
     }
@@ -3435,7 +3494,7 @@ struct Game {
                     addShockwave(playerX, playerY, 320.0f, 0xFFFFD878, 0.82f);
                 }
                 int bossGold = (int)roundf((180 + m.bossType * 120) * getGoldMultiplier());
-                save.gold += bossGold; runGold += bossGold;
+                awardGold(bossGold);
                 if (gameMode == MODE_STORY && !m.isTrioBoss && CAMPAIGN_MISSIONS[selectedStoryMission].kind != 1 && m.bossType < 4) {
                     static const char* sealLines[4] = {
                         "МОРГАР: «Я ОХРАНЯЛ ПРИКАЗ, А НЕ ЛЮДЕЙ». ПЕЧАТЬ I — ДОЛГ.",
@@ -3893,8 +3952,7 @@ struct Game {
     void extractThroughPortal() {
         if (state != STATE_PLAYING) return;
         const int bonus = std::max(0, (int)roundf(runGold * 0.50f));
-        save.gold += bonus;
-        runGold += bonus;
+        awardGold(bonus);
         recordRunEnd();
         writeSave();
         // announce() only speaks when the banner has a duration; the old 0.0f here meant the
@@ -3905,6 +3963,7 @@ struct Game {
     }
 
     void updatePlaying(float dt) {
+        if (cheatGodMode) playerHp = playerMaxHp;   // дебаг-чит: бессмертие
         const float framePlayerStartX = playerX;
         const float framePlayerStartY = playerY;
         runTime += dt;
@@ -4523,9 +4582,12 @@ struct Game {
                 m.y += ry * speed * dt;
                 m.ratHeading = atan2f(m.ratDirY, m.ratDirX) + weave; // the body turns where it goes
                 m.facing = rx >= 0.0f ? 1 : -1;
-                const bool farAway = fabsf(m.x - playerX) > SCREEN_W * 0.5f + 180.0f ||
-                                     fabsf(m.y - playerY) > SCREEN_H * 0.5f + 180.0f;
-                if (m.ratLife <= 0.0f && farAway) { m.hp = 0.0f; }
+                // Крыса, убежавшая далеко от героя, больше не участвует в бою: иначе она
+                // живёт до конца таймера за краем экрана и занимает место в лимите.
+                const float awayX = fabsf(m.x - playerX), awayY = fabsf(m.y - playerY);
+                const bool farAway = awayX > SCREEN_W * 0.5f + 180.0f || awayY > SCREEN_H * 0.5f + 180.0f;
+                const bool tooFar = sqrtf(awayX * awayX + awayY * awayY) > std::max(SCREEN_W, SCREEN_H) * 0.9f;
+                if (farAway && (m.ratLife <= 0.0f || tooFar)) { m.hp = 0.0f; }
                 if (dist <= m.radius + 14.0f && dashTimer > 0.0f) registerDashEvade();
                 if (dist <= m.radius + 14.0f && dashTimer <= 0.0f && playerHurtTimer <= 0.0f) {
                     float dmg = applyVeilMitigation(std::max(2.0f, m.damage * getSublevelEnemyDamageMultiplier() - getArmor()));
@@ -4784,9 +4846,8 @@ struct Game {
                     sound.play(SFX_GEM, 0.22f);
                 } else if (p.type == 3) {
                     // Gold Coin
-                    int goldValue = (int)roundf(p.value * getGoldMultiplier());
-                    runGold += goldValue;
-                    save.gold += goldValue;
+                    const int goldValue = (int)roundf(p.value * getGoldMultiplier());
+                    awardGold(goldValue);
                     sound.play(SFX_GEM, 0.22f);
                     char buf[32];
                     snprintf(buf, sizeof(buf), "+%d ЗОЛ", p.value);
@@ -6849,30 +6910,82 @@ struct Game {
         r.drawTextCentered(FONT_MED, cx, cy + 8, "Души павших остаются в Кузнице...", 0xFFE8D8F0);
     }
 
+    // Финал: что именно игрок сделал с копией, и мораль дела.
+    // Плюс «НОВАЯ НОЧЬ»: второй проход по всем актам с ×N золота и другой веткой.
+    void beginNewCampaignCycle() {
+        save.campaignCycle = std::min(3, save.campaignCycle + 1);
+        save.campaignMissionsDone = 0;
+        save.storySealMask = 0;
+        save.storyEntryMask = 0;
+        save.storyChapter = 0;
+        save.bossesDefeated = 0;
+        save.seenActIntros = 0;
+        writeSave();
+        sound.play(SFX_LEVELUP, 0.05f);
+        openStoryMissionSelect();
+    }
+
     void renderCampaignEnding(Renderer& r) {
         renderSubmenuFrame(r, "СЮЖЕТ ЗАВЕРШЁН", "ПАМЯТЬ ВОЗВРАЩЕНА", 0xFF9FE5A4);
-        if (SCREEN_W < 1200) r.drawTextWrapped(FONT_MED, 40, 154, SCREEN_W - 80, "Ты освободил записи; умершие не вернулись, но живые снова могут помнить.", 0xFFE8F0E7, false);
-        else r.drawTextCentered(FONT_MED, SCREEN_W / 2, 154, "Ты освободил записи; умершие не вернулись, но живые снова могут помнить.", 0xFFE8F0E7);
-        char buf[128];
-        snprintf(buf, sizeof(buf), "ВРЕМЯ %02d:%02d   •   УБИЙСТВ %d   •   БОССОВ В ЭТОМ ЗАБЕГЕ %d", (int)runTime / 60, (int)runTime % 60, kills, runBossKills);
-        r.drawTextCentered(FONT_MED, SCREEN_W / 2, 300, buf, 0xFFFFE078);
-        snprintf(buf, sizeof(buf), "ЗОЛОТО В КАЗНЕ: %d   •   ЛУЧШЕЕ ВРЕМЯ: %02d:%02d", save.gold, save.bestTimeSec / 60, save.bestTimeSec % 60);
-        r.drawTextCentered(FONT_MED, SCREEN_W / 2, 344, buf, 0xFFFFD858);
+        // Два финала вместо одного: выбор в акте IV меняет последнюю строку.
+        const bool keptCopy = isCampaignMissionCompleted(22);
+        const bool burnedCopy = isCampaignMissionCompleted(23);
+        const char* epilogue[3];
+        if (keptCopy) {
+            epilogue[0] = "Копия осталась в архиве — как запись, а не как человек. Ты подписал её своим именем и запретил отвечать за тебя.";
+            epilogue[1] = "Резервный приказ отменён. Архив больше не повторяет последние секунды умерших: он хранит их открыто и молчит.";
+            epilogue[2] = "«Мы не вернули их. Мы вернули себе право помнить» — и право наконец перестать слушать запись.";
+        } else if (burnedCopy) {
+            epilogue[0] = "Копия сгорела вместе с приказом. В архиве стало на один голос меньше — и впервые за ночь стало тихо.";
+            epilogue[1] = "Имена вернулись в общую книгу. Погибшие не вернулись, но их больше не заставляют говорить.";
+            epilogue[2] = "«Забыть — не преступление. Преступление — решать за других, что они должны помнить».";
+        } else {
+            epilogue[0] = "Приказ отменён. Архив хранит копии, но больше не выдаёт их за людей.";
+            epilogue[1] = "Умершие не вернулись. Живые снова могут помнить их без разрешения машины.";
+            epilogue[2] = "«Мы не вернули их. Мы вернули себе право помнить».";
+        }
         const bool portraitEnding = SCREEN_W < SCREEN_H;
-        const int bw = portraitEnding ? std::min(320, (SCREEN_W - 60) / 2) : 320, bh = 56;
-        const int gap = 20, by = portraitEnding ? SCREEN_H - 96 : 460;
-        const int bx = portraitEnding ? (SCREEN_W - (2 * bw + gap)) / 2 : 290;
-        bool menuHov = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
-        r.fillRoundedRect(bx, by, bw, bh, 10, menuHov ? 0xFF385B40 : 0xFF23402D);
-        r.drawRoundedRect(bx, by, bw, bh, 10, 0xFF9FE5A4, 2);
-        r.drawTextCentered(FONT_MED, bx + bw / 2, by + 16, "В МЕНЮ", 0xFFFFFFFF);
-        const int ex = portraitEnding ? bx + bw + gap : 670;
-        bool endlessHov = mouseX >= ex && mouseX <= ex + bw && mouseY >= by && mouseY <= by + bh;
-        r.fillRoundedRect(ex, by, bw, bh, 10, endlessHov ? 0xFF286B82 : 0xFF1D455C);
-        r.drawRoundedRect(ex, by, bw, bh, 10, 0xFF8DEEFF, 2);
-        r.drawTextCentered(FONT_MED, ex + bw / 2, by + 16, "БЕСКОНЕЧНЫЙ РЕЖИМ", 0xFFFFFFFF);
-        if (mouseClicked && menuHov) state = STATE_MENU;
-        else if (mouseClicked && endlessHov) { gameMode = MODE_ENDLESS; startSelectedRun(); }
+        int y = 150;
+        for (int i = 0; i < 3; ++i) {
+            const uint32_t color = i == 2 ? 0xFFFFE07A : 0xFFE8F0E7;
+            const BakedFont& font = i == 2 ? FONT_MED : FONT_SMALL;
+            if (SCREEN_W < 1200) {
+                r.drawTextWrapped(font, 40, y, SCREEN_W - 80, epilogue[i], color, false);
+                y += i == 2 ? 46 : 40;
+            } else {
+                r.drawTextCentered(font, SCREEN_W / 2, y, epilogue[i], color);
+                y += i == 2 ? 40 : 30;
+            }
+        }
+        char buf[160];
+        snprintf(buf, sizeof(buf), "ВРЕМЯ %02d:%02d   •   УБИЙСТВ %d   •   БОССОВ В ЭТОМ ЗАБЕГЕ %d   •   ЗОЛОТО В КАЗНЕ %d",
+                 (int)runTime / 60, (int)runTime % 60, kills, runBossKills, save.gold);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, y + 18, buf, 0xFFFFD858, false);
+        const int nextMultiplier = std::min(4, 1 + std::min(3, save.campaignCycle) + 1);
+        snprintf(buf, sizeof(buf), "НОВАЯ НОЧЬ: все дела заново, другой след, золото в делах ×%d", nextMultiplier);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, y + 40, buf, 0xFFB9E7FF, false);
+
+        const int bw = portraitEnding ? std::min(320, (SCREEN_W - 60) / 2) : 300, bh = 56;
+        const int gap = 18, by = portraitEnding ? SCREEN_H - 96 : 470;
+        const int totalW = 3 * bw + 2 * gap;
+        const int bx = (SCREEN_W - totalW) / 2;
+        struct { const char* label; int id; } buttons[3] = {
+            {"НОВАЯ НОЧЬ", 0}, {"В МЕНЮ", 1}, {"БЕСКОНЕЧНЫЙ РЕЖИМ", 2}
+        };
+        for (int i = 0; i < 3; ++i) {
+            const int x = bx + i * (bw + gap);
+            const bool hov = mouseX >= x && mouseX <= x + bw && mouseY >= by && mouseY <= by + bh;
+            const uint32_t fill = i == 0 ? (hov ? 0xFF4B3672 : 0xFF2E2350) : (i == 1 ? (hov ? 0xFF385B40 : 0xFF23402D) : (hov ? 0xFF286B82 : 0xFF1D455C));
+            const uint32_t edge = i == 0 ? 0xFFFFD858 : (i == 1 ? 0xFF9FE5A4 : 0xFF8DEEFF);
+            r.fillRoundedRect(x, by, bw, bh, 10, fill);
+            r.drawRoundedRect(x, by, bw, bh, 10, edge, 2);
+            r.drawTextCentered(FONT_MED, x + bw / 2, by + 16, buttons[i].label, 0xFFFFFFFF);
+            if (mouseClicked && hov) {
+                if (buttons[i].id == 0) beginNewCampaignCycle();
+                else if (buttons[i].id == 1) state = STATE_MENU;
+                else { gameMode = MODE_ENDLESS; openHeroSelectForMode(MODE_ENDLESS); }
+            }
+        }
     }
 
     void renderExtractionScreen(Renderer& r) {
@@ -7184,27 +7297,52 @@ struct Game {
         drawCampaignActTabs(r, x, 172, listW, 32);
         const int listY = 210;
         const int rowH = compactPortrait ? 36 : 40, rowGap = 3;
-        for (int slot = 0; slot < CAMPAIGN_ACT_MAX_ROWS; ++slot) {
-            const int i = campaignActMissionAt(campaignActView, slot);
-            if (i < 0) break;
+        // Ветки в портрете — та же развилка, только уже: пара сдвинута вправо и
+        // соединена вилкой, чтобы альтернативы не читались как «одна за другой».
+        const int pActRows = campaignActMissionCount(campaignActView);
+        const int pIndent = 22;
+        auto drawPortraitRow = [&](int i, int slot, int cardX, int cardW, bool inBranch) {
             const int y = listY + slot * (rowH + rowGap);
             const CampaignMissionDef& mission = CAMPAIGN_MISSIONS[i];
             const bool unlocked = isCampaignMissionUnlocked(i), completed = isCampaignMissionCompleted(i);
+            const bool branchLocked = isCampaignMissionLockedByBranch(i);
             const bool focused = storyMissionCursor == i;
-            const bool hovered = mouseX >= x && mouseX <= x + listW && mouseY >= y && mouseY <= y + rowH;
+            const bool hovered = mouseX >= cardX && mouseX <= cardX + cardW && mouseY >= y && mouseY <= y + rowH;
             const uint32_t accent = getCampaignAccent(i);
             const uint32_t edge = focused ? 0xFFFFD858 : (completed ? 0xFF69E0A0 : (unlocked ? accent : 0xFF554E60));
-            r.fillRect(x, y, listW, rowH, focused ? 0xFF342343 : (hovered ? 0xFF282037 : 0xFF181421));
-            r.drawRect(x, y, listW, rowH, edge, focused ? 2 : 1);
+            r.fillRect(cardX, y, cardW, rowH, focused ? 0xFF342343 : (hovered ? 0xFF282037 : 0xFF181421));
+            r.drawRect(cardX, y, cardW, rowH, edge, focused ? 2 : 1);
             char num[8]; snprintf(num, sizeof(num), "%02d", i + 1);
-            r.drawTextCentered(FONT_SMALL, x + 31, y + 4, num, completed ? 0xFFB8FFD1 : (unlocked ? 0xFFFFE9BC : 0xFF8A8490), false);
-            const int portraitMaxW = listW - 58 - 96;
-            r.drawText(FONT_MED, x + 58, y + 2, fitText(r, FONT_MED, mission.title, portraitMaxW).c_str(), unlocked ? 0xFFFFE8BA : 0xFFAAA4B0, false);
-            r.drawText(FONT_SMALL, x + 58, y + rowH - 14,
+            r.drawTextCentered(FONT_SMALL, cardX + 31, y + 4, num, completed ? 0xFFB8FFD1 : (unlocked ? 0xFFFFE9BC : 0xFF8A8490), false);
+            const int portraitMaxW = cardW - 58 - 96;
+            r.drawText(FONT_MED, cardX + 58, y + 2, fitText(r, FONT_MED, mission.title, portraitMaxW).c_str(), unlocked ? 0xFFFFE8BA : 0xFFAAA4B0, false);
+            r.drawText(FONT_SMALL, cardX + 58, y + rowH - 14,
                        fitText(r, FONT_SMALL, mission.subtitle, portraitMaxW).c_str(), unlocked ? accent : 0xFF8B8492, false);
-            if (completed) r.drawTextRight(FONT_SMALL, x + listW - 12, y + 4, "ПРОЙДЕНА", 0xFF8AF0AE, false);
-            else if (!unlocked) r.drawTextRight(FONT_SMALL, x + listW - 12, y + 4, "ЗАКРЫТА", 0xFFAAA4B0, false);
+            if (completed) r.drawTextRight(FONT_SMALL, cardX + cardW - 12, y + 4, "ПРОЙДЕНА", 0xFF8AF0AE, false);
+            else if (branchLocked) r.drawTextRight(FONT_SMALL, cardX + cardW - 12, y + 4, "ИНАЯ ВЕТКА", 0xFFAAA4B0, false);
+            else if (!unlocked) r.drawTextRight(FONT_SMALL, cardX + cardW - 12, y + 4, "ЗАКРЫТА", 0xFFAAA4B0, false);
+            if (inBranch) {
+                const bool second = campaignBranchSibling(i) < i;
+                r.drawText(FONT_SMALL, cardX - 16, y + 4, second ? "Б" : "А", focused ? 0xFFFFD858 : 0xFFB9A9DC, false);
+            }
             if (mouseClicked && hovered) { storyMissionCursor = i; selectedStoryMission = i; sound.play(SFX_CLICK, 0.02f); }
+        };
+        for (int slot = 0; slot < pActRows; ++slot) {
+            const int i = campaignActMissionAt(campaignActView, slot);
+            if (i < 0) break;
+            const int sibling = (slot + 1 < pActRows) ? campaignActMissionAt(campaignActView, slot + 1) : -1;
+            const bool pair = sibling >= 0 && campaignBranchSibling(i) == sibling;
+            if (!pair) { drawPortraitRow(i, slot, x, listW, false); continue; }
+            const int cardX = x + pIndent, cardW = listW - pIndent;
+            const int yA = listY + slot * (rowH + rowGap) + rowH / 2;
+            const int yB = listY + (slot + 1) * (rowH + rowGap) + rowH / 2;
+            const int spineX = x + 7;
+            r.drawLine(spineX, yA - rowH / 2 - rowGap, spineX, yB, 0xFF6C5A96, 2, 215, false);
+            r.drawLine(spineX, yA, cardX - 4, yA, 0xFF6C5A96, 2, 215, false);
+            r.drawLine(spineX, yB, cardX - 4, yB, 0xFF6C5A96, 2, 215, false);
+            drawPortraitRow(i, slot, cardX, cardW, true);
+            drawPortraitRow(sibling, slot + 1, cardX, cardW, true);
+            ++slot;
         }
 
         const int selected = std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, storyMissionCursor));
@@ -7222,7 +7360,7 @@ struct Game {
         drawMissionIllustration(r, selected, detailX + 8, detailY + 8, detailW - 16, imageH);
         r.drawText(FONT_SMALL, detailX + 16, subtitleY, mission.subtitle, accent, false);
         r.drawTextRight(FONT_SMALL, detailX + detailW - 14, subtitleY,
-            completed ? "ПРОЙДЕНА" : (unlocked ? "ДОСТУПНА" : "ЗАКРЫТА"), 
+            completed ? "ПРОЙДЕНА" : (unlocked ? "ДОСТУПНА" : (isCampaignMissionLockedByBranch(selected) ? "ИНАЯ ВЕТКА" : "ЗАКРЫТА")), 
             completed ? 0xFF8AF0AE : (unlocked ? 0xFFFFD17C : 0xFFB5AFBA), false);
         r.drawText(FONT_MED, detailX + 16, titleY, mission.title, 0xFFFFE4A8, false);
         r.drawTextWrapped(FONT_SMALL, detailX + 16, briefingY, detailW - 32, mission.briefing, 0xFFE1D9EC, false);
@@ -7275,7 +7413,11 @@ struct Game {
             r.drawRoundedRect(sx, 91, 16, 12, 4, i < seals ? 0xFFB6FFD0 : 0xFF6C6177, 1);
         }
         char progress[96];
-        snprintf(progress, sizeof(progress), "ДЕЛ ЗАКРЫТО %d / %d", completedCount, CAMPAIGN_MISSION_COUNT);
+        if (save.campaignCycle > 0)
+            snprintf(progress, sizeof(progress), "ДЕЛ ЗАКРЫТО %d / %d • НОВАЯ НОЧЬ %d • ЗОЛОТО ×%d",
+                     completedCount, CAMPAIGN_MISSION_COUNT, save.campaignCycle, campaignGoldMultiplier());
+        else
+            snprintf(progress, sizeof(progress), "ДЕЛ ЗАКРЫТО %d / %d", completedCount, CAMPAIGN_MISSION_COUNT);
         r.drawText(FONT_SMALL, 360, 90, progress, 0xFFE4D7B5);
         r.drawTextRight(FONT_SMALL, SCREEN_W - 22, 90, "Q / E — АКТ", 0xFFBFB5D0);
 
@@ -7284,54 +7426,82 @@ struct Game {
         const bool compactLandscape = SCREEN_W < 1120;
         const int listX = compactLandscape ? 16 : 40, listY = 162;
         const int listW = compactLandscape ? 310 : 380, rowH = 58, rowGap = 6;
-        for (int slot = 0; slot < CAMPAIGN_ACT_MAX_ROWS; ++slot) {
-            const int i = campaignActMissionAt(campaignActView, slot);
-            if (i < 0) break;
+        // ── Ветки выглядят ветками ─────────────────────────────────────────────
+        // Раньше дела-альтернативы шли обычной строкой друг под другом и читались как
+        // «сначала одно, потом другое». Теперь пара рисуется развилкой: обе карточки
+        // сдвинуты вправо, в жёлобе слева стоит вилка, на карточках метки А и Б.
+        const int branchIndent = 34;
+        auto drawRow = [&](int i, int slot, int cardX, int cardW, bool inBranch) {
             const CampaignMissionDef& mission = CAMPAIGN_MISSIONS[i];
             const int rowY = listY + slot * (rowH + rowGap);
             const bool unlocked = isCampaignMissionUnlocked(i);
             const bool completed = isCampaignMissionCompleted(i);
+            const bool branchLocked = isCampaignMissionLockedByBranch(i);
             const bool focused = storyMissionCursor == i;
-            const bool hovered = mouseX >= listX && mouseX <= listX + listW && mouseY >= rowY && mouseY <= rowY + rowH;
+            const bool hovered = mouseX >= cardX && mouseX <= cardX + cardW && mouseY >= rowY && mouseY <= rowY + rowH;
             const uint32_t accent = getCampaignAccent(i);
             const uint32_t border = focused ? 0xFFFFD858 : (completed ? 0xFF69E0A0 : (unlocked ? accent : 0xFF554E60));
             const uint32_t fill = focused ? 0xFF342343 : (hovered ? 0xFF282037 : 0xFF181421);
-            r.fillRoundedRect(listX, rowY, listW, rowH, 9, fill);
-            r.drawRoundedRect(listX, rowY, listW, rowH, 9, border, focused ? 3 : 2);
-            r.fillRoundedRect(listX + 9, rowY + 9, 4, rowH - 18, 2, completed ? 0xFF69E0A0 : (unlocked ? accent : 0xFF514A58));
+            r.fillRoundedRect(cardX, rowY, cardW, rowH, 9, fill);
+            r.drawRoundedRect(cardX, rowY, cardW, rowH, 9, border, focused ? 3 : 2);
+            r.fillRoundedRect(cardX + 9, rowY + 9, 4, rowH - 18, 2, completed ? 0xFF69E0A0 : (unlocked ? accent : 0xFF514A58));
 
             char number[8];
             snprintf(number, sizeof(number), "%02d", i + 1);
             const uint32_t numberFill = completed ? 0xFF24543D : (unlocked ? 0xFF30233D : 0xFF24212A);
-            r.fillRoundedRect(listX + 18, rowY + 12, 34, 34, 8, numberFill);
-            r.drawRoundedRect(listX + 18, rowY + 12, 34, 34, 8, border, 1);
-            r.drawTextCentered(FONT_SMALL, listX + 35, rowY + 21, number, completed ? 0xFFB8FFD1 : (unlocked ? 0xFFFFE9BC : 0xFF8A8490), false);
+            r.fillRoundedRect(cardX + 18, rowY + 12, 34, 34, 8, numberFill);
+            r.drawRoundedRect(cardX + 18, rowY + 12, 34, 34, 8, border, 1);
+            r.drawTextCentered(FONT_SMALL, cardX + 35, rowY + 21, number, completed ? 0xFFB8FFD1 : (unlocked ? 0xFFFFE9BC : 0xFF8A8490), false);
 
             const uint32_t titleColor = unlocked ? 0xFFFFE8BA : 0xFFAAA4B0;
-            const char* statusWord = completed ? "ЗАКРЫТО" : (unlocked ? "ДОСТУПНО" : "ЗАКРЫТА");
+            const char* statusWord = completed ? "ЗАКРЫТО" : (unlocked ? "ДОСТУПНО" : (branchLocked ? "ИНАЯ ВЕТКА" : "ЗАКРЫТА"));
             const uint32_t statusTint = completed ? 0xFFB8FFD1 : (unlocked ? 0xFFFFDEA0 : 0xFFC1BBC6);
-            // The list column is narrow, so the title wins over the status word: if the
-            // title does not fit next to a status word, the word is dropped entirely and
-            // the saved width goes to the title. State is still readable — the border,
-            // the left stripe and the number badge all carry it.
-            const int roomNoStatus = listW - 60 - 12;
+            const int roomNoStatus = cardW - 60 - 12;
             const int roomWithStatus = roomNoStatus - r.textWidth(FONT_SMALL, statusWord) - 14;
             const bool showStatus = r.textWidth(FONT_SMALL, mission.title) <= roomWithStatus;
             const int textMaxW = showStatus ? roomWithStatus : roomNoStatus;
-            // Long case titles drop to the small font instead of losing half the words.
             const BakedFont& titleFont = (!compactLandscape && r.textWidth(FONT_MED, mission.title) <= textMaxW)
                                        ? FONT_MED : FONT_SMALL;
-            r.drawText(titleFont, listX + 60, rowY + 6, fitText(r, titleFont, mission.title, textMaxW).c_str(), titleColor, false);
-            r.drawText(FONT_SMALL, listX + 60, rowY + 34,
+            r.drawText(titleFont, cardX + 60, rowY + 6, fitText(r, titleFont, mission.title, textMaxW).c_str(), titleColor, false);
+            r.drawText(FONT_SMALL, cardX + 60, rowY + 34,
                        fitText(r, FONT_SMALL, mission.subtitle, textMaxW).c_str(), unlocked ? accent : 0xFF8B8492, false);
             if (showStatus)
-                r.drawTextRight(FONT_SMALL, listX + listW - 10, rowY + 8, statusWord, statusTint, false);
-
+                r.drawTextRight(FONT_SMALL, cardX + cardW - 10, rowY + 8, statusWord, statusTint, false);
+            if (inBranch) {
+                const bool second = campaignBranchSibling(i) < i;
+                const char* tag = second ? "Б" : "А";
+                const int tagX = cardX - 26;
+                r.fillRoundedRect(tagX, rowY + rowH / 2 - 12, 20, 24, 6, focused ? 0xFF4A3A72 : 0xFF2A2438);
+                r.drawRoundedRect(tagX, rowY + rowH / 2 - 12, 20, 24, 6, border, 1);
+                r.drawTextCentered(FONT_SMALL, tagX + 10, rowY + rowH / 2 - 8, tag, completed ? 0xFFB8FFD1 : 0xFFD6CCE8, false);
+            }
             if (mouseClicked && hovered) {
                 storyMissionCursor = i;
                 selectedStoryMission = i;
                 sound.play(SFX_CLICK, 0.02f);
             }
+        };
+        const int actRows = campaignActMissionCount(campaignActView);
+        for (int slot = 0; slot < actRows; ++slot) {
+            const int i = campaignActMissionAt(campaignActView, slot);
+            if (i < 0) break;
+            const int sibling = (slot + 1 < actRows) ? campaignActMissionAt(campaignActView, slot + 1) : -1;
+            const bool pair = sibling >= 0 && campaignBranchSibling(i) == sibling;
+            if (!pair) { drawRow(i, slot, listX, listW, false); continue; }
+            const int cardX = listX + branchIndent, cardW = listW - branchIndent;
+            const int yA = listY + slot * (rowH + rowGap) + rowH / 2;
+            const int yB = listY + (slot + 1) * (rowH + rowGap) + rowH / 2;
+            const int spineX = listX + 12;
+            // Вилка: ствол сверху, две ветви к карточкам, слияние снизу.
+            r.drawLine(spineX, yA - rowH / 2 - rowGap, spineX, yB, 0xFF6C5A96, 2, 215, false);
+            r.drawLine(spineX, yA, cardX - 8, yA, 0xFF6C5A96, 2, 215, false);
+            r.drawLine(spineX, yB, cardX - 8, yB, 0xFF6C5A96, 2, 215, false);
+            r.fillCircle(spineX, yA, 3, 0xFFC7B4EE, 235);
+            r.fillCircle(spineX, yB, 3, 0xFFC7B4EE, 235);
+            r.drawLine(spineX, yB, spineX, yB + rowH / 2 + rowGap, 0xFF6C5A96, 2, 215, false);
+            drawRow(i, slot, cardX, cardW, true);
+            drawRow(sibling, slot + 1, cardX, cardW, true);
+            ++slot; // пара занимает две строки
         }
 
         const int selected = std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, storyMissionCursor));
@@ -7359,6 +7529,8 @@ struct Game {
         char statusBuf[96];
         if (completed) snprintf(statusBuf, sizeof(statusBuf), "ПРОЙДЕНА • МОЖНО ПЕРЕИГРАТЬ");
         else if (unlocked) snprintf(statusBuf, sizeof(statusBuf), "ДОСТУПНА • ЕЩЁ НЕ ПРОЙДЕНА");
+        else if (isCampaignMissionLockedByBranch(selected))
+            snprintf(statusBuf, sizeof(statusBuf), "ИНАЯ ВЕТКА • ВТОРОЙ СЛЕД — В НОВУЮ НОЧЬ");
         else snprintf(statusBuf, sizeof(statusBuf), "ЗАКРЫТА • НУЖНО ДЕЛО %02d", campaignMissingPrereq(selected) + 1);
         const char* status = statusBuf;
         const uint32_t statusColor = completed ? 0xFF8AF0AE : (unlocked ? 0xFFFFD17C : 0xFFB5AFBA);
@@ -8114,6 +8286,7 @@ struct Game {
             "2.9.95 • УБРАНЫ СТЕЧЕНИЯ СОГЛАСНЫХ",
             "2.9.96 • АУДИТ: ПЕЧАТЬ, ПОЛОСА БОССА, СПИСОК ДЕЛ",
             "2.9.97 • ПЕРЕЧИТАНЫ ДЕСЯТЬ ХУДШИХ БОЕВЫХ РЕПЛИК",
+            "2.9.98 • ВЕТКИ, НОВАЯ НОЧЬ, ФИНАЛ, ЧИТ-МЕНЮ, БОССЫ, МУЗЫКА",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -8208,6 +8381,7 @@ struct Game {
             "Остаток «акцента» лечится текстом: голос вставляет гласные на стечениях согласных.\n• «тронут штормом» звучало как «троунут штоурмоум» — теперь «Морг цел. Буря его не задела».\n• «после шторма» заменено на «после бури» в первом деле.\n• В tools/check_voice.py --stress добавлены эти два слова, чтобы такая запись не прошла проверку молча.",
             "Аудит всей игры пройден целиком: 28 дел достижимы от пустого сейва, акты открываются, стаи крыс расходятся, 12 боёв и десятиминутный забег без утечек.\n• Закрытие дела с усиленным стражем больше не ставит пятую печать: бит ставят только первые четыре стража.\n• Полоса босса у Протоколиста с «возвращением» вылезала за край на 537 px — теперь подпись сжимается до «• ВОЗВР.».\n• В списке дел «ЗАКРЫТО» наезжало на длинные названия; если места нет, статус не рисуется.\n• tools/apply_campaign.py при каждой записи добавлял лишнюю «;», поэтому его --check не проходил никогда.\n• Меню считает карту секторов один раз на разрешение: кадр 15,8 → 8,9 мс. Картинка прежняя, пиксель в пиксель.",
             "Перечитаны десять худших боевых реплик — те, где старый тракт оставлял больше всего «звона».\n• Страж приближается, Орда не отступит, Симбиоз пробуждён, Крысы идут через поле, Бесконечная ночь начинается, Стая ушла по следу, Феникс возрождает тебя, Свидетель без имени, Стая уничтожена, Подбери монеты.\n• Звон в 7–8 кГц у каждой: было 5,9–11,9 %, стало 0,00 %; высота тона 93–111 Гц — тот же рассказчик.\n• Нормализатор больше не оставляет короткую реплику тише остальных: если пик не даёт добрать громкость, работает мягкое колено.\n• В банке осталось 37 клипов старого тракта и 16 — старого голоса.",
+            "• Ветки — выбор: вторая запирается до «новой ночи» (в списке развилка А/Б).\n• После финала — НОВАЯ НОЧЬ: дела заново, другой след, золото в делах ×2.\n• Финал получил мораль и зависит от того, что ты сделал с копией.\n• Крысы идут кучкой, а не шеренгой, и исчезают, убежав далеко.\n• Оружие — квадратная пластина, артефакт — круглая; сорок разных цветов.\n• Азарот, Протоколист и Двойник перерисованы и анимированы.\n• Дела 21–28 озвучены: 28 из 28. Дело 09 перечитано, реплики громче.\n• Музыка: своя запись на каждое дело; в эндлесе случайный плейлист.\n• F9 — дебаг-меню по коду v404.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
@@ -9033,7 +9207,10 @@ struct Game {
         const int footerX = (SCREEN_W - (2 * footerW + footerGap)) / 2;
         UIButton btns[2] = {
             {footerX, footerY, footerW, 52, "НАЗАД В МЕНЮ [ESC]", 1},
-            {footerX + footerW + footerGap, footerY, footerW, 52, "СРАЗУ В БОЙ!", 2}
+            // Было «СРАЗУ В БОЙ!»: кнопка молча кидала в забег с последним героем и
+            // последним делом, поэтому было непонятно, куда именно она ведёт.
+            // Теперь путь из кузницы идёт через выбор героя, а дальше — выбор дела.
+            {footerX + footerW + footerGap, footerY, footerW, 52, "В БОЙ → ГЕРОЙ", 2}
         };
         for (int i = 0; i < 2; ++i) {
             const auto& b = btns[i];
@@ -9044,7 +9221,7 @@ struct Game {
             if (mouseClicked && hov) {
                 sound.play(SFX_CLICK, 0.02f);
                 if (b.id == 1) state = STATE_MENU;
-                else startSelectedRun();
+                else openHeroSelectForMode(MODE_STORY);
             }
         }
     }
@@ -9235,7 +9412,101 @@ struct Game {
         if (mouseClicked && ghov) { sound.play(SFX_CLICK, 0.02f); helpPage = 1; glossaryScroll = 0; }
     }
 
+    void runCheat(int id) {
+        switch (id) {
+            case 0: save.gold += 5000; break;                       // золото
+            case 1: {                                               // все дела закрыты
+                uint32_t mask = 0;
+                for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) mask |= 1u << i;
+                save.campaignMissionsDone = mask;
+                save.storySealMask = 0x0Fu;
+                save.storyEntryMask |= 0x3Fu;
+                save.seenEndingCutscene = 1;
+                break;
+            }
+            case 2: save.campaignMissionsDone = 0; save.storySealMask = 0; save.storyEntryMask = 0; break;
+            case 3: save.bossesDefeated = 5; save.storySealMask = 0x0Fu; break;   // все герои
+            case 4: for (int i = 0; i < 6; ++i) save.metaRanks[i] = 10; break;    // Кузница душ
+            case 5: cheatGodMode = !cheatGodMode; break;                          // бессмертие
+            case 6:                                                              // убить всех
+                for (auto& m : monsters) if (!m.isBoss) m.hp = 0.0f;
+                break;
+            case 7: {                                             // +5 уровней
+                for (int i = 0; i < 5; ++i) {
+                    ++playerLevel;
+                    xpToNext = getXpRequirementForLevel(playerLevel);
+                }
+                playerXp = 0;
+                if (state == STATE_PLAYING) generateUpgradeChoices();
+                break;
+            }
+            case 8: beginNewCampaignCycle(); break;                              // новая ночь (×золото)
+            default: break;
+        }
+        writeSave();
+        sound.play(SFX_CLICK, 0.05f);
+    }
+
+    void renderCheatMenu(Renderer& r) {
+        r.fillRect(0, 0, SCREEN_W, SCREEN_H, 0xFF05040A, 214);
+        const int w = std::min(560, SCREEN_W - 40), h = 420;
+        const int x = (SCREEN_W - w) / 2, y = (SCREEN_H - h) / 2;
+        r.fillRoundedRect(x, y, w, h, 12, 0xFF14101F, 250);
+        r.drawRoundedRect(x, y, w, h, 12, 0xFFFF7A83, 2);
+        if (cheatPromptOpen) {
+            r.drawTextCentered(FONT_MED, x + w / 2, y + 40, "ДЕБАГ-МЕНЮ ЗАКРЫТО НА КОД", 0xFFFFB6C0);
+            r.drawTextCentered(FONT_SMALL, x + w / 2, y + 74, "введи код и нажми Enter (Esc — отмена)", 0xFFC6BBD8, false);
+            const int fw = w - 120, fh = 46, fx = x + 60, fy = y + 120;
+            r.fillRoundedRect(fx, fy, fw, fh, 8, 0xFF0C0A14);
+            r.drawRoundedRect(fx, fy, fw, fh, 8, 0xFFFFD858, 2);
+            std::string shown = cheatCode;
+            shown.push_back('_');
+            r.drawText(FONT_MED, fx + 16, fy + 14, shown.c_str(), 0xFFFFE9BC, false);
+            r.drawTextCentered(FONT_SMALL, x + w / 2, y + 200, "F9 — открыть окно кода в любой момент", 0xFF9C93AD, false);
+            return;
+        }
+        r.drawTextCentered(FONT_MED, x + w / 2, y + 22, "ДЕБАГ-МЕНЮ [F9]", 0xFFFFD858);
+        static const char* items[9] = {
+            "+5000 ЗОЛОТА",
+            "ОТКРЫТЬ ВСЕ ДЕЛА",
+            "СБРОСИТЬ КАМПАНИЮ",
+            "ВСЕ ГЕРОИ",
+            "МАКС. КУЗНИЦА ДУШ",
+            "БЕССМЕРТИЕ (ВКЛ/ВЫКЛ)",
+            "УБИТЬ ВСЕХ ВРАГОВ",
+            "+5 УРОВНЕЙ",
+            "НОВАЯ НОЧЬ (×ЗОЛОТО)"
+        };
+        for (int i = 0; i < 9; ++i) {
+            const int iy = y + 58 + i * 34;
+            const bool hov = mouseX >= x + 24 && mouseX <= x + w - 24 && mouseY >= iy && mouseY <= iy + 28;
+            r.fillRoundedRect(x + 24, iy, w - 48, 28, 6, hov ? 0xFF3A2A56 : 0xFF1D1729);
+            r.drawRoundedRect(x + 24, iy, w - 48, 28, 6, hov ? 0xFFFFD858 : 0xFF4A3F63, 1);
+            char label[96];
+            snprintf(label, sizeof(label), "%d  %s", i + 1, items[i]);
+            r.drawText(FONT_SMALL, x + 36, iy + 7, label, 0xFFE8E1F0, false);
+            if (i == 5) r.drawTextRight(FONT_SMALL, x + w - 36, iy + 7, cheatGodMode ? "ВКЛ" : "ВЫКЛ", cheatGodMode ? 0xFF8AF0AE : 0xFF9C93AD, false);
+            if (mouseClicked && hov) runCheat(i);
+        }
+    }
+
     void onKeyPress(int key) {
+        if (cheatPromptOpen) {
+            if (key == 27) { cheatPromptOpen = false; cheatCode.clear(); }
+            else if (key == 13) {
+                if (cheatCode == "v404") { cheatMenuOpen = true; cheatPromptOpen = false; sound.play(SFX_LEVELUP, 0.05f); }
+                else { cheatCode.clear(); sound.play(SFX_HIT, 0.05f); }
+            } else if (key == 8) { if (!cheatCode.empty()) cheatCode.pop_back(); }
+            else if (key >= 'A' && key <= 'Z') cheatCode.push_back((char)(key - 'A' + 'a'));
+            else if ((key >= '0' && key <= '9') || (key >= 'a' && key <= 'z')) cheatCode.push_back((char)key);
+            return;
+        }
+        if (cheatMenuOpen) {
+            if (key == 27) { cheatMenuOpen = false; return; }
+            if (key >= '1' && key <= '9') { runCheat(key - '1'); return; }
+            return;
+        }
+        if (key == 0x78) { cheatPromptOpen = true; cheatCode.clear(); return; } // VK_F9
         if (state == STATE_MENU && exitConfirmationOpen) {
             if (key == 27) { exitConfirmationOpen = false; exitDialogFocus = 1; }
             else if (key == 37 || key == 39 || key == 38 || key == 40 || key == 'A' || key == 'a' || key == 'D' || key == 'd' || key == 'W' || key == 'w' || key == 'S' || key == 's') {
@@ -9507,6 +9778,7 @@ struct Game {
             else if (state == STATE_GAMEOVER) renderGameOverModal(r);
         }
 
+        if (cheatPromptOpen || cheatMenuOpen) renderCheatMenu(r);
         if (debugOverlay) drawDebugOverlay(r);
 
         // Custom glowing arcane cursor
