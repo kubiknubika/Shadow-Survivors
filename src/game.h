@@ -142,7 +142,7 @@ static constexpr int MONSTER_TYPE_COUNT = 11;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 76;
+static constexpr int PATCH_NOTES_COUNT = 77;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -2421,7 +2421,9 @@ struct Game {
         float shieldDx = playerX - m.x, shieldDy = playerY - m.y;
         float shieldLen = std::max(1.0f, sqrtf(shieldDx * shieldDx + shieldDy * shieldDy));
         m.shieldFacingX = shieldDx / shieldLen; m.shieldFacingY = shieldDy / shieldLen;
-        if (isBoss && (bossType == 1 || bossType == 3)) m.shieldHits = 1;
+        // Only the gate warden blocks. The others defend by moving: plague pools, a charge,
+        // a ring the player has to slip through.
+        if (isBoss && bossType == 0) m.shieldHits = 1;
         m.smartTactic = !isBoss && !isElite ? rand() % 3 : 0;
         m.isSmart = !isBoss && !isElite && !m.isMatryoshka && ((rand() % 10000) < (int)(smartSpawnChance[m.smartTactic] * 10000.0f));
         m.smartDodgeTimer = 0.0f;
@@ -4242,10 +4244,21 @@ struct Game {
                 handleBossPhaseTransition(m);
                 m.specialTimer -= dt;
                 if (m.specialTimer <= 0.0f) {
-                    const float summonInterval = std::max(3.1f, (6.2f - m.bossType * 0.65f) - 0.9f * (m.bossPhase - 1));
-                    m.specialTimer = summonInterval;
-                    pendingSummonType = (m.bossType == 0 ? 1 : (m.bossType == 1 ? 8 : (m.bossType == 2 ? 5 : 7)));
-                    pendingSummons = std::max(pendingSummons, 2 + m.bossType + (m.hp < m.maxHp * 0.5f ? 2 : 0));
+                    // Each guardian calls a different kind of help, on its own cadence:
+                    // Morgar walls himself in with shield bearers, Malakor floods the floor
+                    // with plagued slimes, the Cardinal posts archers, Azaroth raises two
+                    // heavy archive guards.
+                    int summonType = 1, summonCount = 3;
+                    float summonInterval = 6.2f;
+                    switch (m.bossType & 3) {
+                        case 0: summonType = 4; summonCount = 2; summonInterval = 7.4f; break;
+                        case 1: summonType = 2; summonCount = 4; summonInterval = 5.2f; break;
+                        case 2: summonType = 8; summonCount = 3; summonInterval = 6.4f; break;
+                        default: summonType = 7; summonCount = 2; summonInterval = 6.9f; break;
+                    }
+                    m.specialTimer = std::max(3.6f, summonInterval - 0.9f * (m.bossPhase - 1));
+                    pendingSummonType = summonType;
+                    pendingSummons = std::max(pendingSummons, summonCount + (m.hp < m.maxHp * 0.5f ? 1 : 0));
                     static const char* summonLines[4] = {
                         "МОРГАР: ВЫЗОВ СТРАЖИ ВОРОТ!",
                         "МАЛАКОР: ПРИЗЫВ ЧУМНОЙ СТАИ!",
@@ -4271,14 +4284,37 @@ struct Game {
                             if (len > 1.0f) { m.abilityDirX = tx / len; m.abilityDirY = ty / len; }
                             m.abilityActive = 0.78f;
                             spawnParticles(m.x, m.y, 20, 0xFFFF4B78, 190.0f, 4, true);
-                        } else {
-                            const float radius = m.bossType == 0 ? 150.0f : 245.0f;
-                            const float rawDamage = m.bossType == 0 ? 30.0f : 42.0f;
+                        } else if (m.bossType == 0) {
+                            // Моргар — ударная волна вокруг себя: правило «отойди из круга».
+                            const float radius = m.bossPhase >= 3 ? 190.0f : 150.0f;
                             float ax = playerX - m.x, ay = playerY - m.y;
-                            if (ax * ax + ay * ay <= radius * radius) applyBossAbilityHit(rawDamage);
-                            uint32_t c = m.bossType == 0 ? 0xFFFFC64A : 0xFFFF6B32;
-                            addShockwave(m.x, m.y, radius + 22.0f, c, 0.55f);
-                            spawnParticles(m.x, m.y, m.bossType == 0 ? 26 : 42, c, 190.0f, 4, true);
+                            if (ax * ax + ay * ay <= radius * radius) applyBossAbilityHit(30.0f + m.bossPhase * 4.0f);
+                            addShockwave(m.x, m.y, radius + 22.0f, 0xFFFFC64A, 0.55f);
+                            spawnParticles(m.x, m.y, 26, 0xFFFFC64A, 190.0f, 4, true);
+                        } else {
+                            // Азарот — кольцо искр с проходом: правило «найди разрыв и беги»,
+                            // принципиально другое, чем «выйди из радиуса».
+                            const int count = 18;
+                            const float gapCenter = atan2f(playerY - m.y, playerX - m.x);
+                            const float gapHalf = 0.52f;
+                            const float speed = 250.0f + m.bossPhase * 22.0f;
+                            for (int shot = 0; shot < count; ++shot) {
+                                const float a = shot * 6.2831853f / count;
+                                float delta = a - gapCenter;
+                                while (delta > 3.1415927f) delta -= 6.2831853f;
+                                while (delta < -3.1415927f) delta += 6.2831853f;
+                                if (fabsf(delta) < gapHalf) continue; // the safe wedge
+                                Projectile ep;
+                                ep.x = m.x; ep.y = m.y;
+                                ep.vx = cosf(a) * speed; ep.vy = sinf(a) * speed;
+                                ep.weaponId = 99; ep.projectileKind = 5; ep.isBossProjectile = true;
+                                ep.damage = m.damage * 0.55f;
+                                ep.radius = 7.0f; ep.life = 2.6f; ep.pierce = 1;
+                                ep.isEnemy = true; ep.isCrit = false;
+                                projectiles.push_back(ep);
+                            }
+                            addShockwave(m.x, m.y, 120.0f, 0xFFFF6B32, 0.45f);
+                            spawnParticles(m.x, m.y, 42, 0xFFFF6B32, 210.0f, 4, true);
                         }
                     }
                 } else if (m.abilityActive <= 0.0f) {
@@ -4292,7 +4328,7 @@ struct Game {
                             "МОРГАР: ЗАМАХ — УДАРНАЯ ВОЛНА! УЙДИ ИЗ КРУГА!",
                             "МАЛАКОР: МЕТКА ЧУМЫ! ВЫЙДИ ИЗ ЗЕЛЁНОЙ ЗОНЫ!",
                             "КАРДИНАЛ: РЫВОК ПО ЛИНИИ! СМЕНИ ПОЗИЦИЮ!",
-                            "АЗАРОТ: ОГНЕННОЕ КОЛЬЦО! ВЫРВИСЬ ИЗ РАДИУСА!"
+                            "АЗАРОТ: КОЛЬЦО ИСКР! НАЙДИ РАЗРЫВ!"
                         };
                         announce(GMSG_BOSS_ABILITY, abilityLines[m.bossType & 3], 2.1f);
                         sound.play(SFX_BOSS_TELEGRAPH, 0.22f);
@@ -4384,9 +4420,20 @@ struct Game {
                 m.shootTimer -= dt;
                 if (m.shootTimer <= 0.0f) {
                     m.shootTimer = smartShooter ? 1.85f : (m.isBoss ? std::max(0.72f, 1.35f - m.bossType * 0.12f - 0.18f * (m.bossPhase - 1)) : (m.type == 9 ? 2.7f : 3.4f));
-                    int shots = m.isBoss ? (m.bossType == 3 ? 10 : (m.bossType == 1 ? 7 : 5)) : 1;
-                    if (m.isBoss && m.bossPhase == 2) ++shots;
-                    else if (m.isBoss && m.bossPhase >= 3) shots += (m.bossType == 3 ? 4 : 2);
+                    // Fire patterns are per guardian, not one shared ring shot: a heavy
+                    // bolt volley, a slow curse fan, a tight crescent, and a rotating spiral.
+                    int shots = 1;
+                    float spread = 0.12f;
+                    float spiral = 0.0f;
+                    if (m.isBoss) {
+                        switch (m.bossType & 3) {
+                            case 0: shots = 3; spread = 0.26f; break;  // Morgar: bolt volley
+                            case 1: shots = 3; spread = 0.62f; break;  // Malakor: curse fan
+                            case 2: shots = m.bossPhase >= 2 ? 2 : 1; spread = 0.13f; break; // Cardinal: single crescent
+                            default: shots = 2; spiral = 0.85f; break; // Azaroth: spiral
+                        }
+                        if (m.bossPhase >= 3 && (m.bossType & 3) != 2) ++shots;
+                    }
                     float aimX = playerX, aimY = playerY;
                     if (smartShooter) {
                         float shotSpeedForLead = 220.0f;
@@ -4399,9 +4446,10 @@ struct Game {
                     float baseA = atan2f(aimY - m.y, aimX - m.x);
                     for (int s = 0; s < shots; ++s) {
                         float a;
-                        if (m.isBoss && (m.bossType == 1 || m.bossType == 3))
-                            a = (float)(s * 6.2831853 / shots) + globalTime * (m.bossType == 3 ? 0.12f : 0.0f);
-                        else a = baseA + (s - (shots - 1) * 0.5f) * (m.isBoss ? 0.31f : 0.12f);
+                        if (m.isBoss && spiral > 0.0f)
+                            a = baseA + s * 0.62f + globalTime * spiral;   // leaves the spiral readable
+                        else
+                            a = baseA + (s - (shots - 1) * 0.5f) * (m.isBoss ? spread : 0.12f);
                         Projectile ep;
                         ep.x = m.x;
                         ep.y = m.y;
@@ -5170,13 +5218,30 @@ struct Game {
                     const int tx = (int)(m.abilityTargetX - camX), ty = (int)(m.abilityTargetY - camY);
                     r.drawLine(sx, sy, tx, ty, tellColor, 5, 150, true);
                     r.drawCircleRing(tx, ty, 42, 4, tellColor, 230, true);
-                } else {
-                    const float cx = m.bossType == 1 ? m.abilityTargetX : m.x;
-                    const float cy = m.bossType == 1 ? m.abilityTargetY : m.y;
-                    const int tx = (int)(cx - camX), ty = (int)(cy - camY);
-                    const int rad = m.bossType == 1 ? 112 : (m.bossType == 0 ? 150 : 245);
+                } else if (m.bossType == 0) {
+                    const int tx = (int)(m.x - camX), ty = (int)(m.y - camY);
+                    const int rad = m.bossPhase >= 3 ? 190 : 150;
                     r.fillCircle(tx, ty, rad, tellColor, 35);
                     r.drawCircleRing(tx, ty, rad, 4, tellColor, 230, true);
+                } else {
+                    // Azaroth: the telegraph shows the gap as well, so the safe wedge is
+                    // readable before the burst instead of being a surprise.
+                    const int tx = (int)(m.x - camX), ty = (int)(m.y - camY);
+                    const float progress = std::max(0.0f, std::min(1.0f, 1.0f - m.abilityWindup / 0.95f));
+                    const int rad = 96 + (int)(progress * 34.0f);
+                    const float gapCenter = atan2f(m.abilityTargetY - m.y, m.abilityTargetX - m.x);
+                    for (int arc = 0; arc < 48; ++arc) {
+                        const float a = arc * 6.2831853f / 48.0f;
+                        float delta = a - gapCenter;
+                        while (delta > 3.1415927f) delta -= 6.2831853f;
+                        while (delta < -3.1415927f) delta += 6.2831853f;
+                        if (fabsf(delta) < 0.52f) continue;
+                        const int px = tx + (int)(cosf(a) * rad);
+                        const int py = ty + (int)(sinf(a) * rad);
+                        r.fillCircle(px, py, 3, tellColor, 190);
+                        r.addGlow(px, py, 7, tellColor, 90);
+                    }
+                    r.drawCircleRing(tx, ty, rad, 1, tellColor, 110, true);
                 }
             }
             if (m.isBoss) {
@@ -6645,17 +6710,25 @@ struct Game {
         else startSelectedRun();
     }
 
+    // The newest case the player can actually take: the first open one, or — when every
+    // reachable case is closed — the last case. Opening the campaign always lands here so
+    // the player never has to scroll back from the very first mission of the act.
+    int newestCampaignMission() const {
+        int lastUnlocked = 0;
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+            if (!isCampaignMissionUnlocked(i)) continue;
+            if (!isCampaignMissionCompleted(i)) return i;
+            lastUnlocked = i;
+        }
+        return lastUnlocked;
+    }
+
     void openStoryMissionSelect() {
         gameMode = MODE_STORY;
-        storyMissionCursor = selectedStoryMission;
-        if (storyMissionCursor < 0 || storyMissionCursor >= CAMPAIGN_MISSION_COUNT || !isCampaignMissionUnlocked(storyMissionCursor)) {
-            // Open on the first case the player can still take.
-            storyMissionCursor = 0;
-            for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
-                if (isCampaignMissionUnlocked(i) && !isCampaignMissionCompleted(i)) { storyMissionCursor = i; break; }
-            }
-            selectedStoryMission = storyMissionCursor;
-        }
+        // Always land on the newest open case; the previous selection is not carried over,
+        // because coming back from the menu usually means "continue the campaign".
+        storyMissionCursor = newestCampaignMission();
+        selectedStoryMission = storyMissionCursor;
         campaignActView = campaignActOf(storyMissionCursor);
         state = STATE_MISSION_SELECT;
     }
@@ -7721,6 +7794,7 @@ struct Game {
             "2.9.75 • ГОЛОС ИЗ ФАЙЛОВ", "2.9.76–2.9.80 • СЮЖЕТ, СЛОВАРЬ И ГОЛОС",
             "2.9.81 • ТИХИЕ РЕПЛИКИ В УГЛУ",
             "2.9.82 • КАЖДОЕ ДЕЛО — СВОЁ МЕСТО",
+            "2.9.83 • ВЕРСИЯ, КАМПАНИЯ, СТРАЖИ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -7800,6 +7874,7 @@ struct Game {
 "Главное за 2.9.76–2.9.80.\n• Кампания: 28 дел в пяти актах — нуар-детектив с уликами, допросами копий и четырьмя печатями. Сценарий — STORY.md.\n• Сейв v7 хранит прогресс маской из 28 дел; старые сейвы переносятся, ветки требуют оба следа.\n• Выход босса очищает арену, затем секунду спавн идёт ×5. Тихая охота — возможность, прорыв — стена.\n• Словарь терминов по G. Озвучка: 36 фраз, все записаны и выровнены по громкости.",
             "Боевые сообщения живут только в голосе и в левом нижнем углу: страж, фаза босса, тир сборки, сложность, тихая охота и сюжетная строка собраны в одну стопку плашек. Центр поля больше ничем не перекрывается.\n• Элитные и особые враги получили янтарный отсвет и светящийся силуэт — их видно в толпе.\n• Тихая охота не путает итог: у победы и у провала отдельные фразы и отдельная озвучка.",
             "Пять мест вместо одной арены: Руины, Крипта, Собор, Пепельный трон и Сердце Архива отличаются кладкой пола, светом, огнём, ориентирами и воздухом. Endless проходит эти же места по ходу ночи.\n• Гарнизон у каждого места свой: крипта выставляет щиты и тяжеловесов, собор — стрелков, трон — броню.\n• Отряды приходят линией с одного края, а не бесконечной россыпью.\n• У каждой семьи своя походка и своя смерть: кости, слизь, искры, пепел.\n• Каждый страж метит пол своим знаком.",
+            "Номер версии больше не берётся из локального файла: его читает src/version.h, поэтому сборка, заголовок окна и хроника больше не расходятся.\n• Кампания открывается на последнем доступном деле, а не на первом.\n• У каждого стража свой набор атак: Моргар бьёт волной и зовёт щитоносцев, Малакор льёт чуму и пускает самонаводящиеся сгустки, Кардинал идёт на рывок с узким веером, Азарот выпускает кольцо искр с проходом и спираль. Общих приёмов больше нет.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");

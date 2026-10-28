@@ -5,7 +5,6 @@ set "BD=%~dp0"
 set "SRC=%BD%src"
 set "BUILD=%BD%build"
 set "LOG=%BUILD%\build.log"
-set "VERFILE=%BD%version.txt"
 set "RC=%BUILD%\resource.rc"
 set "RESOBJ=%BUILD%\resource.o"
 set "TMPEXE=%BUILD%\ShadowSurvivors.exe"
@@ -14,18 +13,22 @@ if not exist "%BUILD%" mkdir "%BUILD%"
 > "%LOG%" echo Build started
 >> "%LOG%" echo Date: %date% %time%
 
-:: --- version: argument, then the local build counter, then src\version.h ---
-:: version.txt is NOT tracked by git (every build rewrites it), so pulls never conflict.
-:: The canonical version lives in src\version.h and is read straight from there.
+:: --- version: src\version.h is the only source of truth ---
+:: This script used to prefer a local version.txt counter, and that counter drifted
+:: far behind the header (a build reported 2.9.78 while the game shipped 2.9.82).
+:: The header decides now. An explicit argument still overrides it.
 set "VER="
 if not "%~1"=="" set "VER=%~1"
-if not defined VER if exist "%VERFILE%" set /p "VER=" < "%VERFILE%"
-if not defined VER for /f "tokens=3" %%v in ('findstr /c:"#define GAME_VERSION " "!SRC!\version.h"') do set "VER=%%~v"
-if not defined VER set "VER=2.9.74"
+if not defined VER for /f "tokens=3" %%v in ('findstr /c:"#define GAME_VERSION " "%SRC%\version.h"') do set "VER=%%~v"
 
-:: An empty or hand-edited file must never leak spaces or CRs into the exe name.
+set VER=!VER:"=!
 for /f "tokens=* delims= " %%v in ("!VER!") do set "VER=%%v"
-if "!VER!"=="" set "VER=2.9.74"
+if "!VER!"=="" (
+    echo ERROR: cannot read GAME_VERSION from src\version.h >> "%LOG%"
+    echo ERROR: cannot read GAME_VERSION from src\version.h
+    pause
+    exit /b 1
+)
 
 echo !VER!| findstr /r /c:"^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$" >nul
 if errorlevel 1 (
@@ -44,7 +47,7 @@ for /f "tokens=1-3 delims=." %%a in ("!VER!") do (
 set /a "VCODE=!V1! * 1000 + !V2! * 100 + !V3!"
 set "EXE=%BD%ShadowSurvivors_!VER!.exe"
 
-echo Version: !VER! >> "%LOG%"
+echo Version (src\version.h): !VER! >> "%LOG%"
 echo Exe: ShadowSurvivors_!VER!.exe >> "%LOG%"
 
 :: --- check windres ---
@@ -141,11 +144,8 @@ if errorlevel 1 (
 for %%F in ("%EXE%") do echo Size: %%~zF bytes >> "%LOG%"
 echo BUILD SUCCESS: ShadowSurvivors_!VER!.exe >> "%LOG%"
 
-:: --- bump the version counter for the next build ---
-set /a "NEXT3=!V3! + 1"
-set "NVER=!V1!.!V2!.!NEXT3!"
-> "%VERFILE%" echo !NVER!
-echo Next version: !NVER! >> "%LOG%"
+:: The version is not bumped here any more: it is bumped in src\version.h when a
+:: patch ships, so the exe name, the window title and the chronicle always agree.
 echo [%date% %time%] Build finished >> "%LOG%"
 
 echo BUILD SUCCESS: ShadowSurvivors_!VER!.exe
