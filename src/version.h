@@ -7,9 +7,9 @@
 // drift apart again. The fallback below only applies to plain `g++` builds
 // (IDE, syntax check, the headless tests).
 #ifndef GAME_VERSION
-#define GAME_VERSION "2.9.71"
+#define GAME_VERSION "2.9.72"
 #endif
 #ifndef GAME_VERSION_NUM
-// 2.9.71 -> 2*1000 + 9*100 + 71
-#define GAME_VERSION_NUM 2971
+// 2.9.72 -> 2*1000 + 9*100 + 72
+#define GAME_VERSION_NUM 2972
 #endif

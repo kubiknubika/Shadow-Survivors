@@ -104,7 +104,7 @@ static constexpr int MONSTER_TYPE_COUNT = 11;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 69;
+static constexpr int PATCH_NOTES_COUNT = 70;
 
 struct ItemDef {
     int id;
@@ -4193,6 +4193,7 @@ struct Game {
             xpToNext = getXpRequirementForLevel(playerLevel);
             restorePlayerHp(12.0f);
             sound.play(SFX_LEVELUP, 0.05f);
+            sound.playLevelUpCue(); // ss_levelup_ding.mp3 when the player ships one
             generateUpgradeChoices();
             state = STATE_LEVELUP;
         }
@@ -4318,6 +4319,8 @@ struct Game {
         sound.update(dt);
         const bool menuMusicState = state == STATE_MENU || state == STATE_HERO_SELECT || state == STATE_MISSION_SELECT || state == STATE_SHOP || state == STATE_HELP ||
                                     state == STATE_SETTINGS || state == STATE_HALL || state == STATE_PATCH_NOTES;
+        // The Soul Forge reuses menu mode; the hint lets audio.h pick ss_forge_shop.mp3 there.
+        sound.musicSceneHint.store(state == STATE_SHOP ? 1 : 0, std::memory_order_relaxed);
         if (state == STATE_LEVELUP) sound.musicMode = 6;
         else if (state == STATE_GAMEOVER) sound.musicMode = 7;
         else if (state == STATE_MISSION_COMPLETE) sound.musicMode = 4;
@@ -5572,6 +5575,7 @@ struct Game {
         if (mouseClicked && hoveredCard >= 0) {
             sound.play(SFX_CLICK, 0.02f);
             applyUpgrade(upgradeChoices[hoveredCard]);
+            sound.playUpgradeCue(); // ss_upgrade_pick.mp3 when the player ships one
             state = STATE_PLAYING;
             restoreGameplayMusicImmediately();
         }
@@ -5689,6 +5693,7 @@ struct Game {
         if (mouseClicked && hoveredCard >= 0) {
             sound.play(SFX_CLICK, 0.02f);
             applyUpgrade(upgradeChoices[hoveredCard]);
+            sound.playUpgradeCue(); // ss_upgrade_pick.mp3 when the player ships one
             state = STATE_PLAYING;
             restoreGameplayMusicImmediately();
         }
@@ -6719,6 +6724,11 @@ struct Game {
 
     void adjustSoundVolume(int direction) {
         if (settingsVolumeFocus == 2) {
+            if (sound.externalMusicActive()) {
+                // Files from audio/ are playing; the built-in theme is only a fallback.
+                sound.play(SFX_CLICK, 0.015f);
+                return;
+            }
             stepMusicVariant(direction);
             sound.play(SFX_CLICK, 0.015f);
             return;
@@ -6791,7 +6801,8 @@ struct Game {
         const bool variantFocus = settingsVolumeFocus == 2;
         r.fillRoundedRect(variantX, variantY, variantW, variantH, 8, variantFocus ? 0xFF2A2040 : 0xFF181326);
         r.drawRoundedRect(variantX, variantY, variantW, variantH, 8, variantHover ? 0xFFFFD858 : (variantFocus ? 0xFFB68BFF : 0xFF514766), variantFocus ? 2 : 1);
-        r.drawText(FONT_SMALL, variantX + 18, variantY + 12, "ТЕМА", 0xFFEAE4F8);
+        const bool externalTracks = sound.externalMusicActive();
+        r.drawText(FONT_SMALL, variantX + 18, variantY + 12, externalTracks ? "МУЗЫКА" : "ТЕМА", 0xFFEAE4F8);
         const int selectorBtnW = 42;
         const bool classicSettingsLayout = !portraitLayout && SCREEN_W >= 1200;
         const int prevX = classicSettingsLayout ? 570 : variantX + variantW - 300;
@@ -6806,15 +6817,32 @@ struct Game {
         };
         char variantLabel[96];
         const int selectedVariant = sound.musicVariant.load(std::memory_order_relaxed);
-        snprintf(variantLabel, sizeof(variantLabel), "%d / 10   %s", selectedVariant + 1, SoundEngine::musicVariantName(selectedVariant));
+        if (externalTracks) {
+            // Player-supplied files own the music bus, so the built-in selector is inert here.
+            snprintf(variantLabel, sizeof(variantLabel), "ТРЕКИ ИЗ audio/  •  ФАЙЛОВ: %d", sound.externalMusicTrackCount());
+        } else {
+            snprintf(variantLabel, sizeof(variantLabel), "%d / 10   %s", selectedVariant + 1, SoundEngine::musicVariantName(selectedVariant));
+        }
         r.drawTextCentered(FONT_SMALL, variantLabelX, variantY + (variantH - 16) / 2, variantLabel, variantFocus ? 0xFFFFD878 : 0xFFEAE4F8);
         if (variantHover && mouseClicked) settingsVolumeFocus = 2;
-        if (drawSelectorButton(prevX, "<", true)) { selectMusicVariant(selectedVariant - 1); settingsVolumeFocus = 2; }
-        if (drawSelectorButton(nextX, ">", true)) { selectMusicVariant(selectedVariant + 1); settingsVolumeFocus = 2; }
+        if (!externalTracks) {
+            if (drawSelectorButton(prevX, "<", true)) { selectMusicVariant(selectedVariant - 1); settingsVolumeFocus = 2; }
+            if (drawSelectorButton(nextX, ">", true)) { selectMusicVariant(selectedVariant + 1); settingsVolumeFocus = 2; }
+        } else {
+            drawSelectorButton(prevX, "<", false);
+            drawSelectorButton(nextX, ">", false);
+        }
         const int helpY = portraitLayout ? SCREEN_H - 160 : 574;
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY, SoundEngine::musicVariantDescription(selectedVariant), 0xFFFFD878);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY + 20, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ ИЛИ ТЕМА • КЛИК ПО СТРЕЛКАМ • F1–F10 В БОЮ", 0xFFAAA0C8);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY + 38, "[1–7] ПЕРЕКЛЮЧАТЕЛИ • [8] СТИЛЬ ИКОНОК", 0xFFAAA0C8);
+        if (externalTracks) {
+            const std::string sceneList = sound.externalMusicSummary();
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY, sceneList.c_str(), 0xFFFFD878);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY + 20, "ЗВУЧАТ ФАЙЛЫ ИЗ audio/ — ВСТРОЕННАЯ ТЕМА ЖДЁТ В РЕЗЕРВЕ", 0xFFAAA0C8);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY + 38, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–7] ПЕРЕКЛЮЧАТЕЛИ • [8] ИКОНКИ", 0xFFAAA0C8);
+        } else {
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY, SoundEngine::musicVariantDescription(selectedVariant), 0xFFFFD878);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY + 20, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ ИЛИ ТЕМА • КЛИК ПО СТРЕЛКАМ • F1–F10 В БОЮ", 0xFFAAA0C8);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY + 38, "[1–7] ПЕРЕКЛЮЧАТЕЛИ • [8] СТИЛЬ ИКОНОК", 0xFFAAA0C8);
+        }
         int bw = std::min(340, SCREEN_W - 48), bh = 50;
         int bx = (SCREEN_W - bw) / 2, by = portraitLayout ? SCREEN_H - 76 : 651;
         bool backHov = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
@@ -6844,7 +6872,7 @@ struct Game {
         r.drawRoundedRect(panelX, panelY, panelW, panelH, 16, 0xFFFFD058, 3);
         const std::string chronicleTitle = std::string("ХРОНИКА ОБНОВЛЕНИЙ • 2.2–") + GAME_VERSION;
         r.drawTextCentered(FONT_LARGE, SCREEN_W / 2, panelY + 20, chronicleTitle.c_str(), 0xFFFFE068);
-        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ"};
+        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ", "2.9.72 • МУЗЫКА ИЗ audio/"};
         static const char* notes[PATCH_NOTES_COUNT] = {
             "Основа игры: пять героев, автоматическое оружие и выбор прокачки во время боя.\nПервые руины, самоцветы опыта, сундуки и сохранение между забегами.",
             "Кампания обрела четыре печати и охоту на боссов.\nПобеды открывают героев, главы и страницы Зала славы.",
@@ -6916,7 +6944,8 @@ struct Game {
             "Новый реликт IV тира «Печать Возмездия» (3 ранга, доступен с 10:00): реальная потеря HP заряжает один ответный удар на 4,5 с. Следующее попадание активного оружия наносит +35/50/65% урона; заряд не суммируется. Полное поглощение удара щитом его не выдаёт. Пассивные атаки, рывок и заблокированный попаданием щит врага заряд не расходуют. Индикатор встроен в HUD; проверены три ранга, срок, потребление, источники входящего урона и исключения.",
             "«Руна Свидетеля» (ID39, IV тир, открывается на 10:15) приносит +8/12/16% суперзаряда за разрушение резонатора. Бонус учитывает уже собранные множители суперзаряда, ограничен общей шкалой 100% и выдаётся только один раз при фактическом разрушении; простое повреждение и повторный удар по нулевому HP его не дают. Добавлены контекстный советчик, ранговое описание и отдельная пиктограмма. Проверяются все ранги, коэффициент, кап, draft, резонаторы и повторное срабатывание.",
             "Сюжетная прокачка привязана к миссиям: первая миссия начинается с тира I; следующие открывают тиры II, III, IV и V сразу с первого драфта (финал остаётся на V). Победа над боссом текущей миссии повышает тир сборки ещё на один в пределах V. В Endless сохранена прежняя разблокировка предметов по времени. Каждая следующая сюжетная миссия повышает HP, урон и скорость врагов, а также темп их появления на 3% относительно предыдущей миссии (до +15% в финале). В досье миссии показаны стартовый тир и прибавка сложности.",
-            "Версия теперь задаётся в одном месте: build_windows.bat передаёт её компилятору, и она же попадает в имя файла, в свойства EXE, в заголовок окна и в эту хронику. Сборка идёт в отдельный каталог build и заменяет готовый EXE только после успешной компиляции, поэтому неудачная попытка больше не оставляет проект без рабочего билда. build_windows.bat принимает версию аргументом, корректно читает пустой version.txt и хранится с CRLF."};
+            "Версия теперь задаётся в одном месте: build_windows.bat передаёт её компилятору, и она же попадает в имя файла, в свойства EXE, в заголовок окна и в эту хронику. Сборка идёт в отдельный каталог build и заменяет готовый EXE только после успешной компиляции, поэтому неудачная попытка больше не оставляет проект без рабочего билда. build_windows.bat принимает версию аргументом, корректно читает пустой version.txt и хранится с CRLF.",
+            "Музыка теперь берётся из ваших файлов: игра читает MP3 из папки audio/ рядом с .exe (ss_menu_main, ss_gameplay_run, ss_boss_theme, ss_victory_boss, ss_gameover_death, ss_forge_shop) и играет их вместо встроенной синтезированной темы. Треки декодируются на ходу, поэтому 3–5 МБ файлы не нужно ни во что конвертировать; громкость музыки, клавиша [N] и приглушение во время громких эффектов работают и для них. ss_levelup_ding и ss_upgrade_pick звучат как короткие сигналы при новом уровне и при выборе улучшения. Если файла для сцены нет — для неё остаётся встроенная тема, поэтому игра не замолкает даже с пустой папкой audio/."};
         const int versionY = portraitPatch ? 80 : 108;
         r.drawTextCentered(FONT_MED, SCREEN_W / 2, versionY, versions[patchNotesPage], 0xFFFFC75A);
         const int notesX = compactPatch ? panelX + 18 : 190;
@@ -7860,6 +7889,7 @@ struct Game {
                 int idx = key - '1';
                 sound.play(SFX_CLICK, 0.02f);
                 applyUpgrade(upgradeChoices[idx]);
+                sound.playUpgradeCue();
                 state = STATE_PLAYING;
                 restoreGameplayMusicImmediately();
             } else if ((key == 'R' || key == 'r') && !upgradeRerollUsed) {
@@ -7912,6 +7942,12 @@ struct Game {
         r.drawRoundedRect(250, 48, 780, 78, 10, 0xFFFFD878, 2);
         r.drawTextCentered(FONT_MED, SCREEN_W / 2, 57, "АРЕНА ПРОСЛУШИВАНИЯ БОССА", 0xFFFFE078);
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 86, "1–4: босс/тема   •   F1–F10: вариант   •   H: орда   •   ESC: меню", 0xFFE4D8C8);
+        if (sound.externalMusicActive()) {
+            // Bottom edge is free here; the panel above already sits over the boss phase bar.
+            r.fillRoundedRect(SCREEN_W / 2 - 330, SCREEN_H - 92, 660, 26, 7, 0xEF100B1C);
+            r.drawRoundedRect(SCREEN_W / 2 - 330, SCREEN_H - 92, 660, 26, 7, 0xFFB78AFF, 1);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 86, "ИГРАЕТ ТРЕК ИЗ audio/  •  F1–F10 ОТНОСЯТСЯ К ВСТРОЕННОЙ ТЕМЕ", 0xFFB78AFF);
+        }
     }
 
     void renderMusicTempoEffects(Renderer& r) {
@@ -8035,11 +8071,15 @@ struct Game {
         }
 
         if (musicVariantToastTimer > 0.0f && state != STATE_MENU && state != STATE_MISSION_SELECT && state != STATE_MISSION_COMPLETE && state != STATE_SETTINGS && state != STATE_PATCH_NOTES && state != STATE_SHOP && state != STATE_HELP && state != STATE_HALL) {
-            char variantToast[128];
+            char variantToast[160];
             const int variant = sound.musicVariant.load(std::memory_order_relaxed);
-            snprintf(variantToast, sizeof(variantToast), "МУЗЫКА %d/10: %s  •  F1–F10", variant + 1, SoundEngine::musicVariantName(variant));
-            r.fillRoundedRect(330, SCREEN_H - 96, 620, 36, 8, 0xFF110C20, 235);
-            r.drawRoundedRect(330, SCREEN_H - 96, 620, 36, 8, 0xFFB78AFF, 2);
+            if (sound.externalMusicActive())
+                snprintf(variantToast, sizeof(variantToast), "F1–F10: ВСТРОЕННАЯ ТЕМА  •  ИГРАЕТ audio/ (%d ФАЙЛОВ)", sound.externalMusicTrackCount());
+            else
+                snprintf(variantToast, sizeof(variantToast), "МУЗЫКА %d/10: %s  •  F1–F10", variant + 1, SoundEngine::musicVariantName(variant));
+            const int toastW = sound.externalMusicActive() ? 640 : 620;
+            r.fillRoundedRect(SCREEN_W / 2 - toastW / 2, SCREEN_H - 96, toastW, 36, 8, 0xFF110C20, 235);
+            r.drawRoundedRect(SCREEN_W / 2 - toastW / 2, SCREEN_H - 96, toastW, 36, 8, 0xFFB78AFF, 2);
             r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 86, variantToast, 0xFFFFE7A0);
         }
 

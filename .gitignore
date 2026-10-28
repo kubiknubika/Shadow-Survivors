@@ -7,7 +7,9 @@ src/resource.o
 # Shipped binaries are produced by the build, not hand-edited.
 /ShadowSurvivors_*.exe
 
-# Runtime leftovers (save, config and crash dump live next to the .exe)
+# Runtime leftovers: save, config and crash dump are written next to the .exe
+shadow_survivors.cfg
+shadow_survivors.sav
 /build.log
 /crash.log
 *.stackdump
