@@ -13,7 +13,6 @@
 #include "advisor_weights.h"
 #include "version.h"
 #include "messages.h"
-#include "speech.h"
 
 enum GameState {
     STATE_MENU = 0,
@@ -106,7 +105,7 @@ static constexpr int MONSTER_TYPE_COUNT = 11;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 72;
+static constexpr int PATCH_NOTES_COUNT = 73;
 
 struct ItemDef {
     int id;
@@ -436,7 +435,20 @@ struct Game {
     std::string announceLastText;  // de-duplicates the speaker on repeated boss lines
     float announceLastAt = -100.0f;
     MessageRegistry messages;      // every shown message is accounted for here
-    SpeechEngine speech;           // Windows SAPI announcer (safe when unsupported)
+    int voiceClips = 0;            // how many registry rows have a recorded phrase
+    int voiceMissing = 0;
+
+    // Cheap disk check (cached per key), so dropping a new clip into audio/voice/
+    // and reopening the settings immediately updates the F3 counters.
+    void refreshVoiceStats() {
+        voiceClips = 0;
+        for (int i = 0; i < GMSG_COUNT; ++i) {
+            if (!GAME_MESSAGES[i].voiced) continue;
+            if (sound.hasVoiceClip(GAME_MESSAGES[i].key)) ++voiceClips;
+        }
+        voiceMissing = MessageRegistry::voicedDefs() - voiceClips;
+        messages.missingClips = voiceMissing;
+    }
     bool debugOverlay = false;     // F3 technical read-out
     float fpsSmooth = 60.0f;
     float frameMsSmooth = 16.7f;
@@ -585,15 +597,15 @@ struct Game {
     void init() {
         sound.init();
         loadOptions();
-        // Windows system voice; harmless no-op elsewhere and when the player turned speech off.
-        speech.init(options.messageSpeechEnabled != 0);
+        // Recorded phrases live in audio/voice/; count what is actually there for F3.
+        sound.setVoiceEnabled(options.messageSpeechEnabled != 0);
+        refreshVoiceStats();
         loadSave();
         initRun(0);
         patchNotesPage = PATCH_NOTES_COUNT - 1;
         state = options.patchNotesHiddenVersion == PATCH_NOTES_VERSION ? STATE_MENU : STATE_PATCH_NOTES;
     }
 
-    ~Game() { speech.shutdown(); }
 
     FILE* openSaveFile(bool writeMode) {
 #ifdef _WIN32
@@ -1555,6 +1567,7 @@ struct Game {
         difficultyBanner = "ПРОРЫВ! ОРДА — УРОВЕНЬ " + std::to_string(playerLevel);
         difficultyBannerTimer = 4.0f;
         announce(GMSG_BREAKTHROUGH_START, "НА ТЕБЯ ИДЁТ ОСОБАЯ ОРДА!", 3.0f);
+        speakOnly(GMSG_HOSTILE_HORDE, "НА ТЕБЯ ИДЁТ ОСОБАЯ ОРДА!");
         if (options.screenShakeEnabled) screenShake = std::max(screenShake, 0.18f);
         sound.play(SFX_BOSS, 0.08f);
 
@@ -1724,6 +1737,7 @@ struct Game {
             announce(GMSG_MISSION_BRIEFING, selectedCampaignMission().briefing, 8.0f);
             difficultyBanner = selectedCampaignMission().objective;
             difficultyBannerTimer = 7.0f;
+            speakOnly(GMSG_MISSION_OBJECTIVE, difficultyBanner);
         } else {
             announce(GMSG_ENDLESS_START, "БЕСКОНЕЧНАЯ НОЧЬ: КУЗНИЦА ТРЕНИРУЕТСЯ НА БЕЗОПАСНЫХ ЭХО.", 4.0f);
         }
@@ -2275,7 +2289,7 @@ struct Game {
         }
         char burst[160]; // UTF-8 text must not be byte-truncated before the HUD can wrap it.
         snprintf(burst, sizeof(burst), "РЕЗОНАТОР РАЗРУШЕН: +%d %s", spawned, enemyForm(spawned));
-        announce(GMSG_RESONATOR_SPAWN, burst, 3.2f);
+        announce(GMSG_RESONATOR_DESTROYED, burst, 3.2f);
         if (options.screenShakeEnabled) screenShake = std::max(screenShake, 0.32f);
     }
 
@@ -4738,11 +4752,16 @@ struct Game {
                 drawDottedRing(r, sx, sy, markRadius, 10, 0xFFE3C2FF, 210, globalTime * 1.6f + m.animOffset);
             }
             if (m.shieldHits > 0) {
-                float fx = m.shieldFacingX, fy = m.shieldFacingY;
-                int px = (int)(-fy * 12.0f), py = (int)(fx * 12.0f);
-                int cx = sx + (int)(fx * (m.radius + 5.0f)), cy = sy + (int)(fy * (m.radius + 5.0f));
-                r.drawLine(cx - px, cy - py, cx + px, cy + py, 0xFF79E9FF, m.isShieldBearer ? 4 : 3, 220, true);
-                r.drawCircleRing(cx, cy, 8 + m.shieldHits * 2, 1, 0xFFB3F5FF, 170, true);
+                // The shield used to be a short bar crossed by a ring, offset from the mob by its
+                // facing vector — on screen that read as "someone drew a diameter next to the mob".
+                // Now it is a bright arc hugging the mob's own circle, on the side it is guarding.
+                const float facing = atan2f(m.shieldFacingY, m.shieldFacingX);
+                drawShieldArc(r, sx, sy, (int)m.radius + 6, facing, 0xFF79E9FF, 205, m.isShieldBearer ? 3 : 2);
+                drawShieldArc(r, sx, sy, (int)m.radius + 10, facing, 0xFFB3F5FF, 130, 1);
+                for (int charge = 0; charge < std::min(4, m.shieldHits); ++charge) {
+                    const float a = facing + (charge - (std::min(4, m.shieldHits) - 1) * 0.5f) * 0.34f;
+                    r.fillCircle(sx + (int)lroundf(cosf(a) * (m.radius + 14)), sy + (int)lroundf(sinf(a) * (m.radius + 14)), 2, 0xFFD9FBFF, 215);
+                }
             }
         }
 
@@ -4971,14 +4990,14 @@ struct Game {
         put(10, "СБОРКА", line);
         snprintf(line, sizeof(line), "MODE %d  SFX %d%%  MUS %d%%", sound.musicMode.load(), (int)roundf(sound.sfxVolume.load() * 100.0f), (int)roundf(sound.musicVolume.load() * 100.0f));
         put(11, "ЗВУК", line);
-        snprintf(line, sizeof(line), "%s  %s", speech.supported ? "SAPI OK" : "НЕТ ГОЛОСА", options.messageSpeechEnabled != 0 ? "ВКЛ" : "ВЫКЛ");
-        put(12, "ОЗВУЧКА", line, options.messageSpeechEnabled != 0 ? 0xFF9BF0B0 : 0xFFFF9B7E);
+        snprintf(line, sizeof(line), "%d/%d КЛИПОВ  %s", voiceClips, MessageRegistry::voicedDefs(), options.messageSpeechEnabled != 0 ? "ВКЛ" : "ВЫКЛ");
+        put(12, "ОЗВУЧКА", line, (options.messageSpeechEnabled != 0 && voiceClips > 0) ? 0xFF9BF0B0 : 0xFFFF9B7E);
         put(13, "СООБЩЕНИЯ", messages.summary().c_str(), MessageRegistry::invalidRows() == 0 ? 0xFFE6E0F4 : 0xFFFF6A7A);
         if (hasMessage) {
             snprintf(line, sizeof(line), "%s  %.1f С", storySpeaker.c_str(), storyTimer);
             put(14, "НА ЭКРАНЕ", line, 0xFFC9A6FF);
-            snprintf(line, sizeof(line), "%s  ВСЕГО %d", speech.enabled ? "TTS ON" : "TTS OFF", speech.spokenCount);
-            put(15, "ГОЛОС", line, speech.enabled ? 0xFF9BF0B0 : 0xFFFF9B7E);
+            snprintf(line, sizeof(line), "%s  ПРОЗВУЧАЛО %d", sound.voiceEnabled() ? "ГОЛОС ON" : "ГОЛОС OFF", sound.voiceSpokenCount());
+            put(15, "ОЗВУЧЕНО", line, sound.voiceEnabled() ? 0xFF9BF0B0 : 0xFFFF9B7E);
         }
     }
 
@@ -5007,9 +5026,9 @@ struct Game {
         // Repeated identical lines every few seconds would turn into garble.
         const bool duplicate = text == announceLastText && (globalTime - announceLastAt) < 4.0f;
         if (duplicate) return;
-        // The announcer rides the effects slider, so the "Звуковые эффекты" row controls it too.
-        speech.setVolume((int)lroundf(std::max(0.0f, std::min(1.0f, sound.sfxVolume.load())) * 100.0f));
-        if (speech.speak(text)) {
+        // The clip is chosen by registry key, not by the on-screen text: numbers and
+        // boss names change every run, the recorded phrase does not.
+        if (sound.speakMessage(MessageRegistry::key(id))) {
             announceLastText = text;
             announceLastAt = globalTime;
             ++messages.voicedSent;
@@ -5048,6 +5067,20 @@ struct Game {
         for (int i = 0; i < dots; ++i) {
             const float a = phase + i * (6.2831853f / dots);
             r.fillCircle(cx + (int)lroundf(cosf(a) * radius), cy + (int)lroundf(sinf(a) * radius), dotSize, color, alpha);
+        }
+    }
+
+    // A convex shield wall: an arc centred on the mob, opening toward the side it blocks.
+    static void drawShieldArc(Renderer& r, int cx, int cy, int radius, float facing, uint32_t color, int alpha, int thickness) {
+        const float half = 0.72f; // ~82 degrees of visible wall
+        const int steps = 10;
+        int prevX = 0, prevY = 0;
+        for (int i = 0; i <= steps; ++i) {
+            const float a = facing - half + (2.0f * half) * (float)i / (float)steps;
+            const int x = cx + (int)lroundf(cosf(a) * radius);
+            const int y = cy + (int)lroundf(sinf(a) * radius);
+            if (i > 0) r.drawLine(prevX, prevY, x, y, color, thickness, alpha, true);
+            prevX = x; prevY = y;
         }
     }
 
@@ -6910,8 +6943,8 @@ struct Game {
         else if (optionId == 7) options.skillIconStyle = options.skillIconStyle == 0 ? 1 : 0;
         else if (optionId == 8) {
             options.messageSpeechEnabled = options.messageSpeechEnabled != 0 ? 0 : 1;
-            speech.setEnabled(options.messageSpeechEnabled != 0);
-            if (options.messageSpeechEnabled != 0) speech.speak("Озвучка сообщений включена");
+            sound.setVoiceEnabled(options.messageSpeechEnabled != 0);
+            if (options.messageSpeechEnabled != 0) sound.speakMessage("voice_on");
         }
         saveOptions();
         sound.play(SFX_CLICK, 0.02f);
@@ -6933,6 +6966,8 @@ struct Game {
     }
 
     void renderSettingsMenu(Renderer& r) {
+        static int lastRefreshSecond = -1;
+        if ((int)globalTime != lastRefreshSecond) { lastRefreshSecond = (int)globalTime; refreshVoiceStats(); }
         renderSubmenuFrame(r, "НАСТРОЙКИ", "shadow_survivors.cfg • звук • эффекты • стиль иконок");
 
         const char* labels[8] = {
@@ -7005,11 +7040,19 @@ struct Game {
         else
             snprintf(musicLine, sizeof(musicLine), "МУЗЫКА: ПАПКА audio/ ПУСТА — ИГРАЕТ ВСТРОЕННАЯ ТЕМА");
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY, musicLine, 0xFFAAA0C8);
+        char voiceLine[160];
+        if (voiceClips == 0)
+            snprintf(voiceLine, sizeof(voiceLine), "ОЗВУЧКА: ПАПКА audio/voice/ ПУСТА — ФРАЗЫ ЖДУТ ЗАПИСИ");
+        else if (voiceMissing > 0)
+            snprintf(voiceLine, sizeof(voiceLine), "ОЗВУЧКА: %d ИЗ %d ФРАЗ В audio/voice/ (%d ЕЩЁ НЕ ЗАПИСАНО)", voiceClips, MessageRegistry::voicedDefs(), voiceMissing);
+        else
+            snprintf(voiceLine, sizeof(voiceLine), "ОЗВУЧКА: ВСЕ %d ФРАЗ НА МЕСТЕ — audio/voice/", voiceClips);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 20, voiceLine, voiceMissing > 0 ? 0xFFFFC98A : 0xFF8CD8B0);
         if (portraitLayout) {
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 20, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–8] ПЕРЕКЛЮЧАТЕЛИ", 0xFFAAA0C8);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 40, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–8] ПЕРЕКЛЮЧАТЕЛИ", 0xFFAAA0C8);
         } else {
             r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 574, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–8] ПЕРЕКЛЮЧАТЕЛИ • КЛИК МЫШЬЮ", 0xFFAAA0C8);
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 594, "ОЗВУЧКА СООБЩЕНИЙ — СИСТЕМНЫЙ ГОЛОС WINDOWS; РЕЕСТР СООБЩЕНИЙ В F3", 0xFF8C82A8);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 612, "ГОЛОС — ЗАПИСАННЫЕ ФРАЗЫ В audio/voice/; СПИСОК И СЧЁТЧИКИ В F3", 0xFF8C82A8);
         }
         int bw = std::min(340, SCREEN_W - 48), bh = 50;
         int bx = (SCREEN_W - bw) / 2, by = portraitLayout ? SCREEN_H - 76 : 651;
@@ -7040,7 +7083,7 @@ struct Game {
         r.drawRoundedRect(panelX, panelY, panelW, panelH, 16, 0xFFFFD058, 3);
         const std::string chronicleTitle = std::string("ХРОНИКА ОБНОВЛЕНИЙ • 2.2–") + GAME_VERSION;
         r.drawTextCentered(FONT_LARGE, SCREEN_W / 2, panelY + 20, chronicleTitle.c_str(), 0xFFFFE068);
-        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ", "2.9.72 • МУЗЫКА ИЗ audio/", "2.9.73 • КУЗНИЦА И ТИХИЙ УРОВЕНЬ", "2.9.74 • ГОЛОС, F3 И ЧИСТЫЙ МИР"};
+        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ", "2.9.72 • МУЗЫКА ИЗ audio/", "2.9.73 • КУЗНИЦА И ТИХИЙ УРОВЕНЬ", "2.9.74 • ГОЛОС, F3 И ЧИСТЫЙ МИР", "2.9.75 • ГОЛОС ИЗ ФАЙЛОВ"};
         static const char* notes[PATCH_NOTES_COUNT] = {
             "Основа игры: пять героев, автоматическое оружие и выбор прокачки во время боя.\nПервые руины, самоцветы опыта, сундуки и сохранение между забегами.",
             "Кампания обрела четыре печати и охоту на боссов.\nПобеды открывают героев, главы и страницы Зала славы.",
@@ -7114,7 +7157,7 @@ struct Game {
             "Сюжетная прокачка привязана к миссиям: первая миссия начинается с тира I; следующие открывают тиры II, III, IV и V сразу с первого драфта (финал остаётся на V). Победа над боссом текущей миссии повышает тир сборки ещё на один в пределах V. В Endless сохранена прежняя разблокировка предметов по времени. Каждая следующая сюжетная миссия повышает HP, урон и скорость врагов, а также темп их появления на 3% относительно предыдущей миссии (до +15% в финале). В досье миссии показаны стартовый тир и прибавка сложности.",
             "Версия теперь задаётся в одном месте: build_windows.bat передаёт её компилятору, и она же попадает в имя файла, в свойства EXE, в заголовок окна и в эту хронику. Сборка идёт в отдельный каталог build и заменяет готовый EXE только после успешной компиляции, поэтому неудачная попытка больше не оставляет проект без рабочего билда. build_windows.bat принимает версию аргументом, корректно читает пустой version.txt и хранится с CRLF.",
             "Музыка теперь берётся из ваших файлов: игра читает MP3 из папки audio/ рядом с .exe (ss_menu_main, ss_gameplay_run, ss_boss_theme, ss_victory_boss, ss_gameover_death, ss_forge_shop) и играет их вместо встроенной синтезированной темы. Треки декодируются на ходу, поэтому 3–5 МБ файлы не нужно ни во что конвертировать; громкость музыки, клавиша [N] и приглушение во время громких эффектов работают и для них. ss_levelup_ding и ss_upgrade_pick звучат как короткие сигналы при новом уровне и при выборе улучшения. Если файла для сцены нет — для неё остаётся встроенная тема, поэтому игра не замолкает даже с пустой папкой audio/",
-            "Кузница: описание улучшения больше не уходит под кнопку «КУПИТЬ» — иконка, текст, шкала рангов и кнопка теперь раскладываются от краёв карточки, поэтому в широкоформатном и портретном варианте ничего не наезжает друг на друга. В договорах кадр иконки больше не вылезает над карточкой и не перекрывает подсказку «Покупка усиливает каждого следующего врага», а счётчик рангов переехал к шкале прогресса, чтобы длинные названия вроде «Марш голодной стаи» помещались целиком. Сетки карточек центрируются на широких экранах. Пока открыта карточка нового уровня, музыка боя становится на 80% тише и так же плавно возвращается. На экране смерти из строки урона убрано «ед.».", "Озвучка сообщений: системный голос Windows читает баннеры боя, сюжетные строки\nи предупреждения о боссах; в настройках появился переключатель «Озвучка сообщений».\nВсе сообщения собраны в единый реестр, битые строки видны в оверлее F3.\nF3 — техническая панель как в Minecraft: версия, FPS, сущности, звук и озвучка.\nСообщения боя — прозрачное окно в левом нижнем углу вместо полосы по центру.\nМетки на мобах больше не «диаметр»: спрайты центрируются по видимому рисунку.\nПункт «Музыка» и выбор вариантов убраны: музыка берётся только из audio/."};
+            "Кузница: описание улучшения больше не уходит под кнопку «КУПИТЬ» — иконка, текст, шкала рангов и кнопка теперь раскладываются от краёв карточки, поэтому в широкоформатном и портретном варианте ничего не наезжает друг на друга. В договорах кадр иконки больше не вылезает над карточкой и не перекрывает подсказку «Покупка усиливает каждого следующего врага», а счётчик рангов переехал к шкале прогресса, чтобы длинные названия вроде «Марш голодной стаи» помещались целиком. Сетки карточек центрируются на широких экранах. Пока открыта карточка нового уровня, музыка боя становится на 80% тише и так же плавно возвращается. На экране смерти из строки урона убрано «ед.».", "Озвучка сообщений: системный голос Windows читает баннеры боя, сюжетные строки\nи предупреждения о боссах; в настройках появился переключатель «Озвучка сообщений».\nВсе сообщения собраны в единый реестр, битые строки видны в оверлее F3.\nF3 — техническая панель как в Minecraft: версия, FPS, сущности, звук и озвучка.\nСообщения боя — прозрачное окно в левом нижнем углу вместо полосы по центру.\nМетки на мобах больше не «диаметр»: спрайты центрируются по видимому рисунку.\nПункт «Музыка» и выбор вариантов убраны: музыка берётся только из audio/.", "Озвучка сообщений больше не пользуется системным синтезатором Windows: все фразы —\nзаписанные файлы в audio/voice/, имя файла равно ключу сообщения из реестра.\nФразы идут по шине эффектов, музыка приглушается, пока реплика звучит.\nНет файла — строка молчит, а F3 и настройки показывают, сколько фраз не записано.\ntools/check_voice.py сверяет реестр с папкой; VOICE_LINES.md — таблица всех фраз.\nМетка щита на мобах — дуга со стороны блока вместо «диаметра» рядом с мобом."};
         const int versionY = portraitPatch ? 80 : 108;
         r.drawTextCentered(FONT_MED, SCREEN_W / 2, versionY, versions[patchNotesPage], 0xFFFFC75A);
         const int notesX = compactPatch ? panelX + 18 : 190;

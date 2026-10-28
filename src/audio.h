@@ -8,6 +8,7 @@
 #include "music_composer.h"
 #include "boss_score.h"
 #include "external_music.h"
+#include "voice.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -72,6 +73,7 @@ struct SoundEngine {
     // the synthesised score below; otherwise the built-in score keeps the scene alive.
     ExternalMusic externalMusic;
     ExternalMusicCue externalCues[2]; // 0 = level-up sting, 1 = upgrade-picked sting
+    VoiceBank voice;                  // recorded announcer phrases from audio/voice/
     float proceduralMusicGain = 0.0f;
 
     std::vector<int16_t> sfxSamples[SFX_COUNT];
@@ -522,6 +524,14 @@ struct SoundEngine {
         return MUSIC_SCENE_GAMEPLAY; // run, horde, recovery and the level-up overlay keep one bed
     }
     bool externalMusicActive() const { return externalMusic.available(); }
+
+    // --- announcer: recorded phrases from audio/voice/ (see voice.h) ---
+    bool speakMessage(const std::string& key) { return voice.speak(key); }
+    bool hasVoiceClip(const std::string& key) { return voice.hasClip(key); }
+    int voiceSpokenCount() const { return voice.spokenCount; }
+    bool voiceEnabled() const { return voice.enabled; }
+    void setVoiceEnabled(bool on) { voice.setEnabled(on); }
+    bool voiceSpeaking() const { return voice.speaking(); }
     int externalMusicTrackCount() const { return externalMusic.trackCount(); }
     // Short read-out of which scenes actually have a file, for the settings screen.
     std::string externalMusicSummary() const {
@@ -718,8 +728,9 @@ struct SoundEngine {
             ++liveVoices;
             if (sfxOn && voices[v].priority >= 4) importantVoice = true;
         }
-        if (!sfxOn) { externalCues[0].stop(); externalCues[1].stop(); }
-        const float duckTarget = importantVoice ? 0.64f : (liveVoices > 0 ? 0.84f : 1.0f);
+        if (!sfxOn) { externalCues[0].stop(); externalCues[1].stop(); voice.stop(); }
+        const bool announcing = sfxOn && voice.speaking();
+        const float duckTarget = (importantVoice || announcing) ? 0.60f : (liveVoices > 0 ? 0.84f : 1.0f);
         const float voiceHeadroom = liveVoices > 10 ? 0.78f : (liveVoices > 6 ? 0.88f : 1.0f);
         for (int i = 0; i < numSamples; ++i) {
             const float sfxTarget = sfxOn ? 1.0f : 0.0f;
@@ -734,6 +745,9 @@ struct SoundEngine {
             float cueSample = 0.0f;
             for (int c = 0; c < 2; ++c) cueSample += externalCues[c].next();
             if (cueSample != 0.0f) mix += cueSample * sfxVolumeSmooth * sfxMuteGain * 1.15f;
+            // The announcer is a one-shot on the same bus: honours [M] and the effects slider.
+            const float phrase = voice.next();
+            if (phrase != 0.0f) mix += phrase * sfxVolumeSmooth * sfxMuteGain * 1.20f;
 
             for (int v = 0; v < MAX_VOICES; ++v) {
                 ActiveVoice& vc = voices[v];
@@ -789,6 +803,8 @@ struct SoundEngine {
     void init() {
         externalMusic.setOutputRate(44100);
         externalMusic.scan();
+        voice.setOutputRate(44100);
+        voice.scan();
         loadExternalCues();
         (void)MusicComposer::allTracks(); // prewarm the immutable score table before the audio callback
         generateSfxBank();
@@ -828,6 +844,7 @@ struct SoundEngine {
     }
 
     void shutdown() {
+        voice.stop();
         externalMusic.shutdown();
 #ifdef _WIN32
         if (running.load(std::memory_order_relaxed)) {
