@@ -10,6 +10,7 @@
 
 Атлас встраивается в exe: индексная палитра 64×64, без PNG во время работы.
 """
+import colorsys
 import math
 import os
 
@@ -19,19 +20,51 @@ SIZE = 64
 
 # Индекс 0 — прозрачный, дальше — палитра одного предмета.
 #                       0        1 (фон тёмн.) 2 (фон)   3 (главный) 4 (свет)  5 (контур) 6 (акцент) 7 (белый)
-HUES = {
-    "azure":   (0xFF12304F, 0xFF1D4C7A, 0xFF3D8BFF, 0xFF8FC4FF, 0xFF0A1524, 0xFFBFE4FF, 0xFFFFFFFF),
-    "orange":  (0xFF3A1C08, 0xFF5C2C0C, 0xFFFF8420, 0xFFFFC070, 0xFF241004, 0xFFFFE0A0, 0xFFFFFFFF),
-    "violet":  (0xFF261640, 0xFF3A2263, 0xFFB266FF, 0xFFDDB6FF, 0xFF150B26, 0xFFE9D2FF, 0xFFFFFFFF),
-    "gold":    (0xFF3A2E08, 0xFF58460E, 0xFFFFD23F, 0xFFFFEE9C, 0xFF231B04, 0xFFFFF6C8, 0xFFFFFFFF),
-    "crimson": (0xFF3D0A14, 0xFF5E1120, 0xFFFF3355, 0xFFFF8C9C, 0xFF25040B, 0xFFFFC0C8, 0xFFFFFFFF),
-    "steel":   (0xFF242A33, 0xFF37404D, 0xFFC2CEDA, 0xFFEDF4FA, 0xFF12161C, 0xFFAFBECC, 0xFFFF8A6A),
-    "aqua":    (0xFF0A3238, 0xFF124C55, 0xFF7CFFE6, 0xFFCDFFF5, 0xFF06191C, 0xFF6FE8FF, 0xFFFFFFFF),
-    "ivory":   (0xFF3A3020, 0xFF57472C, 0xFFEFE3C0, 0xFFFFF8E6, 0xFF20180C, 0xFFD9A45C, 0xFFFFFFFF),
-    "green":   (0xFF103A1C, 0xFF175628, 0xFF4FE07A, 0xFFA8FFC4, 0xFF081F0F, 0xFFB9FF7A, 0xFFFFFFFF),
-    "magenta": (0xFF3A0C31, 0xFF571249, 0xFFFF5FD2, 0xFFFFB2EC, 0xFF24061F, 0xFFFFD0F2, 0xFFFFFFFF),
-}
-ORDER = ["azure", "orange", "violet", "gold", "crimson", "steel", "aqua", "ivory", "green", "magenta"]
+# Предмет -> (семейство, вариант). Семейство задаёт смысл, вариант — вес предмета.
+# Те же сорок цветов стоят в ITEM_TONE в src/renderer.h, поэтому рамка слота и
+# иконка никогда не расходятся: один предмет — один цвет, без повторов по кругу.
+ASSIGN = [
+    ("blue", "bright"), ("orange", "pure"), ("violet", "bright"), ("lime", "pure"), ("red", "pure"),
+    ("orange", "deep"), ("cyan", "pure"), ("amber", "dark"), ("green", "pure"), ("magenta", "pure"),
+    ("magenta", "dark"), ("orange", "bright"), ("amber", "bright"), ("lime", "deep"), ("amber", "deep"),
+    ("violet", "dark"), ("cyan", "dark"), ("violet", "deep"), ("cyan", "bright"), ("red", "bright"),
+    ("green", "dark"), ("teal", "pure"), ("teal", "deep"), ("magenta", "bright"), ("blue", "pure"),
+    ("green", "bright"), ("blue", "dark"), ("lime", "dark"), ("cyan", "deep"), ("lime", "bright"),
+    ("green", "deep"), ("red", "deep"), ("amber", "pure"), ("teal", "bright"), ("red", "dark"),
+    ("teal", "dark"), ("blue", "deep"), ("magenta", "deep"), ("orange", "dark"), ("violet", "pure"),
+]
+FAMILY_HUE = {"red": 352, "orange": 20, "amber": 42, "lime": 72, "green": 132,
+              "teal": 168, "cyan": 190, "blue": 222, "violet": 268, "magenta": 312}
+VARIANT = {"bright": (0.95, 0.74), "pure": (0.92, 0.56), "deep": (0.85, 0.42), "dark": (0.70, 0.32)}
+
+# Активные оружия: 0–6 и 24–27. У них квадратная стальная пластина,
+# у артефактов — круглая каменная шайба. Форма читается раньше цвета.
+WEAPON_ITEMS = set(range(0, 7)) | set(range(24, 28))
+
+
+def _hsl(hue, sat, light):
+    r, g, b = colorsys.hls_to_rgb((hue % 360) / 360.0, light, sat)
+    return (int(round(r * 255)) << 16) | (int(round(g * 255)) << 8) | int(round(b * 255))
+
+
+def _palette(item):
+    """Палитра одного предмета: подложка, фон, главный, свет, контур, акцент, белый."""
+    family, variant = ASSIGN[item]
+    hue = FAMILY_HUE[family]
+    sat, light = VARIANT[variant]
+    return (
+        0xFF000000 | _hsl(hue, min(0.60, sat * 0.65), 0.10),
+        0xFF000000 | _hsl(hue, min(0.60, sat * 0.72), 0.19),
+        0xFF000000 | _hsl(hue, sat, light),
+        0xFF000000 | _hsl(hue, min(0.95, sat * 0.85), min(0.88, light + 0.20)),
+        0xFF000000 | _hsl(hue, 0.75, 0.05),
+        0xFF000000 | _hsl(hue, min(0.90, sat * 0.60), min(0.94, light + 0.30)),
+        0xFFFFFFFF,
+    )
+
+
+PALETTES = [_palette(item) for item in range(40)]
+
 
 # индексы палитры
 BG, BG2, MAIN, LIGHT, OUTLINE, ACCENT, WHITE = 1, 2, 3, 4, 5, 6, 7
@@ -161,7 +194,30 @@ def base(canvas, key):
     canvas.ring(32, 32, 27, 2.0, MAIN) if False else None
 
 
-def frame(canvas, key):
+def frame(canvas, passive):
+    """Подложка предмета.
+
+    Оружие лежит на угловатой стальной пластине с бликом сверху, артефакт — на
+    круглой каменной шайбе. Раньше подложка была одна на всех: в слоте 22×22
+    артефакт не отличался от оружия до того, как игрок успевал разглядеть цвет.
+    """
+    if passive:
+        canvas.disc(32, 32, 30, OUTLINE)
+        canvas.disc(32, 32, 28, BG)
+        canvas.disc(32, 32, 23, BG2)
+        # мягкая тень внизу справа: шайба читается как объёмная
+        for y in range(20, 56):
+            for x in range(12, 56):
+                if canvas.px[y][x] == BG2 and (x - 32) + (y - 32) > 16:
+                    canvas.px[y][x] = BG
+        # блик сверху слева
+        for y in range(10, 30):
+            for x in range(10, 40):
+                if canvas.px[y][x] == BG2 and (x - 32) + (y - 32) < -14 and (x + y) % 2 == 0:
+                    canvas.px[y][x] = BG
+        canvas.ring(32, 32, 25.0, 1.6, MAIN)
+        canvas.ring(32, 32, 29.0, 1.2, OUTLINE)
+        return
     canvas.rrect(2, 2, 61, 61, 12, 0)
     canvas.rrect(3, 3, 60, 60, 11, BG)
     canvas.rrect(6, 6, 57, 57, 9, BG2)
@@ -613,12 +669,11 @@ def bake_ai_art(path):
 
 
 def build_icon(item):
-    key = ORDER[item % 10]
-    path = ai_art_path(item, key)
+    path = ai_art_path(item, item)
     if path:
         return bake_ai_art(path)
     canvas = Canvas()
-    frame(canvas, key)
+    frame(canvas, item not in WEAPON_ITEMS)
     if item < 10:
         GLYPHS[item](canvas)
     elif item < 20:
@@ -639,14 +694,13 @@ def emit():
     tables = []
     for item in range(40):
         built = build_icon(item)
-        key = ORDER[item % 10]
         if isinstance(built, tuple):
             pal, flat = built
             pal = list(pal) + [0] * (128 - len(pal))
             source = "ии-арт"
         else:
             canvas = built
-            pal = [0x00000000] + list(HUES[key])
+            pal = [0x00000000] + list(PALETTES[item])
             pal = pal + [0] * (128 - len(pal))
             flat = [px for row in canvas.px for px in row]
             source = "код"
@@ -663,7 +717,7 @@ def emit():
         lines.append("};")
         lines.append("")
         tables.append(name)
-        print(f"  {item:02d}  {key:8s}  {source:6s}  цветов: {len(used)}")
+        print(f"  {item:02d}  {ASSIGN[item][0]:8s}/{ASSIGN[item][1]:6s} {source:6s} цветов: {len(used)}")
     lines.append("static const BakedIconImage SKILL_ICONS_COLOR[40] = {")
     for name in tables:
         lines.append(f"    {{64,64,{name}_PALETTE,{name}_PIXELS}},")

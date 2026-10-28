@@ -33,47 +33,54 @@ inline uint32_t lerpColor(uint32_t c1, uint32_t c2, float t) {
 struct ItemTone { uint32_t bg, edge, glow; };
 // Тон сорока предметов: подложка, рамка, свечение. Смысл важнее красоты:
 // игрок должен узнавать предмет по цвету и не путать соседние.
+//
+// Сорок предметов — сорок разных цветов, а не десять по кругу. Цвет задаётся
+// семейством (смысл: огонь — оранжевый, кровь — красный, лёд — бирюза, ветер —
+// зелёный, руны — фиолет, магнит — пурпур, пергамент — янтарь, бездна — тёмный
+// фиолет) и весом предмета (тёмный вариант для тяжёлых печатей, светлый для
+// лёгких). Таблица в tools/generate_icon_color_atlas.py — источник тех же цветов
+// для атласа иконок, поэтому рамка слота и сама иконка всегда одного тона.
 static const ItemTone ITEM_TONE[40] = {
-    {0xFF111821, 0xFF4480C4, 0xFF78A5D7},  // 00 серебряные клинки — сталь
-    {0xFF26150C, 0xFFF35F16, 0xFFFA8C55},  // 01 огненный шар — огонь
-    {0xFF1B0F23, 0xFF9530D8, 0xFFB469E6},  // 02 рунический вихрь — руны
-    {0xFF26220C, 0xFFF3CE16, 0xFFFADF55},  // 03 цепная молния — молния
-    {0xFF250D11, 0xFFEA1E40, 0xFFF45C75},  // 04 кровавая аура — кровь
-    {0xFF221410, 0xFFCC5E3C, 0xFFDE8B72},  // 05 боевой топор — ржавый металл
-    {0xFF0D2125, 0xFF21C6E7, 0xFF5ED9F1},  // 06 ледяное кольцо — лёд
-    {0xFF1F1B13, 0xFFB89650, 0xFFCFB581},  // 07 книга мудрости — пергамент
-    {0xFF112118, 0xFF44C479, 0xFF78D7A0},  // 08 сапоги ветра — ветер
-    {0xFF240E23, 0xFFDB2DD5, 0xFFE967E4},  // 09 магнитный амулет — магнетизм
-    {0xFF230F18, 0xFFD5337F, 0xFFE46BA4},  // 10 сердце титана
-    {0xFF24100E, 0xFFE13A27, 0xFFED7062},  // 11 перчатка берсерка — ярость
-    {0xFF231E0F, 0xFFD8B130, 0xFFE6C969},  // 12 часы вечности — латунь
-    {0xFF22230F, 0xFFD0D533, 0xFFE0E46B},  // 13 проклятая монета
-    {0xFF26180C, 0xFFF37D16, 0xFFFAA255},  // 14 пепел феникса — пламя
-    {0xFF160E24, 0xFF6B27E1, 0xFF9562ED},  // 15 око Бездны
-    {0xFF1E1814, 0xFFAD7C5B, 0xFFC6A289},  // 16 печать Пепельного Сердца — пепел
-    {0xFF250D1E, 0xFFE721AC, 0xFFF15EC5},  // 17 кровавый осколок луны
-    {0xFF0E1D24, 0xFF27A3E1, 0xFF62BFED},  // 18 линза разлома
-    {0xFF261C0C, 0xFFED991B, 0xFFF6B75A},  // 19 клятва последнего рассвета
-    {0xFF172111, 0xFF77C444, 0xFF9ED778},  // 20 клеймо охотника — лес
-    {0xFF0F231F, 0xFF33D5B5, 0xFF6BE4CC},  // 21 руна возврата
-    {0xFF112120, 0xFF44C4C0, 0xFF78D7D4},  // 22 сердце последнего эха
-    {0xFF0F0F23, 0xFF3333D5, 0xFF6B6BE4},  // 23 покров междумирья
-    {0xFF0D1B25, 0xFF2191E7, 0xFF5EB2F1},  // 24 осколок кометы
-    {0xFF1E1022, 0xFFAF3CCC, 0xFFC872DE},  // 25 рунный разворот
-    {0xFF0C1326, 0xFF1B53ED, 0xFF5A83F6},  // 26 копьё разлома
-    {0xFF24200E, 0xFFE1BC27, 0xFFEDD162},  // 27 звезда пепла
-    {0xFF14181E, 0xFF5B7FAD, 0xFF89A4C6},  // 28 зеркало уклонения
-    {0xFF25240D, 0xFFE7E021, 0xFFF1ED5E},  // 29 печать разоблачения
-    {0xFF10221C, 0xFF39D09D, 0xFF6FE0BB},  // 30 чаша переполнения
-    {0xFF211115, 0xFFCA3E64, 0xFFDC7490},  // 31 осколок последнего удара
-    {0xFF251B0D, 0xFFE79121, 0xFFF1B25E},  // 32 ключ пепельного ритма
-    {0xFF0C1F26, 0xFF1BB5ED, 0xFF5ACCF6},  // 33 призма перекрёстного огня
-    {0xFF26110C, 0xFFED3E1B, 0xFFF6745A},  // 34 угольный фитиль
-    {0xFF12201E, 0xFF4ABEAF, 0xFF7CD3C8},  // 35 осколок оттепели
-    {0xFF111321, 0xFF3E51CA, 0xFF7482DC},  // 36 печать обратного тока
-    {0xFF1C1121, 0xFF9944C4, 0xFFB878D7},  // 37 знак палача
-    {0xFF230F0F, 0xFFD53333, 0xFFE46B6B},  // 38 печать возмездия
-    {0xFF16131F, 0xFF6F50B8, 0xFF9881CF},  // 39 руна свидетеля
+    {0xFF0A1329, 0xFF7EA4FC, 0xFFC8D7F9},  // 00 blue/bright
+    {0xFF29140A, 0xFFF66C28, 0xFFF2B292},  // 01 orange/pure
+    {0xFF180A29, 0xFFB97EFC, 0xFFDFC8F9},  // 02 violet/bright
+    {0xFF23290A, 0xFFCDF628, 0xFFDFF292},  // 03 lime/pure
+    {0xFF290A0E, 0xFFF62843, 0xFFF2929F},  // 04 red/pure
+    {0xFF28150B, 0xFFC64D10, 0xFFE48758},  // 05 orange/deep
+    {0xFF0A2429, 0xFF28D4F6, 0xFF92E2F2},  // 06 cyan/pure
+    {0xFF251E0E, 0xFF8B6818, 0xFFCDA23C},  // 07 amber/dark
+    {0xFF0A2910, 0xFF28F651, 0xFF92F2A5},  // 08 green/pure
+    {0xFF290A23, 0xFFF628CD, 0xFFF292DF},  // 09 magenta/pure
+    {0xFF250E20, 0xFF8B1874, 0xFFCD3CB0},  // 10 magenta/dark
+    {0xFF29140A, 0xFFFCA87E, 0xFFF9D8C8},  // 11 orange/bright
+    {0xFF29200A, 0xFFFCD67E, 0xFFF9EAC8},  // 12 amber/bright
+    {0xFF22280B, 0xFFA2C610, 0xFFC8E458},  // 13 lime/deep
+    {0xFF281F0B, 0xFFC69010, 0xFFE4BA58},  // 14 amber/deep
+    {0xFF190E25, 0xFF4E188B, 0xFF803CCD},  // 15 violet/dark
+    {0xFF0E2125, 0xFF18788B, 0xFF3CB5CD},  // 16 cyan/dark
+    {0xFF190B28, 0xFF6510C6, 0xFF9958E4},  // 17 violet/deep
+    {0xFF0A2429, 0xFF7EE7FC, 0xFFC8F1F9},  // 18 cyan/bright
+    {0xFF290A0E, 0xFFFC7E8F, 0xFFF9C8CE},  // 19 red/bright
+    {0xFF0E2513, 0xFF188B2F, 0xFF3CCD59},  // 20 green/dark
+    {0xFF0A2923, 0xFF28F6CD, 0xFF92F2DF},  // 21 teal/pure
+    {0xFF0B2822, 0xFF10C6A2, 0xFF58E4C8},  // 22 teal/deep
+    {0xFF290A23, 0xFFFC7EE2, 0xFFF9C8EF},  // 23 magenta/bright
+    {0xFF0A1329, 0xFF2866F6, 0xFF92AFF2},  // 24 blue/pure
+    {0xFF0A2910, 0xFF7EFC97, 0xFFC8F9D2},  // 25 green/bright
+    {0xFF0E1525, 0xFF183B8B, 0xFF3C67CD},  // 26 blue/dark
+    {0xFF20250E, 0xFF748B18, 0xFFB0CD3C},  // 27 lime/dark
+    {0xFF0B2328, 0xFF10A8C6, 0xFF58CDE4},  // 28 cyan/deep
+    {0xFF23290A, 0xFFE2FC7E, 0xFFEFF9C8},  // 29 lime/bright
+    {0xFF0B2811, 0xFF10C634, 0xFF58E474},  // 30 green/deep
+    {0xFF280B0F, 0xFFC61028, 0xFFE4586B},  // 31 red/deep
+    {0xFF29200A, 0xFFF6B828, 0xFFF2D592},  // 32 amber/pure
+    {0xFF0A2923, 0xFF7EFCE2, 0xFFC8F9EF},  // 33 teal/bright
+    {0xFF250E11, 0xFF8B1828, 0xFFCD3C4F},  // 34 red/dark
+    {0xFF0E2520, 0xFF188B74, 0xFF3CCDB0},  // 35 teal/dark
+    {0xFF0B1428, 0xFF1047C6, 0xFF5882E4},  // 36 blue/deep
+    {0xFF280B22, 0xFFC610A2, 0xFFE458C8},  // 37 magenta/deep
+    {0xFF25160E, 0xFF8B3F18, 0xFFCD6C3C},  // 38 orange/dark
+    {0xFF180A29, 0xFF8828F6, 0xFFBF92F2},  // 39 violet/pure
 };
 
 struct Renderer {
@@ -1081,6 +1088,14 @@ struct Renderer {
             FC(cx + sway, oy + 14, 13, core, (int)(150 + 90 * pulse));
             FC(cx + sway, oy + 14, 7, 0xFFFFF0C8, 235);
             FX(cx + sway - 20, oy + 30, 40, 3, core, (int)(60 + 60 * pulse));
+            // Каждый удар сердца выходит кольцом — силуэт «живёт», а не просто стоит.
+            // Кольцо рождается в такт 2,2 с и расходится за 0,7 с.
+            {
+                const float beat = fmodf(animTime, 2.2f) / 0.7f;
+                if (beat < 1.0f) {
+                    CR(cx + sway, oy + 14, 18 + (int)(beat * 26.0f), 2, core, (int)(150 * (1.0f - beat)));
+                }
+            }
             // голова в капюшоне
             FR(cx - 21 + sway, oy - 60, 42, 46, 14, robeDark, alpha);
             FR(cx - 15 + sway, oy - 52, 30, 30, 10, 0xFF0B0812, alpha);
@@ -1098,7 +1113,8 @@ struct Renderer {
             // вихрь пепла вокруг фигуры — эллипс, читается как орбита
             for (int ring = 0; ring < 2; ++ring) {
                 const int rr = 56 + ring * 14;
-                const float spin = animTime * (0.7f + ring * 0.5f);
+                // В ярости пепел идёт быстрее и плотнее: одна и та же фигура, но злее.
+                const float spin = animTime * ((0.7f + ring * 0.5f) * (enraged ? 1.6f : 1.0f));
                 for (int seg = 0; seg < 24; ++seg) {
                     const float a0 = spin + seg * 6.2831853f / 24.0f;
                     const int sxp = cx + (int)(cosf(a0) * rr);
@@ -1142,6 +1158,17 @@ struct Renderer {
                 const float glow = 0.5f + 0.5f * sinf(animTime * 4.0f - ln * 1.2f);
                 FX(cx - 8 + sway, ly, lw, 2, ink, (int)(110 + 140 * glow));
             }
+            // Бегущая строка по лицу: раз в 3,4 с по скрижали проходит светлая черта —
+            // видно, что страж не стоит, а пишет.
+            {
+                const float tick = fmodf(animTime, 3.4f) / 3.4f;
+                if (tick < 0.35f) {
+                    // Развёртка идёт вниз по скрижали, как сканирующая строка: поперёк
+                    // лица двигать нельзя — получался крест на всю голову.
+                    const int dy = (int)(tick / 0.35f * 28.0f);
+                    FX(cx - 15 + sway, oy - 70 + dy, 30, 2, 0xFFDFF6FF, 190);
+                }
+            }
             // рука с пером
             {
                 const int ax = cx - 46 + sway, ay = oy - 6;
@@ -1169,6 +1196,21 @@ struct Renderer {
                     const int ly = bookY - ph / 2 + 4 + ln * 5 - scroll;
                     if (ly < bookY - ph / 2 + 2 || ly > bookY + ph / 2 - 3) continue;
                     FX(px3 + 4, ly, pw - 8, 1, 0xFF3A4652, 220);
+                }
+            }
+            // Переворачивающаяся страница: раз в 2,6 с лист поднимается над правой
+            // страницей и падает обратно. Без этого том читался как картинка.
+            {
+                const float turn = fmodf(animTime, 2.6f) / 2.6f;
+                if (turn < 0.42f) {
+                    const float t2 = turn / 0.42f;                 // 0…1
+                    const float ang = t2 * 3.14159f;                // лист идёт по дуге
+                    const int lift = (int)(sinf(ang) * 9.0f);
+                    const int sw = (int)(20.0f * cosf(ang));
+                    if (sw > 0) {
+                        FR(cx + 2, bookY - 12 - lift, sw, 24, 2, 0xFFEFE7D4, alpha);
+                        FX(cx + 3, bookY - 10 - lift, std::max(1, sw - 2), 1, 0xFF3A4652, 200);
+                    }
                 }
             }
             FR(cx - 3, bookY - 16, 6, 34, 3, stoneLit, alpha);
@@ -1239,6 +1281,12 @@ struct Renderer {
                     DL(bx, by + 2, bx + (int)(cosf(ang) * 22.0f), by + (int)(sinf(ang) * 26.0f), core, 1, 130);
                 }
             };
+            // шлейф: два запоздавших слепка, каждый бледнее предыдущего —
+            // движение читается как «стекло», а не как две статичные фигурки
+            for (int ghost = 2; ghost >= 1; --ghost) {
+                const int lagX = cx + 40 + sway - (int)(sinf(animTime * 2.6f - ghost * 0.5f) * 5.0f) - ghost * 6;
+                glassBody(lagX, oy - 4 + ghost, 36 - ghost * 8, true, 1.1f + ghost * 0.4f);
+            }
             // двойник: та же фигура, отстаёт по фазе и просвечивает сквозь
             const int tx = cx + 46 + sway;
             glassBody(tx, oy - 4, 120, true, 1.1f);
