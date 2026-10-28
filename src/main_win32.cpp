@@ -136,6 +136,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (!repeat) {
                 if (wParam == VK_F11) {
                     toggleFullscreen(hwnd);
+                } else if (wParam == VK_F3) {
+                    g_game.debugOverlay = !g_game.debugOverlay; // F3: technical overlay, Minecraft style
                 } else if (wParam == VK_SHIFT) {
                     g_game.onKeyPress(32); // Shift also triggers Dash!
                 } else if (wParam == VK_LEFT && g_game.state == STATE_MENU) {
@@ -174,7 +176,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 static std::wstring windowTitle() {
     // GAME_VERSION is injected by build_windows.bat, so the title can never go stale again.
-    const char* utf8 = "Пепел Тьмы: Выжившие " GAME_VERSION " — F11: полный экран, F12: арена музыки босса";
+    const char* utf8 = "Пепел Тьмы: Выжившие " GAME_VERSION " — F3: отладка, F11: полный экран, F12: арена музыки босса";
     const int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
     if (len <= 1) return L"Shadow Survivors";
     std::wstring wide((size_t)(len - 1), L'\0');

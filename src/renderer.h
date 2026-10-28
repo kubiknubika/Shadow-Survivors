@@ -395,6 +395,45 @@ struct Renderer {
     }
 
     // Nearest-neighbor full-screen artwork blit for embedded cutscene paintings.
+    // Baked pixel art carries transparent padding that is not symmetric: the visible
+    // figure can sit a few pixels left/above the canvas centre. Actors are drawn from
+    // their logical centre, so every ring, HP bar and marker must use the figure centre
+    // instead — otherwise the "diameter" marks look shifted to one side of the mob.
+    void bakedSpriteVisualOffset(const BakedSprite* spr, int& dx, int& dy) const {
+        dx = dy = 0;
+        if (!spr || spr->width <= 0 || spr->height <= 0) return;
+        struct Entry { const BakedSprite* spr; int dx, dy; };
+        static Entry cache[256];
+        static int used = 0;
+        for (int i = 0; i < used; ++i) {
+            if (cache[i].spr == spr) { dx = cache[i].dx; dy = cache[i].dy; return; }
+        }
+        int x0 = spr->width, y0 = spr->height, x1 = -1, y1 = -1;
+        for (int y = 0; y < spr->height; ++y) {
+            for (int x = 0; x < spr->width; ++x) {
+                if (((spr->pixels[y * spr->width + x] >> 24) & 0xFF) <= 10) continue;
+                if (x < x0) x0 = x;
+                if (x > x1) x1 = x;
+                if (y < y0) y0 = y;
+                if (y > y1) y1 = y;
+            }
+        }
+        if (x1 >= 0 && y1 >= 0) {
+            // Round to whole pixels so the sprite grid stays crisp.
+            dx = (int)std::lround((x0 + x1) * 0.5 - (spr->width - 1) * 0.5);
+            dy = (int)std::lround((y0 + y1) * 0.5 - (spr->height - 1) * 0.5);
+        }
+        if (used < 256) cache[used++] = Entry{spr, dx, dy};
+    }
+
+    // Draw a baked sprite so its visible pixels are centred on (cx, cy).
+    void drawBakedSpriteCentred(const BakedSprite* spr, int cx, int cy, bool flipX = false, bool hitFlash = false,
+                                bool frozen = false, int alphaScale = 255) {
+        int dx = 0, dy = 0;
+        bakedSpriteVisualOffset(spr, dx, dy);
+        drawBakedSprite(spr, cx - dx, cy - dy, flipX, hitFlash, frozen, alphaScale);
+    }
+
     void drawBakedSpriteScaled(const BakedSprite* spr, int x, int y, int w, int h, int alphaScale = 255) {
         if (!spr || w <= 0 || h <= 0) return;
         const int x0 = std::max(0, x), y0 = std::max(0, y);
@@ -559,9 +598,11 @@ struct Renderer {
 
     void drawHeroSprite(int cx, int cy, int heroClass, float animTime, int facing, bool hurtFlash, bool dashing) {
         if (dashing) addGlow(cx, cy, 42, 0xFF40E8FF, 195);
-        drawShadow(cx, cy + 20, 15, 6);
         int frame = ((int)(animTime * 6.0f)) & 1;
-        drawBakedSprite(HERO_SPRITES[heroClass % 5][frame], cx, cy, facing < 0, hurtFlash, false, 255);
+        int fx = 0, fy = 0;
+        bakedSpriteVisualOffset(HERO_SPRITES[heroClass % 5][frame], fx, fy);
+        drawShadow(cx, cy + 20 - fy, 15, 6);
+        drawBakedSpriteCentred(HERO_SPRITES[heroClass % 5][frame], cx, cy, facing < 0, hurtFlash, false, 255);
     }
 
     void drawMonsterSprite(int cx, int cy, int type, float animTime, bool hitFlash, bool isElite, bool frozen = false, bool flipX = false) {
@@ -569,19 +610,23 @@ struct Renderer {
             drawCircleRing(cx, cy + 14, 18, 2, 0xFFFFC028, 200, true);
             addGlow(cx, cy, 24, 0xFFFF9020, 95);
         }
-        drawShadow(cx, cy + 16, 12, 5);
         int frame = ((int)(animTime * 6.5f + cx * 0.04f)) & 1;
-        drawBakedSprite(MONSTER_SPRITES[type % 11][frame], cx, cy, flipX, hitFlash, frozen, 255);
+        int fx = 0, fy = 0;
+        bakedSpriteVisualOffset(MONSTER_SPRITES[type % 11][frame], fx, fy);
+        drawShadow(cx, cy + 16 - fy, 12, 5);
+        drawBakedSpriteCentred(MONSTER_SPRITES[type % 11][frame], cx, cy, flipX, hitFlash, frozen, 255);
     }
 
     void drawBossSprite(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged = false) {
-        drawShadow(cx, cy + 36, 32, 12);
         int auraRad = 40 + (int)(sinf(animTime * 7.0f) * 5.0f);
         uint32_t auraCol = enraged ? 0xFFFF2040 : ((bossType == 0) ? 0xFFFFB028 : (bossType == 1 ? 0xFF80FF40 : (bossType == 2 ? 0xFFFF3068 : 0xFFFF6818)));
         drawCircleRing(cx, cy + 24, auraRad, 3, auraCol, 210, true);
         addGlow(cx, cy, 62, auraCol, enraged ? 190 : 140);
         int frame = ((int)(animTime * 4.5f)) & 1;
-        drawBakedSprite(BOSS_SPRITES[bossType % 4][frame], cx, cy, false, hitFlash, false, 255);
+        int fx = 0, fy = 0;
+        bakedSpriteVisualOffset(BOSS_SPRITES[bossType % 4][frame], fx, fy);
+        drawShadow(cx, cy + 36 - fy, 32, 12);
+        drawBakedSpriteCentred(BOSS_SPRITES[bossType % 4][frame], cx, cy, false, hitFlash, false, 255);
     }
 
     void drawWeaponIcon(int cx, int cy, int weaponId, int size = 22, bool evolved = false) {

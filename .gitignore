@@ -2,6 +2,8 @@
 # build_windows.bat keeps every intermediate here: resource.rc, resource.o,
 # build.log and the freshly linked exe (plus a .pdb when built with -g).
 /build/
+# Local build counter, rewritten by every build; a tracked copy broke `git pull`.
+version.txt
 *.o
 *.obj
 *.res

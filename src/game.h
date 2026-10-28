@@ -12,6 +12,8 @@
 #include "audio.h"
 #include "advisor_weights.h"
 #include "version.h"
+#include "messages.h"
+#include "speech.h"
 
 enum GameState {
     STATE_MENU = 0,
@@ -104,7 +106,7 @@ static constexpr int MONSTER_TYPE_COUNT = 11;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 71;
+static constexpr int PATCH_NOTES_COUNT = 72;
 
 struct ItemDef {
     int id;
@@ -342,7 +344,7 @@ struct GameOptions {
     int projectileTrailsEnabled = 1;
     float sfxVolume = 0.65f;
     float musicVolume = 0.42f;
-    int musicVariant = 0; // selected score option, 0..9
+    int messageSpeechEnabled = 1; // read combat messages aloud (SAPI)
     int skillIconStyle = 0; // 0=vector, 1=AI art; used by weapon IDs 2 and 3 only.
 };
 
@@ -429,6 +431,16 @@ struct Game {
     float superTimer = 0.0f;
     std::string storyLine;
     float storyTimer = 0.0f;
+    std::string storySpeaker;      // registry key of the message now on screen
+    float storyDuration = 0.0f;    // full lifetime, used for the fade envelope
+    std::string announceLastText;  // de-duplicates the speaker on repeated boss lines
+    float announceLastAt = -100.0f;
+    MessageRegistry messages;      // every shown message is accounted for here
+    SpeechEngine speech;           // Windows SAPI announcer (safe when unsupported)
+    bool debugOverlay = false;     // F3 technical read-out
+    float fpsSmooth = 60.0f;
+    float frameMsSmooth = 16.7f;
+    int debugPeakEntities = 0;
     float buildTierUpTimer = 0.0f;
     int buildTierUpValue = 1;
     float playerDeathTimer = 0.0f;
@@ -534,8 +546,7 @@ struct Game {
     bool patchNotesDoNotShowAgain = false;
     int patchNotesPage = 0;
     int hallPage = 0; // 0=Hall of Fame, 1=Witness Ledger
-    int settingsVolumeFocus = 0; // 0=SFX, 1=music, 2=music score
-    float musicVariantToastTimer = 0.0f;
+    int settingsVolumeFocus = 0; // 0=SFX, 1=music volume
     float bossDeferredTimer = 0.0f;
     int currentRunChapter = 0;
     bool bossTrioStarted = false;
@@ -574,11 +585,15 @@ struct Game {
     void init() {
         sound.init();
         loadOptions();
+        // Windows system voice; harmless no-op elsewhere and when the player turned speech off.
+        speech.init(options.messageSpeechEnabled != 0);
         loadSave();
         initRun(0);
         patchNotesPage = PATCH_NOTES_COUNT - 1;
         state = options.patchNotesHiddenVersion == PATCH_NOTES_VERSION ? STATE_MENU : STATE_PATCH_NOTES;
     }
+
+    ~Game() { speech.shutdown(); }
 
     FILE* openSaveFile(bool writeMode) {
 #ifdef _WIN32
@@ -653,7 +668,7 @@ struct Game {
                     options.patchNotesHiddenVersion = old.patchNotesHiddenVersion;
                     options.projectileTrailsEnabled = old.projectileTrailsEnabled;
                     options.sfxVolume = old.sfxVolume; options.musicVolume = old.musicVolume;
-                    options.musicVariant = old.musicVariant;
+                    options.messageSpeechEnabled = 1;
                     options.skillIconStyle = 0;
                 }
             } else if (n == (long)sizeof(LegacyOptions294)) {
@@ -697,9 +712,10 @@ struct Game {
         if (!std::isfinite(options.musicVolume)) options.musicVolume = 0.42f;
         options.sfxVolume = std::max(0.0f, std::min(1.0f, options.sfxVolume));
         options.musicVolume = std::max(0.0f, std::min(1.0f, options.musicVolume));
-        options.musicVariant = std::max(0, std::min(9, options.musicVariant));
+        // Old builds stored the music-track index here; anything non-zero simply means "on".
+        options.messageSpeechEnabled = options.messageSpeechEnabled != 0 ? 1 : 0;
         options.skillIconStyle = std::max(0, std::min(1, options.skillIconStyle));
-        sound.musicVariant.store(options.musicVariant, std::memory_order_relaxed);
+        sound.musicVariant.store(0, std::memory_order_relaxed);
         sound.enabled.store(options.sfxEnabled != 0, std::memory_order_relaxed);
         sound.musicEnabled.store(options.musicEnabled != 0, std::memory_order_relaxed);
         sound.sfxVolume.store(options.sfxVolume, std::memory_order_relaxed);
@@ -713,7 +729,7 @@ struct Game {
         options.musicEnabled = sound.musicEnabled.load(std::memory_order_relaxed) ? 1 : 0;
         options.sfxVolume = sound.sfxVolume.load(std::memory_order_relaxed);
         options.musicVolume = sound.musicVolume.load(std::memory_order_relaxed);
-        options.musicVariant = std::max(0, std::min(9, sound.musicVariant.load(std::memory_order_relaxed)));
+        options.messageSpeechEnabled = options.messageSpeechEnabled != 0 ? 1 : 0;
         FILE* f = openOptionsFile(true);
         if (f) { fwrite(&options, sizeof(options), 1, f); fclose(f); }
     }
@@ -1442,8 +1458,7 @@ struct Game {
         static const char* phaseRoman[3] = {"I", "II", "III"};
         static const char* phaseTitle[3] = {"ОХОТА", "НАТИСК", "ЯРОСТЬ"};
         static const char* bossShort[4] = {"МОРГАР", "МАЛАКОР", "КАРДИНАЛ", "АЗАРОТ"};
-        storyLine = std::string(bossShort[m.bossType & 3]) + " • ФАЗА " + phaseRoman[m.bossPhase - 1] + " — " + phaseTitle[m.bossPhase - 1];
-        storyTimer = 3.2f;
+        announce(GMSG_BOSS_PHASE, std::string(bossShort[m.bossType & 3]) + " • ФАЗА " + phaseRoman[m.bossPhase - 1] + " — " + phaseTitle[m.bossPhase - 1], 3.2f);
         bossPhaseEventTimer = 3.2f;
         bossPhaseEventType = m.bossType & 3;
         bossPhaseEventNumber = m.bossPhase;
@@ -1539,8 +1554,7 @@ struct Game {
         nextBreakthroughLevel = playerLevel + 7 + (rand() % 9);
         difficultyBanner = "ПРОРЫВ! ОРДА — УРОВЕНЬ " + std::to_string(playerLevel);
         difficultyBannerTimer = 4.0f;
-        storyLine = "НА ТЕБЯ ИДЁТ ОСОБАЯ ОРДА!";
-        storyTimer = 3.0f;
+        announce(GMSG_BREAKTHROUGH_START, "НА ТЕБЯ ИДЁТ ОСОБАЯ ОРДА!", 3.0f);
         if (options.screenShakeEnabled) screenShake = std::max(screenShake, 0.18f);
         sound.play(SFX_BOSS, 0.08f);
 
@@ -1565,6 +1579,7 @@ struct Game {
         breakthroughEarlyHit = false;
         recoveryTimer = 18.0f;
         difficultyBanner = "ПРОРЫВ ОТБИТ! ВРАГИ ОТСТУПАЮТ";
+        speakOnly(GMSG_BREAKTHROUGH_HELD2, difficultyBanner);
         difficultyBannerTimer = 4.5f;
         sound.play(SFX_LEVELUP, 0.08f);
     }
@@ -1606,8 +1621,7 @@ struct Game {
             if (!evolvedWeapons[w] && itemLevels[w] >= 9 && itemLevels[relicForWeapon[w]] >= 4) {
                 evolvedWeapons[w] = true;
                 sound.play(SFX_EVOLVE, 0.01f);
-                storyLine = std::string("СИМБИОЗ: ") + evoNames[w] + " пробудился!";
-                storyTimer = 5.0f;
+                announce(GMSG_EVOLUTION, std::string("СИМБИОЗ: ") + evoNames[w] + " пробудился!", 5.0f);
                 superCharge = std::min(100.0f, superCharge + 8.0f);
             }
         }
@@ -1707,13 +1721,11 @@ struct Game {
         memset(evolvedWeapons, 0, sizeof(evolvedWeapons));
         superCharge = 0.0f; superActive = false; superTimer = 0.0f;
         if (gameMode == MODE_STORY) {
-            storyLine = selectedCampaignMission().briefing;
-            storyTimer = 8.0f;
+            announce(GMSG_MISSION_BRIEFING, selectedCampaignMission().briefing, 8.0f);
             difficultyBanner = selectedCampaignMission().objective;
             difficultyBannerTimer = 7.0f;
         } else {
-            storyLine = "БЕСКОНЕЧНАЯ НОЧЬ: КУЗНИЦА ТРЕНИРУЕТСЯ НА БЕЗОПАСНЫХ ЭХО.";
-            storyTimer = 4.0f;
+            announce(GMSG_ENDLESS_START, "БЕСКОНЕЧНАЯ НОЧЬ: КУЗНИЦА ТРЕНИРУЕТСЯ НА БЕЗОПАСНЫХ ЭХО.", 4.0f);
         }
         memset(weaponTimers, 0, sizeof(weaponTimers));
         memset(tierWeaponTimers, 0, sizeof(tierWeaponTimers));
@@ -2263,7 +2275,7 @@ struct Game {
         }
         char burst[160]; // UTF-8 text must not be byte-truncated before the HUD can wrap it.
         snprintf(burst, sizeof(burst), "РЕЗОНАТОР РАЗРУШЕН: +%d %s", spawned, enemyForm(spawned));
-        storyLine = burst; storyTimer = 3.2f;
+        announce(GMSG_RESONATOR_SPAWN, burst, 3.2f);
         if (options.screenShakeEnabled) screenShake = std::max(screenShake, 0.32f);
     }
 
@@ -2277,8 +2289,9 @@ struct Game {
         }
         char eventText[160]; // Cyrillic status strings are multi-byte UTF-8.
         snprintf(eventText, sizeof(eventText), "ТИХАЯ ОХОТА: СТАЯ ВЫЗВАНА • ВРАГОВ БЫЛО %d", before);
-        storyLine = eventText; storyTimer = 3.4f;
+        announce(GMSG_WORLD_EVENT, eventText, 3.4f);
         difficultyBanner = "ПОСЛЕ БОЯ ПОДБЕРИ 6 МОНЕТ, КОТОРЫЕ ОСТАВИЛА СТАЯ"; difficultyBannerTimer = 3.2f;
+        speakOnly(GMSG_COIN_HINT, difficultyBanner);
         eventCooldown = 72.0f; lowActionTimer = 0.0f;
     }
 
@@ -2959,6 +2972,7 @@ struct Game {
                 if (currentBuildTier > previousBuildTier) {
                     buildTierUpValue = currentBuildTier;
                     buildTierUpTimer = 3.4f;
+                    speakOnly(GMSG_BUILD_TIER_UP, "Тир сборки повышен: тир " + std::to_string(currentBuildTier));
                     sound.play(SFX_TIER_UP, 0.25f);
                     addFloatingText(playerX, playerY - 86.0f, "ТИР СБОРКИ ПОВЫШЕН!", 0xFFFFD878, true);
                     spawnParticles(playerX, playerY, 42, 0xFFFFD05C, 175.0f, 5, true);
@@ -2979,7 +2993,7 @@ struct Game {
                     save.storySealMask |= storyBit;
                     save.storyEntryMask |= storyBit;
                     save.storyChapter = std::max(save.storyChapter, (m.bossType & 3) + 1);
-                    if (firstSeal) { storyLine = sealLines[m.bossType & 3]; storyTimer = 7.0f; }
+                    if (firstSeal) announce(GMSG_SEAL_LORE, sealLines[m.bossType & 3], 7.0f);
                 }
                 if (gameMode == MODE_STORY && m.isMissionFinalBoss) {
                     if (selectedStoryMission == 4) save.storyEntryMask |= STORY_ARCHIVE_MISSION_COMPLETE_BIT;
@@ -2994,8 +3008,7 @@ struct Game {
                             save.storyEntryMask |= STORY_HEART_MISSION_COMPLETE_BIT;
                         if (!save.seenEndingCutscene) endingCutscenePending = true;
                         else campaignEndPending = true;
-                        storyLine = "ТРИ ЭХО-ПРИКАЗА РАЗРУШЕНЫ. КАМПАНИЯ ЗАВЕРШЕНА — ПОРТАЛ НЕ НУЖЕН.";
-                        storyTimer = 6.0f;
+                        announce(GMSG_CAMPAIGN_END, "ТРИ ЭХО-ПРИКАЗА РАЗРУШЕНЫ. КАМПАНИЯ ЗАВЕРШЕНА — ПОРТАЛ НЕ НУЖЕН.", 6.0f);
                     }
                 }
                 writeSave();
@@ -3418,8 +3431,7 @@ struct Game {
         portal.type = 7; portal.value = 1; portal.bobTime = 0.0f; portal.magnetized = false;
         pickups.push_back(portal);
         portalSpawned = true;
-        storyLine = gameMode == MODE_STORY ? "ЭХО-ПОРТАЛ К КУЗНИЦЕ: СОХРАНИТ ДОБЫЧУ, НО НЕ СЛОМАЕТ ПЕЧАТИ." : "РЕДКИЙ ПОРТАЛ ОБНАРУЖЕН — ВОЙДИ В НЕГО, ЧТОБЫ СОХРАНИТЬ ЗАБЕГ";
-        storyTimer = 7.0f;
+        announce(GMSG_PORTAL_FOUND, gameMode == MODE_STORY ? "ЭХО-ПОРТАЛ К КУЗНИЦЕ: СОХРАНИТ ДОБЫЧУ, НО НЕ СЛОМАЕТ ПЕЧАТИ." : "РЕДКИЙ ПОРТАЛ ОБНАРУЖЕН — ВОЙДИ В НЕГО, ЧТОБЫ СОХРАНИТЬ ЗАБЕГ", 7.0f);
         addShockwave(portal.x, portal.y, 120.0f, 0xFF69E8FF, 1.2f);
         sound.play(SFX_EVOLVE, 0.1f);
     }
@@ -3431,8 +3443,7 @@ struct Game {
         runGold += bonus;
         recordRunEnd();
         writeSave();
-        storyLine = gameMode == MODE_STORY ? "КУЗНИЦА СОХРАНИЛА ДОБЫЧУ И УЛИКИ. АРХИВ ВСЁ ЕЩЁ ЗАПЕЧАТАН." : "ПОРТАЛ ЗАКРЫТ — ЗОЛОТО СОХРАНЕНО";
-        storyTimer = 0.0f;
+        announce(GMSG_PORTAL_USED, gameMode == MODE_STORY ? "КУЗНИЦА СОХРАНИЛА ДОБЫЧУ И УЛИКИ. АРХИВ ВСЁ ЕЩЁ ЗАПЕЧАТАН." : "ПОРТАЛ ЗАКРЫТ — ЗОЛОТО СОХРАНЕНО", 0.0f);
         sound.musicMode = 4;
         state = STATE_EXTRACTION;
     }
@@ -3462,8 +3473,7 @@ struct Game {
                 const Monster& newResonator = monsters.back();
                 spawnParticles(newResonator.x, newResonator.y, 24, 0xFFB46CFF, 78.0f, 3);
                 addShockwave(newResonator.x, newResonator.y, 82.0f, 0xFFD59BFF, 0.62f);
-                storyLine = gameMode == MODE_STORY ? "ЭХО-ЛИТЕЙНЯ: НАЙДИ РЕЗОНАТОР И РАЗРУШЬ — ОН ПЕЧАТАЕТ КОПИИ ПРИКАЗА." : "НОВЫЙ РЕЗОНАТОР НА ПОЛЕ — НАЙДИ И РАЗРУШЬ ЕГО";
-                storyTimer = 3.4f;
+                announce(GMSG_RESONATOR_SPAWN, gameMode == MODE_STORY ? "ЭХО-ЛИТЕЙНЯ: НАЙДИ РЕЗОНАТОР И РАЗРУШЬ — ОН ПЕЧАТАЕТ КОПИИ ПРИКАЗА." : "НОВЫЙ РЕЗОНАТОР НА ПОЛЕ — НАЙДИ И РАЗРУШЬ ЕГО", 3.4f);
             }
             // Let the player reach the current distant objective before another is introduced.
             resonatorSpawnTimer = afterResonators < MAX_ACTIVE_RESONATORS
@@ -3496,7 +3506,7 @@ struct Game {
                 breakthroughTimer = std::max(0.0f, breakthroughTimer - dt);
                 if (breakthroughTimer <= 0.0f) {
                     if (breakthroughEarlyHit) finishBreakthrough();
-                    else { difficultyBanner = "ОРДА НЕ ОСТАНОВИТСЯ, ПОКА ТЫ НЕ ПОЛУЧИШЬ УДАР"; difficultyBannerTimer = 4.0f; }
+                    else { difficultyBanner = "ОРДА НЕ ОСТАНОВИТСЯ, ПОКА ТЫ НЕ ПОЛУЧИШЬ УДАР"; difficultyBannerTimer = 4.0f; speakOnly(GMSG_BREAKTHROUGH_PRESSURE, difficultyBanner); }
                 }
             } else {
                 breakthroughEscalation += dt;
@@ -3513,6 +3523,7 @@ struct Game {
             lastBreakthroughWarningLevel != nextBreakthroughLevel) {
             lastBreakthroughWarningLevel = nextBreakthroughLevel;
             difficultyBanner = "ПРЕДУПРЕЖДЕНИЕ: НА СЛЕДУЮЩЕМ УРОВНЕ БУДЕТ ПРОРЫВ";
+            speakOnly(GMSG_BREAKTHROUGH_WARNING, difficultyBanner);
             difficultyBannerTimer = 3.5f;
             sound.play(SFX_BOSS, 0.06f);
         }
@@ -3660,8 +3671,7 @@ struct Game {
                         ? "ТРЕНИРОВОЧНЫЙ ПРОТОКОЛ: ТРИ ЭХО-ПРИКАЗА"
                         : "АРХИВНЫЙ ПРОТОКОЛ: ТРИ ЭХО-ПРИКАЗА";
                     bossWarningTimer = 6.0f;
-                    storyLine = "ТРИ ЗАПИСИ ЗАЩИЩАЮТ СЕРДЦЕ АРХИВА. ЭТО НЕ ВОСКРЕСШИЕ СТРАЖИ.";
-                    storyTimer = 7.0f;
+                    announce(GMSG_TRIO_INTRO, "ТРИ ЗАПИСИ ЗАЩИЩАЮТ СЕРДЦЕ АРХИВА. ЭТО НЕ ВОСКРЕСШИЕ СТРАЖИ.", 7.0f);
                 } else {
                     spawnMonster(mission.bossType, false, true, mission.bossType);
                     if (monsters.back().isBoss) {
@@ -3674,8 +3684,7 @@ struct Game {
                     }
                     bossWarningName = mission.finalBoss;
                     bossWarningTimer = 5.0f;
-                    storyLine = mission.briefing;
-                    storyTimer = 5.0f;
+                    announce(GMSG_MISSION_BRIEFING, mission.briefing, 5.0f);
                     if (selectedStoryMission < 4) {
                         const uint32_t storyBit = 1u << mission.bossType;
                         if ((save.storyEntryMask & storyBit) == 0) {
@@ -3707,6 +3716,7 @@ struct Game {
                 };
                 bossWarningName = bNames[bType];
                 bossWarningTimer = 4.0f;
+                speakOnly(GMSG_BOSS_WARNING, std::string("Страж приближается: ") + bNames[bType]);
                 sound.play(SFX_BOSS, 0.1f);
             }
         }
@@ -3854,8 +3864,7 @@ struct Game {
                         "КАРДИНАЛ: ПИСАРИ ЗАКРЫВАЮТ КРУГ!",
                         "АЗАРОТ: ПЕПЕЛЬНЫЙ ЛЕГИОН, КО МНЕ!"
                     };
-                    storyLine = summonLines[m.bossType & 3];
-                    storyTimer = 2.8f;
+                    announce(GMSG_BOSS_SUMMON, summonLines[m.bossType & 3], 2.8f);
                     sound.play(SFX_BOSS_TELEGRAPH, 0.28f);
                 }
 
@@ -3897,8 +3906,7 @@ struct Game {
                             "КАРДИНАЛ: РЫВОК ПО ЛИНИИ! СМЕНИ ПОЗИЦИЮ!",
                             "АЗАРОТ: ОГНЕННОЕ КОЛЬЦО! ВЫРВИСЬ ИЗ РАДИУСА!"
                         };
-                        storyLine = abilityLines[m.bossType & 3];
-                        storyTimer = 2.1f;
+                        announce(GMSG_BOSS_ABILITY, abilityLines[m.bossType & 3], 2.1f);
                         sound.play(SFX_BOSS_TELEGRAPH, 0.22f);
                     }
                 }
@@ -4211,8 +4219,7 @@ struct Game {
             addShockwave(playerX, playerY, 230.0f, 0xFFFFD76A, 0.78f);
             addShockwave(playerX, playerY, 355.0f, 0xFFEF8CFF, 1.18f);
             addFloatingText(playerX, playerY - 52.0f, "ВОСКРЕШЕНИЕ ФЕНИКСА", 0xFFFFE48A, true);
-            storyLine = "ПЕПЕЛ ФЕНИКСА: ВОСКРЕШЕНИЕ УСИЛЕНО РАНГОМ АРТЕФАКТА.";
-            storyTimer = 5.0f;
+            announce(GMSG_PHOENIX_REVIVE, "ПЕПЕЛ ФЕНИКСА: ВОСКРЕШЕНИЕ УСИЛЕНО РАНГОМ АРТЕФАКТА.", 5.0f);
         }
         // Dramatic defeat beat; stats are recorded immediately, then the game-over screen follows.
         if (playerHp <= 0.0f) {
@@ -4226,8 +4233,7 @@ struct Game {
             spawnParticles(playerX, playerY, 48, 0xFFB060FF, 125.0f, 3, true);
             addShockwave(playerX, playerY, 190.0f, 0xFFFF4058, 0.9f);
             addShockwave(playerX, playerY, 285.0f, 0xFF6A40A8, 1.35f);
-            storyLine = gameMode == MODE_STORY ? "ТЕЛО ПАЛО. КУЗНИЦА СОХРАНИЛА ПАМЯТЬ И УЖЕ НАЙДЕННЫЕ УЛИКИ." : "ТВОЯ ИСКРА ПОГАСЛА...";
-            storyTimer = playerDeathTimer;
+            announce(GMSG_PLAYER_DEATH, gameMode == MODE_STORY ? "ТЕЛО ПАЛО. КУЗНИЦА СОХРАНИЛА ПАМЯТЬ И УЖЕ НАЙДЕННЫЕ УЛИКИ." : "ТВОЯ ИСКРА ПОГАСЛА...", playerDeathTimer);
             state = STATE_DEATH;
         }
     }
@@ -4302,20 +4308,25 @@ struct Game {
 
     void restoreGameplayMusicImmediately() {
         const int mode = currentGameplayMusicMode();
-        const int variant = sound.musicVariant.load(std::memory_order_relaxed);
         sound.musicBossType.store(currentGameplayBossType(), std::memory_order_relaxed);
         sound.musicMode.store(mode, std::memory_order_relaxed);
-        sound.requestImmediateMusicChange(mode, variant);
+        sound.requestImmediateMusicChange(mode, 0);
     }
 
     void update(float dt) {
+        if (dt > 0.0f) {
+            const float ms = dt * 1000.0f;
+            frameMsSmooth += (ms - frameMsSmooth) * 0.10f;
+            const float fps = 1000.0f / std::max(1.0f, frameMsSmooth);
+            fpsSmooth += (fps - fpsSmooth) * 0.10f;
+            debugPeakEntities = std::max(debugPeakEntities, (int)monsters.size());
+        }
         if (dt > 0.05f) dt = 0.05f;
         if (hitFxWindowTimer > 0.0f) {
             hitFxWindowTimer = std::max(0.0f, hitFxWindowTimer - dt);
             if (hitFxWindowTimer <= 0.0f) { hitFxCountInWindow = 0; hitFxClusterEmitted = 0; }
         }
         globalTime += dt;
-        musicVariantToastTimer = std::max(0.0f, musicVariantToastTimer - dt);
         sound.update(dt);
         const bool menuMusicState = state == STATE_MENU || state == STATE_HERO_SELECT || state == STATE_MISSION_SELECT || state == STATE_SHOP || state == STATE_HELP ||
                                     state == STATE_SETTINGS || state == STATE_HALL || state == STATE_PATCH_NOTES;
@@ -4383,11 +4394,25 @@ struct Game {
                 // Subtle stone mortar border
                 r.drawRect(sx, sy, tileSize, tileSize, 0xFF0E0B18, 1);
 
+                // World props must never be stacked on each other. A seal keeps its tile only
+                // when it wins the hash against its right/bottom neighbours, so seals always
+                // sit at least two tiles apart instead of clumping into mush.
+                auto sealWins = [](int cx, int cy) {
+                    const uint32_t own = (uint32_t)(cx * 73856093 ^ cy * 19349663);
+                    if ((own & 31u) != 7u) return false;
+                    for (int oy = 0; oy <= 1; ++oy)
+                        for (int ox = 0; ox <= 1; ++ox) {
+                            if (!ox && !oy) continue;
+                            const uint32_t other = (uint32_t)((cx + ox) * 73856093 ^ (cy + oy) * 19349663);
+                            if ((other & 31u) == 7u) return false;
+                        }
+                    return true;
+                };
                 // Moss / stone detail patches
                 if ((h & 15) == 3) {
                     static const uint32_t groundMarks[4] = {0xFF263326, 0xFF51202A, 0xFF24505A, 0xFF59301A};
                     r.fillRoundedRect(sx + 14, sy + 18, 22, 14, 4, groundMarks[biome]);
-                } else if ((h & 31) == 7) {
+                } else if (sealWins(tx, ty)) {
                     // Ancient floor seal: independently phased, breathing rings with radial cuts and a rotating glyph.
                     const int rcx = sx + 32, rcy = sy + 32;
                     const uint32_t runeOuter[4] = {0xFF765BC0, 0xFFB54B62, 0xFF38A5B8, 0xFFD48B3A};
@@ -4420,6 +4445,35 @@ struct Game {
             }
         }
 
+        // Landmarks and braziers live on two independent grids, so they used to land on top of
+        // each other. Both loops ask the same helper and skip when the other prop is too close.
+        auto landmarkAt = [](int gx, int gy, int& wx, int& wy) {
+            const uint32_t seed = (uint32_t)(gx * 1664525u) ^ (uint32_t)(gy * 1013904223u);
+            if ((seed & 3u) != 0u) return false;
+            wx = gx * 320 + 70 + (int)((seed >> 8) % 180);
+            wy = gy * 320 + 70 + (int)((seed >> 16) % 180);
+            return true;
+        };
+        auto landmarkNear = [&](int wx, int wy, int minDist) {
+            const int cx = wx / 320, cy = wy / 320;
+            for (int oy = -1; oy <= 1; ++oy)
+                for (int ox = -1; ox <= 1; ++ox) {
+                    int lx = 0, ly = 0;
+                    if (!landmarkAt(cx + ox, cy + oy, lx, ly)) continue;
+                    if ((lx - wx) * (lx - wx) + (ly - wy) * (ly - wy) < minDist * minDist) return true;
+                }
+            return false;
+        };
+        auto torchNear = [&](int wx, int wy, int minDist) {
+            const int cx = (wx - 192) / 384, cy = (wy - 192) / 384;
+            for (int oy = -1; oy <= 1; ++oy)
+                for (int ox = -1; ox <= 1; ++ox) {
+                    const int tx = (cx + ox) * 384 + 192, ty = (cy + oy) * 384 + 192;
+                    if ((tx - wx) * (tx - wx) + (ty - wy) * (ty - wy) < minDist * minDist) return true;
+                }
+            return false;
+        };
+
         // Flickering Braziers / Torches on a larger grid (every 384 px)
         int torchGrid = 384;
         int btx0 = (int)floorf(camX / torchGrid) - 1;
@@ -4431,6 +4485,7 @@ struct Game {
                 int sx = wx - (int)camX;
                 int sy = wy - (int)camY;
                 if (sx < -120 || sx > SCREEN_W + 120 || sy < -120 || sy > SCREEN_H + 120) continue;
+                if (landmarkNear(wx, wy, 132)) continue; // a landmark already owns this spot
                 int flicker = (int)(sinf(globalTime * 11.0f + btx * 3.1f + bty * 1.7f) * 10.0f);
                 uint32_t flame = (runTime < 90.0f ? 0xFFFF7018 : runTime < 180.0f ? 0xFF50D8E8 : runTime < 270.0f ? 0xFFFF3060 : 0xFFFFA020);
                 r.addGlow(sx, sy - 10, 95 + flicker, flame, 110);
@@ -4448,10 +4503,9 @@ struct Game {
         int biomeNow = std::min(3, (int)(runTime / 90.0f));
         for (int gy = ly0; gy <= ly0 + SCREEN_H / landmarkCell + 2; ++gy) {
             for (int gx = lx0; gx <= lx0 + SCREEN_W / landmarkCell + 2; ++gx) {
-                uint32_t seed = (uint32_t)(gx * 1664525u) ^ (uint32_t)(gy * 1013904223u);
-                if ((seed & 3u) != 0u) continue;
-                int wx = gx * landmarkCell + 70 + (int)((seed >> 8) % 180);
-                int wy = gy * landmarkCell + 70 + (int)((seed >> 16) % 180);
+                int wx = 0, wy = 0;
+                if (!landmarkAt(gx, gy, wx, wy)) continue;
+                if (torchNear(wx, wy, 132)) continue; // a brazier already owns this spot
                 int x = wx - (int)camX, y = wy - (int)camY;
                 if (x < -60 || x > SCREEN_W + 60 || y < -90 || y > SCREEN_H + 60) continue;
                 if (biomeNow == 0) {
@@ -4660,15 +4714,12 @@ struct Game {
                 const int required = getCrossfireDistinctWeaponThreshold(rank);
                 const int charge = std::min(required, getCrossfireMaskCount(m.crossfireWeaponMask));
                 const int ringRadius = (int)m.radius + 14;
-                r.drawCircleRing(sx, sy, ringRadius, 1, 0xFF68E6D8, 88, true);
+                // Charge is shown by glowing dots outside the body, never by ticks across it.
                 for (int spark = 0; spark < required; ++spark) {
                     const float angle = -1.5707963f + spark * 6.2831853f / required;
-                    const int x0 = sx + (int)(cosf(angle) * (ringRadius - 3));
-                    const int y0 = sy + (int)(sinf(angle) * (ringRadius - 3));
-                    const int x1 = sx + (int)(cosf(angle) * (ringRadius + 3));
-                    const int y1 = sy + (int)(sinf(angle) * (ringRadius + 3));
-                    r.drawLine(x0, y0, x1, y1, spark < charge ? 0xFFB8FFF1 : 0xFF316F70,
-                               spark < charge ? 2 : 1, spark < charge ? 225 : 95, true);
+                    const bool lit = spark < charge;
+                    r.fillCircle(sx + (int)lroundf(cosf(angle) * ringRadius), sy + (int)lroundf(sinf(angle) * ringRadius),
+                                 lit ? 3 : 2, lit ? 0xFFB8FFF1 : 0xFF316F70, lit ? 225 : 110);
                 }
             }
             if (m.emberTicksRemaining > 0) {
@@ -4680,18 +4731,11 @@ struct Game {
                              sy + (int)(sinf(globalTime * 6.0f + m.animOffset) * emberRadius), 2, 0xFFFFD28A, 215);
             }
             if (m.exposeTimer > 0.0f) {
-                const int pulse = 2 + (int)(2.0f * (0.5f + 0.5f * sinf(globalTime * 12.0f + m.animOffset)));
-                const int markRadius = (int)m.radius + 9 + pulse;
-                r.addGlow(sx, sy, markRadius + 5, 0xFFBD83FF, 92);
-                r.drawCircleRing(sx, sy, markRadius, 2, 0xFFD6A5FF, 220, true);
-                for (int shard = 0; shard < 4; ++shard) {
-                    const float angle = 0.7853982f + shard * 1.5707963f;
-                    const int x0 = sx + (int)(cosf(angle) * (markRadius - 4));
-                    const int y0 = sy + (int)(sinf(angle) * (markRadius - 4));
-                    const int x1 = sx + (int)(cosf(angle) * (markRadius + 4));
-                    const int y1 = sy + (int)(sinf(angle) * (markRadius + 4));
-                    r.drawLine(x0, y0, x1, y1, 0xFFFFE8FF, 2, 245, true);
-                }
+                const int pulse = 1 + (int)(2.0f * (0.5f + 0.5f * sinf(globalTime * 12.0f + m.animOffset)));
+                const int markRadius = (int)m.radius + 10 + pulse;
+                r.addGlow(sx, sy, markRadius + 5, 0xFFBD83FF, 78);
+                // Broken ring of dots: reads as "exposed" without drawing a line across the mob.
+                drawDottedRing(r, sx, sy, markRadius, 10, 0xFFE3C2FF, 210, globalTime * 1.6f + m.animOffset);
             }
             if (m.shieldHits > 0) {
                 float fx = m.shieldFacingX, fy = m.shieldFacingY;
@@ -4886,6 +4930,150 @@ struct Game {
         r.fillRoundedRect(x + 12, y + 1, std::max(1, w - 24), 2, 1, accent, alpha);
     }
 
+    // F3: the technical read-out the player can flip on and forget about.
+    void drawDebugOverlay(Renderer& r) {
+        char line[256];
+        const int pad = 8, lineH = 17;
+        const bool hasMessage = storyTimer > 0.0f && !storyLine.empty();
+        const int rows = 14 + (hasMessage ? 2 : 0);
+        const int labelW = 176;
+        const int boxW = std::min(SCREEN_W - 16, 486), boxH = rows * lineH + pad * 2;
+        const int bx = 8, by = 8;
+        r.fillRoundedRect(bx, by, boxW, boxH, 6, 0xFF05030A, 232);
+        r.drawRoundedRect(bx, by, boxW, boxH, 6, 0xFF62D8F0, 1, 200);
+        auto put = [&](int row, const char* label, const char* value, uint32_t color = 0xFFE6E0F4) {
+            const int y = by + pad + row * lineH;
+            r.drawText(FONT_SMALL, bx + pad, y, label, 0xFF8E86AC, true, 235);
+            r.drawText(FONT_SMALL, bx + pad + labelW, y, value, color, true, 245);
+        };
+        snprintf(line, sizeof(line), "v%s  BUILD %d", GAME_VERSION, GAME_VERSION_NUM);
+        put(0, "ВЕРСИЯ", line, 0xFF7EF0C0);
+        put(1, "СОСТОЯНИЕ", stateName(state));
+        snprintf(line, sizeof(line), "%.0f  (%.1f MS)", fpsSmooth, frameMsSmooth);
+        put(2, "FPS", line, fpsSmooth < 45.0f ? 0xFFFF9B7E : 0xFF9BF0B0);
+        snprintf(line, sizeof(line), "%dx%d", SCREEN_W, SCREEN_H);
+        put(3, "ЭКРАН", line);
+        snprintf(line, sizeof(line), "%.0f  %.0f  (%.0f С)", playerX, playerY, runTime);
+        put(4, "ГЕРОЙ", line);
+        snprintf(line, sizeof(line), "%d  (ПИК %d)", (int)monsters.size(), debugPeakEntities);
+        put(5, "ВРАГИ", line);
+        snprintf(line, sizeof(line), "%d / %d", (int)projectiles.size(), (int)pickups.size());
+        put(6, "СНАРЯДЫ/ПОДБОРЫ", line);
+        snprintf(line, sizeof(line), "%d / %d", (int)particles.size(), (int)floatTexts.size());
+        put(7, "ЧАСТИЦЫ/ТЕКСТ", line);
+        snprintf(line, sizeof(line), "%d / %d", (int)skillImpactMarks.size(), (int)shockwaves.size());
+        put(8, "МЕТКИ/ВОЛНЫ", line);
+        snprintf(line, sizeof(line), "L%d  HP %.0f  XP %d/%d", playerLevel, playerHp, playerXp, xpToNext);
+        put(9, "ПРОКАЧКА", line);
+        int ownedItems = 0;
+        for (int i = 0; i < ITEM_COUNT; ++i) if (itemLevels[i] > 0) ++ownedItems;
+        snprintf(line, sizeof(line), "ТИР %d  %d/%d  ВОЛНА %d", getBuildTier(), ownedItems, getBuildLimit(), waveNumber);
+        put(10, "СБОРКА", line);
+        snprintf(line, sizeof(line), "MODE %d  SFX %d%%  MUS %d%%", sound.musicMode.load(), (int)roundf(sound.sfxVolume.load() * 100.0f), (int)roundf(sound.musicVolume.load() * 100.0f));
+        put(11, "ЗВУК", line);
+        snprintf(line, sizeof(line), "%s  %s", speech.supported ? "SAPI OK" : "НЕТ ГОЛОСА", options.messageSpeechEnabled != 0 ? "ВКЛ" : "ВЫКЛ");
+        put(12, "ОЗВУЧКА", line, options.messageSpeechEnabled != 0 ? 0xFF9BF0B0 : 0xFFFF9B7E);
+        put(13, "СООБЩЕНИЯ", messages.summary().c_str(), MessageRegistry::invalidRows() == 0 ? 0xFFE6E0F4 : 0xFFFF6A7A);
+        if (hasMessage) {
+            snprintf(line, sizeof(line), "%s  %.1f С", storySpeaker.c_str(), storyTimer);
+            put(14, "НА ЭКРАНЕ", line, 0xFFC9A6FF);
+            snprintf(line, sizeof(line), "%s  ВСЕГО %d", speech.enabled ? "TTS ON" : "TTS OFF", speech.spokenCount);
+            put(15, "ГОЛОС", line, speech.enabled ? 0xFF9BF0B0 : 0xFFFF9B7E);
+        }
+    }
+
+    // Single entry point for every player-facing combat/story message.
+    // It shows the line, counts it in the registry and (optionally) reads it aloud,
+    // so a new message can never silently miss the announcer.
+    void announce(GameMsgId id, const std::string& text, float seconds) {
+        storyLine = text;
+        storyTimer = seconds;
+        storyDuration = seconds;
+        storySpeaker = MessageRegistry::key(id);
+        messages.note(id);
+        if (seconds > 0.0f && !storyLine.empty()) speakMessage(id, text);
+    }
+
+    // Voice-only path for banners that already have their own visual channel
+    // (difficulty strip, boss warning, build tier). Keeps one switch for every sound bite.
+    void speakOnly(GameMsgId id, const std::string& text) {
+        messages.note(id);
+        speakMessage(id, text);
+    }
+
+    void speakMessage(GameMsgId id, const std::string& text) {
+        if (!MessageRegistry::voiced(id) || text.empty()) return;
+        if (options.messageSpeechEnabled == 0) { ++messages.voicedSuppressed; return; }
+        // Repeated identical lines every few seconds would turn into garble.
+        const bool duplicate = text == announceLastText && (globalTime - announceLastAt) < 4.0f;
+        if (duplicate) return;
+        // The announcer rides the effects slider, so the "Звуковые эффекты" row controls it too.
+        speech.setVolume((int)lroundf(std::max(0.0f, std::min(1.0f, sound.sfxVolume.load())) * 100.0f));
+        if (speech.speak(text)) {
+            announceLastText = text;
+            announceLastAt = globalTime;
+            ++messages.voicedSent;
+        }
+    }
+
+    int storyToastLineCount(Renderer& r, int maxWidth) const {
+        // Mirror drawTextWrapped's greedy wrap so the panel is exactly as tall as the text.
+        int lines = 0;
+        std::string word, line;
+        auto flush = [&](bool force) {
+            if (!line.empty()) { ++lines; line.clear(); }
+            else if (force) ++lines;
+        };
+        for (size_t i = 0; i <= storyLine.size(); ++i) {
+            const char c = (i < storyLine.size()) ? storyLine[i] : ' ';
+            if (c == ' ' || c == '\n') {
+                if (!word.empty()) {
+                    const std::string cand = line.empty() ? word : (line + " " + word);
+                    if (r.textWidth(FONT_SMALL, cand.c_str()) > maxWidth && !line.empty()) {
+                        flush(false);
+                        line = word;
+                    } else line = cand;
+                    word.clear();
+                }
+                if (c == '\n') flush(true);
+            } else word.push_back(c);
+        }
+        if (!line.empty()) flush(false);
+        return std::max(1, lines);
+    }
+
+    // A ring made of separate dots instead of a solid circle with radial ticks: the old
+    // ticks read as a "diameter line" drawn next to the mob, which looked broken.
+    static void drawDottedRing(Renderer& r, int cx, int cy, int radius, int dots, uint32_t color, int alpha, float phase, int dotSize = 2) {
+        for (int i = 0; i < dots; ++i) {
+            const float a = phase + i * (6.2831853f / dots);
+            r.fillCircle(cx + (int)lroundf(cosf(a) * radius), cy + (int)lroundf(sinf(a) * radius), dotSize, color, alpha);
+        }
+    }
+
+    // A translucent window knocked out of the screen centre, with a soft fade in/out.
+    void drawStoryToastPanel(Renderer& r) {
+        if (storyTimer <= 0.0f || storyLine.empty()) return;
+        const bool portrait = SCREEN_H > SCREEN_W;
+        const int panelW = std::min(portrait ? SCREEN_W - 24 : 560, SCREEN_W - 24);
+        const int life = std::max(1, (int)std::ceil(storyDuration * 60.0f));
+        (void)life;
+        const float fadeIn = storyDuration > 0.0f ? std::min(1.0f, (storyDuration - storyTimer) * 6.0f) : 1.0f;
+        const float fadeOut = std::min(1.0f, storyTimer * 2.6f);
+        const int alpha = std::max(0, std::min(212, (int)(212.0f * std::min(fadeIn, fadeOut))));
+        if (alpha <= 2) return;
+        const int lines = storyToastLineCount(r, panelW - 34);
+        const int panelH = 20 + lines * FONT_SMALL.lineHeight;
+        const int panelX = portrait ? 12 : 18;
+        // Clears the control strip: the compact (portrait) HUD always wraps the hint to two lines.
+        const bool twoLineHints = portrait || SCREEN_W < 1100;
+        const int panelY = SCREEN_H - (twoLineHints ? 54 : 36) - panelH - 10;
+        r.fillRoundedRect(panelX, panelY, panelW, panelH, 10, 0xFF0B0714, (int)(alpha * 0.72f));
+        r.drawRoundedRect(panelX, panelY, panelW, panelH, 10, 0xFFB58BE8, 1, alpha);
+        r.fillRoundedRect(panelX + 1, panelY + 8, 3, panelH - 16, 2, 0xFFB58BE8, alpha);
+        r.drawTextWrapped(FONT_SMALL, panelX + 16, panelY + 10, panelW - 32, storyLine.c_str(), 0xFFE9D7FF, false, alpha);
+    }
+
     void renderHUDPortrait(Renderer& r) {
         char buf[160];
         r.fillRect(0, 0, SCREEN_W, 23, 0xFF100D1B, 238);
@@ -4989,10 +5177,7 @@ struct Game {
             snprintf(buf, sizeof(buf), "ТИР СБОРКИ ПОВЫШЕН • ТИР %d", buildTierUpValue);
             r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 400, buf, 0xFFFFF0B0, true, alpha);
         }
-        if (storyTimer > 0.0f) {
-            drawUIFrame(r, pad, SCREEN_H - 92, fullW, 48, 0xFFB58BE8, false, 235);
-            r.drawTextWrapped(FONT_SMALL, pad + 12, SCREEN_H - 86, fullW - 24, storyLine.c_str(), 0xFFE9D7FF, true, 235);
-        }
+        drawStoryToastPanel(r);
         r.fillRect(0, SCREEN_H - 32, SCREEN_W, 32, 0xFF0E0A18, 218);
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 27, "WASD • ДВИЖЕНИЕ   SPACE • РЫВОК   Q • СУПЕР", 0xFFDDD5EF);
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 13, "ПКМ • КУРСОР   M/N • ЗВУК   F11 • ЭКРАН   ESC • ПАУЗА", 0xFFB8B0D0);
@@ -5251,12 +5436,7 @@ struct Game {
         r.fillRoundedRect(ux, uy, uw, uh, 5, 0xFF171025, 245);
         r.fillRoundedRect(ux, uy, (int)(uw * std::min(1.0f, superCharge / 100.0f)), uh, 5, superCharge >= 100.0f ? 0xFFFFB820 : 0xFF8D45C8, 245);
         r.drawRoundedRect(ux, uy, uw, uh, 5, superCharge >= 100.0f ? 0xFFFFE068 : 0xFF786090, 1);
-        if (storyTimer > 0.0f) {
-            const int panelW = std::min(790, SCREEN_W - 40);
-            const int panelX = (SCREEN_W - panelW) / 2;
-            drawUIFrame(r, panelX, 238, panelW, 40, 0xFFB58BE8, false, 235);
-            r.drawTextWrapped(FONT_SMALL, panelX + 15, 242, panelW - 30, storyLine.c_str(), 0xFFE9D7FF, true, 235);
-        }
+        drawStoryToastPanel(r);
         if (difficultyBannerTimer > 0.0f) {
             const int alpha = std::min(235, (int)(difficultyBannerTimer * 100.0f));
             const uint32_t color = getDifficultySegment() == 1 ? 0xFFFF6A48 : 0xFF82E8FF;
@@ -6580,6 +6760,35 @@ struct Game {
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 41,
             "СТРЕЛКИ / A-D — НАВИГАЦИЯ • ENTER — ВЫБРАТЬ • МЫШЬ — НАВЕСТИ ИЛИ НАЖАТЬ",
             0xFFB7AFD2);
+        // Quiet build stamp: readable when you look for it, invisible while playing.
+        char versionStamp[32];
+        snprintf(versionStamp, sizeof(versionStamp), "v%s", GAME_VERSION);
+        r.drawTextRight(FONT_SMALL, SCREEN_W - 14, SCREEN_H - 30, versionStamp, 0xFF6A6280, true, 128);
+    }
+
+    static const char* stateName(GameState value) {
+        switch (value) {
+            case STATE_MENU: return "MENU";
+            case STATE_SHOP: return "SHOP";
+            case STATE_HELP: return "HELP";
+            case STATE_SETTINGS: return "SETTINGS";
+            case STATE_PLAYING: return "PLAYING";
+            case STATE_LEVELUP: return "LEVELUP";
+            case STATE_CHEST: return "CHEST";
+            case STATE_PAUSED: return "PAUSED";
+            case STATE_GAMEOVER: return "GAMEOVER";
+            case STATE_HALL: return "HALL";
+            case STATE_DEATH: return "DEATH";
+            case STATE_PATCH_NOTES: return "PATCH_NOTES";
+            case STATE_CUTSCENE: return "CUTSCENE";
+            case STATE_EXTRACTION: return "EXTRACTION";
+            case STATE_CAMPAIGN_END: return "CAMPAIGN_END";
+            case STATE_BOSS_MUSIC_TEST: return "MUSIC_TEST";
+            case STATE_MISSION_SELECT: return "MISSION_SELECT";
+            case STATE_MISSION_COMPLETE: return "MISSION_COMPLETE";
+            case STATE_HERO_SELECT: return "HERO_SELECT";
+        }
+        return "?";
     }
 
     void renderHeroSelectMenu(Renderer& r) {
@@ -6693,13 +6902,17 @@ struct Game {
 
     void toggleOption(int optionId) {
         if (optionId == 1) sound.enabled = !sound.enabled.load(std::memory_order_relaxed);
-        else if (optionId == 2) sound.musicEnabled = !sound.musicEnabled.load(std::memory_order_relaxed);
-        else if (optionId == 3) options.hitEffectsEnabled = !options.hitEffectsEnabled;
-        else if (optionId == 4) options.screenShakeEnabled = !options.screenShakeEnabled;
-        else if (optionId == 5) options.advisorEnabled = !options.advisorEnabled;
-        else if (optionId == 6) options.hardModeEnabled = !options.hardModeEnabled;
-        else if (optionId == 7) options.projectileTrailsEnabled = !options.projectileTrailsEnabled;
-        else if (optionId == 8) options.skillIconStyle = options.skillIconStyle == 0 ? 1 : 0;
+        else if (optionId == 2) options.hitEffectsEnabled = !options.hitEffectsEnabled;
+        else if (optionId == 3) options.screenShakeEnabled = !options.screenShakeEnabled;
+        else if (optionId == 4) options.advisorEnabled = !options.advisorEnabled;
+        else if (optionId == 5) options.hardModeEnabled = !options.hardModeEnabled;
+        else if (optionId == 6) options.projectileTrailsEnabled = !options.projectileTrailsEnabled;
+        else if (optionId == 7) options.skillIconStyle = options.skillIconStyle == 0 ? 1 : 0;
+        else if (optionId == 8) {
+            options.messageSpeechEnabled = options.messageSpeechEnabled != 0 ? 0 : 1;
+            speech.setEnabled(options.messageSpeechEnabled != 0);
+            if (options.messageSpeechEnabled != 0) speech.speak("Озвучка сообщений включена");
+        }
         saveOptions();
         sound.play(SFX_CLICK, 0.02f);
     }
@@ -6711,30 +6924,7 @@ struct Game {
         saveOptions();
     }
 
-    void selectMusicVariant(int index) {
-        index = (index % 10 + 10) % 10;
-        sound.musicVariant.store(index, std::memory_order_relaxed);
-        options.musicVariant = index;
-        musicVariantToastTimer = 2.0f;
-        saveOptions();
-    }
-
-    void stepMusicVariant(int direction) {
-        const int current = sound.musicVariant.load(std::memory_order_relaxed);
-        selectMusicVariant(current + (direction >= 0 ? 1 : -1));
-    }
-
     void adjustSoundVolume(int direction) {
-        if (settingsVolumeFocus == 2) {
-            if (sound.externalMusicActive()) {
-                // Files from audio/ are playing; the built-in theme is only a fallback.
-                sound.play(SFX_CLICK, 0.015f);
-                return;
-            }
-            stepMusicVariant(direction);
-            sound.play(SFX_CLICK, 0.015f);
-            return;
-        }
         const float current = settingsVolumeFocus == 0
             ? sound.sfxVolume.load(std::memory_order_relaxed)
             : sound.musicVolume.load(std::memory_order_relaxed);
@@ -6746,16 +6936,24 @@ struct Game {
         renderSubmenuFrame(r, "НАСТРОЙКИ", "shadow_survivors.cfg • звук • эффекты • стиль иконок");
 
         const char* labels[8] = {
-            "Звуковые эффекты", "Музыка", "Эффекты попаданий", "Тряска камеры",
+            "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
             "Советник по сборке (ИИ)", "БЕЗДНА — давление выше; пауэрапы только с умных", "Следы снарядов",
-            "Стиль иконок навыков 00–03"
+            "Стиль иконок навыков 00–03", "Озвучка сообщений в бою"
+        };
+        // Narrow portraits need shorter labels: the ВКЛ/ВЫКЛ value is right-aligned on the row.
+        static const char* labelsPortrait[8] = {
+            "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
+            "Советник по сборке (ИИ)", "БЕЗДНА — сложнее", "Следы снарядов",
+            "Стиль иконок навыков", "Озвучка сообщений в бою"
         };
         const bool values[8] = {
-            sound.enabled.load(std::memory_order_relaxed), sound.musicEnabled.load(std::memory_order_relaxed), options.hitEffectsEnabled != 0,
+            sound.enabled.load(std::memory_order_relaxed), options.hitEffectsEnabled != 0,
             options.screenShakeEnabled != 0, options.advisorEnabled != 0,
-            options.hardModeEnabled != 0, options.projectileTrailsEnabled != 0, options.skillIconStyle == 1
+            options.hardModeEnabled != 0, options.projectileTrailsEnabled != 0, options.skillIconStyle == 1,
+            options.messageSpeechEnabled != 0
         };
         const bool portraitLayout = SCREEN_W < SCREEN_H;
+        const char* const* rowLabels = portraitLayout ? labelsPortrait : labels;
         const int x = portraitLayout ? 24 : (SCREEN_W < 1100 ? 24 : 260);
         const int w = portraitLayout || SCREEN_W < 1100 ? SCREEN_W - 48 : 760;
         const int h = portraitLayout ? 54 : 36, startY = portraitLayout ? 150 : 96, gap = portraitLayout ? 8 : 2;
@@ -6766,8 +6964,8 @@ struct Game {
             uint32_t border = hov ? 0xFFFFD848 : (values[i] ? 0xFF68DDA0 : 0xFF685878);
             r.fillRoundedRect(x, y, w, h, 9, hov ? 0xFF2D2147 : 0xFF1A132C);
             r.drawRoundedRect(x, y, w, h, 9, border, hov ? 3 : 2);
-            r.drawText(FONT_MED, x + 24, y + 12, labels[i], 0xFFEAE4F8);
-            if (i == 7) snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ИИ-АРТ" : "ВЕКТОР");
+            r.drawText(FONT_MED, x + 24, y + 12, rowLabels[i], 0xFFEAE4F8);
+            if (i == 6) snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ИИ-АРТ" : "ВЕКТОР");
             else snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ВКЛ" : "ВЫКЛ");
             r.drawTextRight(FONT_MED, x + w - 24, y + (h - 18) / 2, stateText, values[i] ? 0xFF68F0A0 : 0xFFFF8B98);
             if (mouseClicked && hov) toggleOption(i + 1);
@@ -6798,52 +6996,20 @@ struct Game {
         const int volumeRowH = portraitLayout ? 44 : 38;
         drawVolume(0, volumeY, "УРОВЕНЬ ЭФФЕКТОВ", sound.sfxVolume.load(std::memory_order_relaxed));
         drawVolume(1, volumeY + volumeRowH + 6, "УРОВЕНЬ МУЗЫКИ", sound.musicVolume.load(std::memory_order_relaxed));
-        const int variantY = volumeY + 2 * (volumeRowH + 6), variantX = x, variantW = w, variantH = volumeRowH;
-        const bool variantHover = mouseX >= variantX && mouseX <= variantX + variantW && mouseY >= variantY && mouseY <= variantY + variantH;
-        const bool variantFocus = settingsVolumeFocus == 2;
-        r.fillRoundedRect(variantX, variantY, variantW, variantH, 8, variantFocus ? 0xFF2A2040 : 0xFF181326);
-        r.drawRoundedRect(variantX, variantY, variantW, variantH, 8, variantHover ? 0xFFFFD858 : (variantFocus ? 0xFFB68BFF : 0xFF514766), variantFocus ? 2 : 1);
-        const bool externalTracks = sound.externalMusicActive();
-        r.drawText(FONT_SMALL, variantX + 18, variantY + 12, externalTracks ? "МУЗЫКА" : "ТЕМА", 0xFFEAE4F8);
-        const int selectorBtnW = 42;
-        const bool classicSettingsLayout = !portraitLayout && SCREEN_W >= 1200;
-        const int prevX = classicSettingsLayout ? 570 : variantX + variantW - 300;
-        const int nextX = classicSettingsLayout ? 948 : variantX + variantW - 72;
-        const int variantLabelX = classicSettingsLayout ? 780 : (variantX + 100 + prevX) / 2;
-        auto drawSelectorButton = [&](int x, const char* text, bool enabled) {
-            const bool hover = mouseX >= x && mouseX <= x + selectorBtnW && mouseY >= variantY + 3 && mouseY <= variantY + variantH - 3;
-            r.fillRoundedRect(x, variantY + 3, selectorBtnW, variantH - 6, 6, hover ? 0xFF483480 : 0xFF281C48);
-            r.drawRoundedRect(x, variantY + 3, selectorBtnW, variantH - 6, 6, enabled ? 0xFFFFD858 : 0xFF685878, 1);
-            r.drawTextCentered(FONT_SMALL, x + selectorBtnW / 2, variantY + 11, text, enabled ? 0xFFFFFFFF : 0xFFAAA0C8);
-            return hover && mouseClicked;
-        };
-        char variantLabel[96];
-        const int selectedVariant = sound.musicVariant.load(std::memory_order_relaxed);
-        if (externalTracks) {
-            // Player-supplied files own the music bus, so the built-in selector is inert here.
-            snprintf(variantLabel, sizeof(variantLabel), "ТРЕКИ ИЗ audio/  •  ФАЙЛОВ: %d", sound.externalMusicTrackCount());
+
+        // Music comes only from audio/ now, so the old ten-way theme picker is gone: this is a status line.
+        const int infoY = volumeY + 2 * (volumeRowH + 6) + 8;
+        char musicLine[160];
+        if (sound.externalMusicActive())
+            snprintf(musicLine, sizeof(musicLine), "МУЗЫКА: %d ТРЕК(ОВ) ИЗ audio/  •  ВСТРОЕННАЯ ТЕМА В РЕЗЕРВЕ", sound.externalMusicTrackCount());
+        else
+            snprintf(musicLine, sizeof(musicLine), "МУЗЫКА: ПАПКА audio/ ПУСТА — ИГРАЕТ ВСТРОЕННАЯ ТЕМА");
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY, musicLine, 0xFFAAA0C8);
+        if (portraitLayout) {
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 20, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–8] ПЕРЕКЛЮЧАТЕЛИ", 0xFFAAA0C8);
         } else {
-            snprintf(variantLabel, sizeof(variantLabel), "%d / 10   %s", selectedVariant + 1, SoundEngine::musicVariantName(selectedVariant));
-        }
-        r.drawTextCentered(FONT_SMALL, variantLabelX, variantY + (variantH - 16) / 2, variantLabel, variantFocus ? 0xFFFFD878 : 0xFFEAE4F8);
-        if (variantHover && mouseClicked) settingsVolumeFocus = 2;
-        if (!externalTracks) {
-            if (drawSelectorButton(prevX, "<", true)) { selectMusicVariant(selectedVariant - 1); settingsVolumeFocus = 2; }
-            if (drawSelectorButton(nextX, ">", true)) { selectMusicVariant(selectedVariant + 1); settingsVolumeFocus = 2; }
-        } else {
-            drawSelectorButton(prevX, "<", false);
-            drawSelectorButton(nextX, ">", false);
-        }
-        const int helpY = portraitLayout ? SCREEN_H - 160 : 574;
-        if (externalTracks) {
-            const std::string sceneList = sound.externalMusicSummary();
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY, sceneList.c_str(), 0xFFFFD878);
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY + 20, "ЗВУЧАТ ФАЙЛЫ ИЗ audio/ — ВСТРОЕННАЯ ТЕМА ЖДЁТ В РЕЗЕРВЕ", 0xFFAAA0C8);
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY + 38, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–7] ПЕРЕКЛЮЧАТЕЛИ • [8] ИКОНКИ", 0xFFAAA0C8);
-        } else {
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY, SoundEngine::musicVariantDescription(selectedVariant), 0xFFFFD878);
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY + 20, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ ИЛИ ТЕМА • КЛИК ПО СТРЕЛКАМ • F1–F10 В БОЮ", 0xFFAAA0C8);
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, helpY + 38, "[1–7] ПЕРЕКЛЮЧАТЕЛИ • [8] СТИЛЬ ИКОНОК", 0xFFAAA0C8);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 574, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–8] ПЕРЕКЛЮЧАТЕЛИ • КЛИК МЫШЬЮ", 0xFFAAA0C8);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 594, "ОЗВУЧКА СООБЩЕНИЙ — СИСТЕМНЫЙ ГОЛОС WINDOWS; РЕЕСТР СООБЩЕНИЙ В F3", 0xFF8C82A8);
         }
         int bw = std::min(340, SCREEN_W - 48), bh = 50;
         int bx = (SCREEN_W - bw) / 2, by = portraitLayout ? SCREEN_H - 76 : 651;
@@ -6874,7 +7040,7 @@ struct Game {
         r.drawRoundedRect(panelX, panelY, panelW, panelH, 16, 0xFFFFD058, 3);
         const std::string chronicleTitle = std::string("ХРОНИКА ОБНОВЛЕНИЙ • 2.2–") + GAME_VERSION;
         r.drawTextCentered(FONT_LARGE, SCREEN_W / 2, panelY + 20, chronicleTitle.c_str(), 0xFFFFE068);
-        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ", "2.9.72 • МУЗЫКА ИЗ audio/", "2.9.73 • КУЗНИЦА И ТИХИЙ УРОВЕНЬ"};
+        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ", "2.9.72 • МУЗЫКА ИЗ audio/", "2.9.73 • КУЗНИЦА И ТИХИЙ УРОВЕНЬ", "2.9.74 • ГОЛОС, F3 И ЧИСТЫЙ МИР"};
         static const char* notes[PATCH_NOTES_COUNT] = {
             "Основа игры: пять героев, автоматическое оружие и выбор прокачки во время боя.\nПервые руины, самоцветы опыта, сундуки и сохранение между забегами.",
             "Кампания обрела четыре печати и охоту на боссов.\nПобеды открывают героев, главы и страницы Зала славы.",
@@ -6948,7 +7114,7 @@ struct Game {
             "Сюжетная прокачка привязана к миссиям: первая миссия начинается с тира I; следующие открывают тиры II, III, IV и V сразу с первого драфта (финал остаётся на V). Победа над боссом текущей миссии повышает тир сборки ещё на один в пределах V. В Endless сохранена прежняя разблокировка предметов по времени. Каждая следующая сюжетная миссия повышает HP, урон и скорость врагов, а также темп их появления на 3% относительно предыдущей миссии (до +15% в финале). В досье миссии показаны стартовый тир и прибавка сложности.",
             "Версия теперь задаётся в одном месте: build_windows.bat передаёт её компилятору, и она же попадает в имя файла, в свойства EXE, в заголовок окна и в эту хронику. Сборка идёт в отдельный каталог build и заменяет готовый EXE только после успешной компиляции, поэтому неудачная попытка больше не оставляет проект без рабочего билда. build_windows.bat принимает версию аргументом, корректно читает пустой version.txt и хранится с CRLF.",
             "Музыка теперь берётся из ваших файлов: игра читает MP3 из папки audio/ рядом с .exe (ss_menu_main, ss_gameplay_run, ss_boss_theme, ss_victory_boss, ss_gameover_death, ss_forge_shop) и играет их вместо встроенной синтезированной темы. Треки декодируются на ходу, поэтому 3–5 МБ файлы не нужно ни во что конвертировать; громкость музыки, клавиша [N] и приглушение во время громких эффектов работают и для них. ss_levelup_ding и ss_upgrade_pick звучат как короткие сигналы при новом уровне и при выборе улучшения. Если файла для сцены нет — для неё остаётся встроенная тема, поэтому игра не замолкает даже с пустой папкой audio/",
-            "Кузница: описание улучшения больше не уходит под кнопку «КУПИТЬ» — иконка, текст, шкала рангов и кнопка теперь раскладываются от краёв карточки, поэтому в широкоформатном и портретном варианте ничего не наезжает друг на друга. В договорах кадр иконки больше не вылезает над карточкой и не перекрывает подсказку «Покупка усиливает каждого следующего врага», а счётчик рангов переехал к шкале прогресса, чтобы длинные названия вроде «Марш голодной стаи» помещались целиком. Сетки карточек центрируются на широких экранах. Пока открыта карточка нового уровня, музыка боя становится на 80% тише и так же плавно возвращается. На экране смерти из строки урона убрано «ед.»."};
+            "Кузница: описание улучшения больше не уходит под кнопку «КУПИТЬ» — иконка, текст, шкала рангов и кнопка теперь раскладываются от краёв карточки, поэтому в широкоформатном и портретном варианте ничего не наезжает друг на друга. В договорах кадр иконки больше не вылезает над карточкой и не перекрывает подсказку «Покупка усиливает каждого следующего врага», а счётчик рангов переехал к шкале прогресса, чтобы длинные названия вроде «Марш голодной стаи» помещались целиком. Сетки карточек центрируются на широких экранах. Пока открыта карточка нового уровня, музыка боя становится на 80% тише и так же плавно возвращается. На экране смерти из строки урона убрано «ед.».", "Озвучка сообщений: системный голос Windows читает баннеры боя, сюжетные строки\nи предупреждения о боссах; в настройках появился переключатель «Озвучка сообщений».\nВсе сообщения собраны в единый реестр, битые строки видны в оверлее F3.\nF3 — техническая панель как в Minecraft: версия, FPS, сущности, звук и озвучка.\nСообщения боя — прозрачное окно в левом нижнем углу вместо полосы по центру.\nМетки на мобах больше не «диаметр»: спрайты центрируются по видимому рисунку.\nПункт «Музыка» и выбор вариантов убраны: музыка берётся только из audio/."};
         const int versionY = portraitPatch ? 80 : 108;
         r.drawTextCentered(FONT_MED, SCREEN_W / 2, versionY, versions[patchNotesPage], 0xFFFFC75A);
         const int notesX = compactPatch ? panelX + 18 : 190;
@@ -7051,8 +7217,7 @@ struct Game {
         state = STATE_BOSS_MUSIC_TEST;
         sound.musicBossType.store(currentGameplayBossType(), std::memory_order_relaxed);
         sound.musicMode.store(2, std::memory_order_relaxed);
-        sound.requestImmediateMusicChange(2,sound.musicVariant.load(std::memory_order_relaxed));
-        musicVariantToastTimer = 0.0f;
+        sound.requestImmediateMusicChange(2, 0);
     }
 
     void startSelectedRun() {
@@ -7858,14 +8023,7 @@ struct Game {
             }
             return;
         }
-        // F1–F10 audition the ten score options immediately; the mixer changes to the new one at the next bar.
-        if (key >= 0x70 && key <= 0x79) {
-            const int variant = key - 0x70;
-            selectMusicVariant(variant);
-            if (state == STATE_BOSS_MUSIC_TEST)
-                sound.requestImmediateMusicChange(bossTestMusicMode,variant);
-            return;
-        }
+        // Music has no in-game variants any more: tracks come from audio/ only.
         if (key == 'M' || key == 'm') { sound.enabled.store(!sound.enabled.load(std::memory_order_relaxed), std::memory_order_relaxed); saveOptions(); return; }
         if (key == 'N' || key == 'n') { sound.musicEnabled.store(!sound.musicEnabled.load(std::memory_order_relaxed), std::memory_order_relaxed); saveOptions(); return; }
         if (state == STATE_PATCH_NOTES) {
@@ -7928,15 +8086,15 @@ struct Game {
                 bossTestMusicMode = 2;
                 sound.musicBossType.store(type, std::memory_order_relaxed);
                 sound.musicMode.store(2, std::memory_order_relaxed);
-                sound.requestImmediateMusicChange(2, sound.musicVariant.load(std::memory_order_relaxed));
+                sound.requestImmediateMusicChange(2, 0);
             } else if (key == 'H' || key == 'h') {
                 bossTestMusicMode = 1;
                 sound.musicMode.store(1,std::memory_order_relaxed);
-                sound.requestImmediateMusicChange(1,sound.musicVariant.load(std::memory_order_relaxed));
+                sound.requestImmediateMusicChange(1, 0);
             } else if (key == 'B' || key == 'b') {
                 bossTestMusicMode = 2;
                 sound.musicMode.store(2,std::memory_order_relaxed);
-                sound.requestImmediateMusicChange(2,sound.musicVariant.load(std::memory_order_relaxed));
+                sound.requestImmediateMusicChange(2, 0);
             }
         } else if (state == STATE_PLAYING) {
             if (key == 32) triggerDash(); // Space
@@ -7962,7 +8120,7 @@ struct Game {
             else if (key == 'O' || key == 'o') { settingsReturnState = STATE_PAUSED; state = STATE_SETTINGS; }
         } else if (state == STATE_SETTINGS) {
             if (key >= '1' && key <= '8') toggleOption(key - '0');
-            else if (key == 9) settingsVolumeFocus = (settingsVolumeFocus + 1) % 3;
+            else if (key == 9) settingsVolumeFocus = (settingsVolumeFocus + 1) % 2;
             else if (key == 37 || key == 39) adjustSoundVolume(key == 37 ? -1 : 1);
             else if (key == 27) state = settingsReturnState;
         } else if (state == STATE_HALL) {
@@ -7999,12 +8157,12 @@ struct Game {
         r.fillRoundedRect(250, 48, 780, 78, 10, 0xEF100B1C);
         r.drawRoundedRect(250, 48, 780, 78, 10, 0xFFFFD878, 2);
         r.drawTextCentered(FONT_MED, SCREEN_W / 2, 57, "АРЕНА ПРОСЛУШИВАНИЯ БОССА", 0xFFFFE078);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 86, "1–4: босс/тема   •   F1–F10: вариант   •   H: орда   •   ESC: меню", 0xFFE4D8C8);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 86, "1–4: босс/тема   •   H: орда   •   ESC: меню", 0xFFE4D8C8);
         if (sound.externalMusicActive()) {
             // Bottom edge is free here; the panel above already sits over the boss phase bar.
             r.fillRoundedRect(SCREEN_W / 2 - 330, SCREEN_H - 92, 660, 26, 7, 0xEF100B1C);
             r.drawRoundedRect(SCREEN_W / 2 - 330, SCREEN_H - 92, 660, 26, 7, 0xFFB78AFF, 1);
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 86, "ИГРАЕТ ТРЕК ИЗ audio/  •  F1–F10 ОТНОСЯТСЯ К ВСТРОЕННОЙ ТЕМЕ", 0xFFB78AFF);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 86, "ИГРАЕТ ТРЕК ИЗ audio/  •  ВСТРОЕННАЯ ТЕМА В РЕЗЕРВЕ", 0xFFB78AFF);
         }
     }
 
@@ -8062,8 +8220,14 @@ struct Game {
         // A compact edge toast keeps the battlefield visible; it replaces the old full-screen veil/rings.
         const int panelW = std::min(500, SCREEN_W - 32), panelH = 62;
         const int panelX = (SCREEN_W - panelW) / 2;
-        const bool storyToastVisible = storyTimer > 0.0f && SCREEN_W < SCREEN_H;
-        const int panelY = SCREEN_H - (storyToastVisible ? 176 : 108);
+        // Sit directly above the message window instead of guessing: the two panels must never touch.
+        int storyToastH = 0;
+        if (storyTimer > 0.0f && !storyLine.empty()) {
+            const bool portraitToast = SCREEN_H > SCREEN_W || SCREEN_W < 1100;
+            const int toastW = std::min(portraitToast ? SCREEN_W - 24 : 560, SCREEN_W - 24);
+            storyToastH = 20 + storyToastLineCount(r, toastW - 34) * FONT_SMALL.lineHeight + 10;
+        }
+        const int panelY = SCREEN_H - (108 + storyToastH);
         r.addGlow(panelX + panelW / 2, panelY + panelH / 2, 110, color, alpha / 3);
         r.fillRoundedRect(panelX, panelY, panelW, panelH, 9, 0xFF100911, (int)(alpha * 0.94f));
         r.drawRoundedRect(panelX, panelY, panelW, panelH, 9, color, 2, alpha);
@@ -8128,18 +8292,7 @@ struct Game {
             else if (state == STATE_GAMEOVER) renderGameOverModal(r);
         }
 
-        if (musicVariantToastTimer > 0.0f && state != STATE_MENU && state != STATE_MISSION_SELECT && state != STATE_MISSION_COMPLETE && state != STATE_SETTINGS && state != STATE_PATCH_NOTES && state != STATE_SHOP && state != STATE_HELP && state != STATE_HALL) {
-            char variantToast[160];
-            const int variant = sound.musicVariant.load(std::memory_order_relaxed);
-            if (sound.externalMusicActive())
-                snprintf(variantToast, sizeof(variantToast), "F1–F10: ВСТРОЕННАЯ ТЕМА  •  ИГРАЕТ audio/ (%d ФАЙЛОВ)", sound.externalMusicTrackCount());
-            else
-                snprintf(variantToast, sizeof(variantToast), "МУЗЫКА %d/10: %s  •  F1–F10", variant + 1, SoundEngine::musicVariantName(variant));
-            const int toastW = sound.externalMusicActive() ? 640 : 620;
-            r.fillRoundedRect(SCREEN_W / 2 - toastW / 2, SCREEN_H - 96, toastW, 36, 8, 0xFF110C20, 235);
-            r.drawRoundedRect(SCREEN_W / 2 - toastW / 2, SCREEN_H - 96, toastW, 36, 8, 0xFFB78AFF, 2);
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 86, variantToast, 0xFFFFE7A0);
-        }
+        if (debugOverlay) drawDebugOverlay(r);
 
         // Custom glowing arcane cursor
         r.drawCircleRing(mouseX, mouseY, 8, 2, 0xFFFFE068, 220);

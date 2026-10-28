@@ -14,15 +14,18 @@ if not exist "%BUILD%" mkdir "%BUILD%"
 > "%LOG%" echo Build started
 >> "%LOG%" echo Date: %date% %time%
 
-:: --- version: command line argument, then version.txt, then the fallback ---
+:: --- version: argument, then the local build counter, then src\version.h ---
+:: version.txt is NOT tracked by git (every build rewrites it), so pulls never conflict.
+:: The canonical version lives in src\version.h and is read straight from there.
 set "VER="
 if not "%~1"=="" set "VER=%~1"
 if not defined VER if exist "%VERFILE%" set /p "VER=" < "%VERFILE%"
-if not defined VER set "VER=2.9.71"
+if not defined VER for /f "tokens=3" %%v in ('findstr /c:"#define GAME_VERSION " "!SRC!\version.h"') do set "VER=%%~v"
+if not defined VER set "VER=2.9.74"
 
-:: An empty or hand-edited version.txt must never leak spaces or CRs into the exe name.
+:: An empty or hand-edited file must never leak spaces or CRs into the exe name.
 for /f "tokens=* delims= " %%v in ("!VER!") do set "VER=%%v"
-if "!VER!"=="" set "VER=2.9.71"
+if "!VER!"=="" set "VER=2.9.74"
 
 echo !VER!| findstr /r /c:"^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$" >nul
 if errorlevel 1 (
@@ -119,7 +122,7 @@ if errorlevel 1 (
 echo [OK] windres compile >> "%LOG%"
 
 :: --- compile game (into build/, so a failed build never destroys the shipped exe) ---
-g++ -O3 -std=c++17 -I"!SRC!" -DGAME_VERSION=\"!VER!\" -DGAME_VERSION_NUM=!VCODE! "!SRC!\main_win32.cpp" "!RESOBJ!" -o "!TMPEXE!" -mwindows -static -static-libgcc -static-libstdc++ -lwinmm -lgdi32 -luser32 -ldwmapi >> "%LOG%" 2>&1
+g++ -O3 -std=c++17 -I"!SRC!" -DGAME_VERSION=\"!VER!\" -DGAME_VERSION_NUM=!VCODE! "!SRC!\main_win32.cpp" "!RESOBJ!" -o "!TMPEXE!" -mwindows -static -static-libgcc -static-libstdc++ -lwinmm -lgdi32 -luser32 -ldwmapi -lole32 >> "%LOG%" 2>&1
 if errorlevel 1 (
     echo ERROR: g++ compile failed >> "%LOG%"
     echo ERROR: g++ compile failed - see build\build.log
