@@ -16,12 +16,21 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-// DEFINE_GUID needs a single translation unit to emit the GUIDs; the game is one.
-#ifndef INITGUID
-#define INITGUID 1
-#endif
 #include <sapi.h>
 #include <ole2.h>
+
+// The SAPI GUIDs are spelled out here instead of relying on DEFINE_GUID + INITGUID.
+// INITGUID only works when it is defined before the *first* Windows header, and this
+// header is pulled in after other includes that already brought in <guiddef.h>.
+// Hard-coding the four constants keeps the link clean on MSVC, MinGW and clang alike.
+static const GUID kSpVoiceClsid =
+    {0x96749377, 0x3391, 0x11d2, {0x9e, 0xe3, 0x00, 0xc0, 0x4f, 0x79, 0x73, 0x96}};
+static const GUID kSpVoiceIid =
+    {0x6c44df74, 0x72b9, 0x4992, {0xa1, 0xec, 0xef, 0x99, 0x6e, 0x04, 0x22, 0xd4}};
+static const GUID kSpTokenCategoryClsid =
+    {0xa910187f, 0x0c7a, 0x45ac, {0x92, 0xcc, 0x59, 0xed, 0xaf, 0xb7, 0x7b, 0x53}};
+static const GUID kSpTokenCategoryIid =
+    {0x2d3d3845, 0x39af, 0x4850, {0xbb, 0xf9, 0x40, 0xb4, 0x97, 0x80, 0x01, 0x1d}};
 #endif
 
 struct SpeechEngine {
@@ -103,7 +112,7 @@ struct SpeechEngine {
     void init(bool wantEnabled) {
         enabled = wantEnabled;
         comInitialized = SUCCEEDED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED));
-        if (FAILED(CoCreateInstance(CLSID_SpVoice, NULL, CLSCTX_ALL, IID_ISpVoice, (void**)&voice)) || !voice) {
+        if (FAILED(CoCreateInstance(kSpVoiceClsid, NULL, CLSCTX_ALL, kSpVoiceIid, (void**)&voice)) || !voice) {
             voice = nullptr;
             supported = false;
             return;
@@ -120,7 +129,7 @@ struct SpeechEngine {
         // ISpVoice has no token enumeration of its own; the voice category owns the list.
         ISpObjectTokenCategory* category = nullptr;
         if (!voice) return;
-        if (CoCreateInstance(CLSID_SpObjectTokenCategory, NULL, CLSCTX_ALL, IID_ISpObjectTokenCategory,
+        if (CoCreateInstance(kSpTokenCategoryClsid, NULL, CLSCTX_ALL, kSpTokenCategoryIid,
                              (void**)&category) != S_OK || !category) return;
         HRESULT enumResult = category->SetId(SPCAT_VOICES, FALSE);
         if (SUCCEEDED(enumResult)) enumResult = category->EnumTokens(NULL, NULL, &tokens);
