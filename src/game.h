@@ -104,7 +104,7 @@ static constexpr int MONSTER_TYPE_COUNT = 11;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 70;
+static constexpr int PATCH_NOTES_COUNT = 71;
 
 struct ItemDef {
     int id;
@@ -4321,6 +4321,8 @@ struct Game {
                                     state == STATE_SETTINGS || state == STATE_HALL || state == STATE_PATCH_NOTES;
         // The Soul Forge reuses menu mode; the hint lets audio.h pick ss_forge_shop.mp3 there.
         sound.musicSceneHint.store(state == STATE_SHOP ? 1 : 0, std::memory_order_relaxed);
+        // A level-up card must not compete with the battle bed: 80 % quieter while it is open.
+        sound.musicSceneGain.store(state == STATE_LEVELUP ? 0.20f : 1.0f, std::memory_order_relaxed);
         if (state == STATE_LEVELUP) sound.musicMode = 6;
         else if (state == STATE_GAMEOVER) sound.musicMode = 7;
         else if (state == STATE_MISSION_COMPLETE) sound.musicMode = 4;
@@ -5881,7 +5883,7 @@ struct Game {
         drawStatRow("Уничтожено монстров:", buf, 0xFFFF8098);
         snprintf(buf, sizeof(buf), "%d / 4", runBossKills);
         drawStatRow("Повержено боссов:", buf, 0xFFFFB848);
-        snprintf(buf, sizeof(buf), "%s ед.", compactCounter((long long)roundf(totalDamageDealt)).c_str());
+        snprintf(buf, sizeof(buf), "%s", compactCounter((long long)roundf(totalDamageDealt)).c_str());
         drawStatRow("Всего нанесено урона:", buf, 0xFF70E8FF);
         snprintf(buf, sizeof(buf), "+%s (Казна: %s)", compactCounter(runGold).c_str(), compactCounter(save.gold).c_str());
         drawStatRow("Добыто золота за бой:", buf, 0xFFFFD838);
@@ -6872,7 +6874,7 @@ struct Game {
         r.drawRoundedRect(panelX, panelY, panelW, panelH, 16, 0xFFFFD058, 3);
         const std::string chronicleTitle = std::string("ХРОНИКА ОБНОВЛЕНИЙ • 2.2–") + GAME_VERSION;
         r.drawTextCentered(FONT_LARGE, SCREEN_W / 2, panelY + 20, chronicleTitle.c_str(), 0xFFFFE068);
-        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ", "2.9.72 • МУЗЫКА ИЗ audio/"};
+        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ", "2.9.72 • МУЗЫКА ИЗ audio/", "2.9.73 • КУЗНИЦА И ТИХИЙ УРОВЕНЬ"};
         static const char* notes[PATCH_NOTES_COUNT] = {
             "Основа игры: пять героев, автоматическое оружие и выбор прокачки во время боя.\nПервые руины, самоцветы опыта, сундуки и сохранение между забегами.",
             "Кампания обрела четыре печати и охоту на боссов.\nПобеды открывают героев, главы и страницы Зала славы.",
@@ -6945,7 +6947,8 @@ struct Game {
             "«Руна Свидетеля» (ID39, IV тир, открывается на 10:15) приносит +8/12/16% суперзаряда за разрушение резонатора. Бонус учитывает уже собранные множители суперзаряда, ограничен общей шкалой 100% и выдаётся только один раз при фактическом разрушении; простое повреждение и повторный удар по нулевому HP его не дают. Добавлены контекстный советчик, ранговое описание и отдельная пиктограмма. Проверяются все ранги, коэффициент, кап, draft, резонаторы и повторное срабатывание.",
             "Сюжетная прокачка привязана к миссиям: первая миссия начинается с тира I; следующие открывают тиры II, III, IV и V сразу с первого драфта (финал остаётся на V). Победа над боссом текущей миссии повышает тир сборки ещё на один в пределах V. В Endless сохранена прежняя разблокировка предметов по времени. Каждая следующая сюжетная миссия повышает HP, урон и скорость врагов, а также темп их появления на 3% относительно предыдущей миссии (до +15% в финале). В досье миссии показаны стартовый тир и прибавка сложности.",
             "Версия теперь задаётся в одном месте: build_windows.bat передаёт её компилятору, и она же попадает в имя файла, в свойства EXE, в заголовок окна и в эту хронику. Сборка идёт в отдельный каталог build и заменяет готовый EXE только после успешной компиляции, поэтому неудачная попытка больше не оставляет проект без рабочего билда. build_windows.bat принимает версию аргументом, корректно читает пустой version.txt и хранится с CRLF.",
-            "Музыка теперь берётся из ваших файлов: игра читает MP3 из папки audio/ рядом с .exe (ss_menu_main, ss_gameplay_run, ss_boss_theme, ss_victory_boss, ss_gameover_death, ss_forge_shop) и играет их вместо встроенной синтезированной темы. Треки декодируются на ходу, поэтому 3–5 МБ файлы не нужно ни во что конвертировать; громкость музыки, клавиша [N] и приглушение во время громких эффектов работают и для них. ss_levelup_ding и ss_upgrade_pick звучат как короткие сигналы при новом уровне и при выборе улучшения. Если файла для сцены нет — для неё остаётся встроенная тема, поэтому игра не замолкает даже с пустой папкой audio/."};
+            "Музыка теперь берётся из ваших файлов: игра читает MP3 из папки audio/ рядом с .exe (ss_menu_main, ss_gameplay_run, ss_boss_theme, ss_victory_boss, ss_gameover_death, ss_forge_shop) и играет их вместо встроенной синтезированной темы. Треки декодируются на ходу, поэтому 3–5 МБ файлы не нужно ни во что конвертировать; громкость музыки, клавиша [N] и приглушение во время громких эффектов работают и для них. ss_levelup_ding и ss_upgrade_pick звучат как короткие сигналы при новом уровне и при выборе улучшения. Если файла для сцены нет — для неё остаётся встроенная тема, поэтому игра не замолкает даже с пустой папкой audio/",
+            "Кузница: описание улучшения больше не уходит под кнопку «КУПИТЬ» — иконка, текст, шкала рангов и кнопка теперь раскладываются от краёв карточки, поэтому в широкоформатном и портретном варианте ничего не наезжает друг на друга. В договорах кадр иконки больше не вылезает над карточкой и не перекрывает подсказку «Покупка усиливает каждого следующего врага», а счётчик рангов переехал к шкале прогресса, чтобы длинные названия вроде «Марш голодной стаи» помещались целиком. Сетки карточек центрируются на широких экранах. Пока открыта карточка нового уровня, музыка боя становится на 80% тише и так же плавно возвращается. На экране смерти из строки урона убрано «ед.»."};
         const int versionY = portraitPatch ? 80 : 108;
         r.drawTextCentered(FONT_MED, SCREEN_W / 2, versionY, versions[patchNotesPage], 0xFFFFC75A);
         const int notesX = compactPatch ? panelX + 18 : 190;
@@ -7528,6 +7531,34 @@ struct Game {
         if (mouseClicked && exitHov) { state = STATE_MENU; sound.play(SFX_CLICK, 0.02f); }
     }
 
+    // Wraps text into at most maxRows lines of maxWidth, trimming the tail with an ellipsis
+    // so a card never spills over the button below it.
+    std::string fitWrapped(Renderer& r, const BakedFont& font, const char* text, int maxWidth, int maxRows) const {
+        if (!text || maxWidth <= 0 || maxRows <= 0) return std::string();
+        std::string src(text), out, line, word;
+        int rows = 1;
+        for (size_t i = 0; i <= src.size(); ++i) {
+            const char c = (i < src.size()) ? src[i] : ' ';
+            if (c == ' ' || c == '\n') {
+                if (!word.empty()) {
+                    const std::string cand = line.empty() ? word : (line + " " + word);
+                    if (r.textWidth(font, cand.c_str()) > maxWidth && !line.empty()) {
+                        if (rows == maxRows) {
+                            out += (out.empty() ? "" : "\n") + line + "…";
+                            return out;
+                        }
+                        out += (out.empty() ? "" : "\n") + line;
+                        ++rows;
+                        line = word;
+                    } else line = cand;
+                    word.clear();
+                }
+            } else word.push_back(c);
+        }
+        if (!line.empty()) out += (out.empty() ? "" : "\n") + line;
+        return out;
+    }
+
     void renderShopMenu(Renderer& r) {
         char buf[128];
         snprintf(buf, sizeof(buf), "Золото в казне: %d • сохраняется между забегами", save.gold);
@@ -7537,7 +7568,9 @@ struct Game {
         const bool compactShop = SCREEN_W < 1200;
         const int tabY = 94, tabW = compactShop ? (SCREEN_W - 60) / 2 : 270, tabH = compactShop ? 32 : 28;
         const int tabGap = compactShop ? 12 : 40;
-        const int tabX1 = compactShop ? 18 : 350, tabX2 = compactShop ? tabX1 + tabW + tabGap : 660;
+        // Centred tab pair: fixed offsets drifted left on ultrawide logical canvases.
+        const int tabX1 = compactShop ? 18 : (SCREEN_W - (2 * tabW + tabGap)) / 2;
+        const int tabX2 = tabX1 + tabW + tabGap;
         bool forgeTabHov = mouseX >= tabX1 && mouseX <= tabX1 + tabW && mouseY >= tabY && mouseY <= tabY + tabH;
         bool oathTabHov = mouseX >= tabX2 && mouseX <= tabX2 + tabW && mouseY >= tabY && mouseY <= tabY + tabH;
         r.fillRoundedRect(tabX1, tabY, tabW, tabH, 6, shopTab == 0 ? 0xFF543878 : 0xFF211833);
@@ -7553,7 +7586,8 @@ struct Game {
         const int cardW = portraitShop ? SCREEN_W - 48 : (compactShop ? (SCREEN_W - 60) / 2 : 520);
         const int cardH = compactShop && !portraitShop ? 140 : 132;
         const int columns = portraitShop ? 1 : 2;
-        const int startX = portraitShop ? 24 : (compactShop ? 20 : 95), gapX = portraitShop ? 0 : (compactShop ? 20 : 50);
+        const int gapX = portraitShop ? 0 : (compactShop ? 20 : 50);
+        const int startX = portraitShop ? 24 : (compactShop ? 20 : std::max(20, (SCREEN_W - (columns * cardW + (columns - 1) * gapX)) / 2));
         const int startY = portraitShop ? 138 : 130, gapY = portraitShop ? 8 : (compactShop ? 12 : 22);
 
         // Иконки кузницы для каждого улучшения (FORGE_ICONS 0–5)
@@ -7574,20 +7608,27 @@ struct Game {
             r.fillRoundedRect(cx, cy, cardW, cardH, 10, 0xFF1E1538, 245);
             r.drawRoundedRect(cx, cy, cardW, cardH, 10, maxed ? 0xFFFFD848 : 0xFF5A4888, 2);
 
-            // Иконка улучшения слева, вертикально по центру карты (из FORGE_ICONS)
             const bool compactCard = compactShop && !portraitShop;
             const int iconSize = compactCard ? 36 : (portraitShop ? 48 : 56);
-            const int iconX = cx + 16;
+            // drawForgeIcon draws a 2*size frame around the centre: keep the whole frame inside the card.
+            const int iconX = cx + 14 + iconSize;
             const int iconY = cy + cardH / 2;
             r.drawForgeIcon(iconX, iconY, FORGE_ICON_ID[i], iconSize, false);
 
-            // Текст сдвигается вправо под иконку
-            const int textX = iconX + iconSize + 12;
-            const int textW = cardW - (textX - cx) - 22;
+            // Text starts right of the icon frame.
+            const int textX = cx + 14 + iconSize * 2 + 12;
+            const int textRight = cx + cardW - 16;
 
-            r.drawText(FONT_MED, textX, cy + 14, def.name, 0xFFFFFFFF);
+            // Buy button lives in the bottom-right corner, so the description gets the space above it.
+            // 153 px is the widest label ("КУПИТЬ (900 ЗОЛ)"); 178 keeps 12 px of padding on both sides.
+            const int bw = 178, bh = compactCard ? 40 : 42;
+            int bx = cx + cardW - bw - 16, by = cy + cardH - bh - 8;
+
+            const int rankW = r.textWidth(FONT_SMALL, "Ранг 50 / 50") + 12;
+            const std::string name = fitWrapped(r, FONT_MED, def.name, textRight - textX - rankW, 1);
+            r.drawText(FONT_MED, textX, cy + 14, name.c_str(), 0xFFFFFFFF);
             snprintf(buf, sizeof(buf), "Ранг %d / %d", rank, def.maxRank);
-            r.drawTextRight(FONT_SMALL, cx + cardW - 20, cy + 18, buf, 0xFFFFD848);
+            r.drawTextRight(FONT_SMALL, textRight, cy + 18, buf, 0xFFFFD848);
 
             static const char* compactMetaDesc[6] = {
                 "+4% урона за ранг; после XII вклад снижен.",
@@ -7597,23 +7638,25 @@ struct Game {
                 "+5% опыта и +2% к критическому шансу за ранг.",
                 "Снижает входящий урон на 0.8 за эффективный ранг."
             };
-            r.drawTextWrapped(FONT_SMALL, textX, cy + (compactCard ? 44 : 46), textW,
-                             compactCard ? compactMetaDesc[i] : def.desc, 0xFFD0C8E8, false);
+            // The description never reaches the button: width stops at the button column and the
+            // number of rows is derived from the free height above it.
+            const int descY = cy + 36;
+            const int descW = textRight - textX;
+            const int descRows = std::max(1, (by - 6 - descY) / std::max(1, FONT_SMALL.lineHeight));
+            const std::string desc = fitWrapped(r, FONT_SMALL, compactCard ? compactMetaDesc[i] : def.desc, descW, descRows);
+            r.drawTextWrapped(FONT_SMALL, textX, descY, descW, desc.c_str(), 0xFFD0C8E8, false);
 
             // Ten compact segments represent five ranks each; 50 levels never overflow the card.
-            const int pipW = compactCard ? 16 : 24, pipStep = compactCard ? 18 : 27;
+            const int pipStep = std::max(10, std::min(compactCard ? 18 : 24, (bx - 12 - textX) / 10));
+            const int pipW = std::max(8, pipStep - 2);
             for (int p = 0; p < 10; ++p) {
                 const int sx = textX + p * pipStep;
                 const int filledRanks = std::max(0, std::min(5, rank - p * 5));
-                const int pipY = cy + (compactCard ? 108 : 88);
+                const int pipY = by + (bh - 10) / 2;
                 r.fillRoundedRect(sx, pipY, pipW, 10, 3, 0xFF2E2448);
                 if (filledRanks > 0)
                     r.fillRoundedRect(sx, pipY, std::max(4, pipW * filledRanks / 5), 10, 3, 0xFF50FF90);
             }
-
-            // Buy Button
-            const int bw = compactCard ? 150 : 178, bh = 42;
-            int bx = cx + cardW - bw - (compactCard ? 16 : 18), by = cy + (compactCard ? 88 : 74);
             bool hov = (mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh);
             uint32_t btnCol = maxed ? 0xFF38304C : (canAfford ? (hov ? 0xFFE8A020 : 0xFFB87818) : 0xFF3A2438);
             r.fillRoundedRect(bx, by, bw, bh, 7, btnCol);
@@ -7640,7 +7683,8 @@ struct Game {
             const int oathPad = compactShop ? (portraitShop ? 24 : 20) : 50;
             const int oathW = compactShop ? (SCREEN_W - 2 * oathPad - (oathColumns - 1) * oathGapX) / oathColumns : 360;
             const int oathH = portraitShop ? 164 : 182, oathY = portraitShop ? 146 : 160;
-            const int oathX0 = oathPad;
+            const int oathX0 = compactShop ? oathPad
+                : std::max(oathPad, (SCREEN_W - (oathColumns * oathW + (oathColumns - 1) * oathGapX)) / 2);
             for (int i = 0; i < ENEMY_OATH_COUNT; ++i) {
                 const int col = i % oathColumns, row = i / oathColumns;
                 int x = oathX0 + col * (oathW + oathGapX);
@@ -7652,17 +7696,31 @@ struct Game {
                 r.fillGradientV(x, y, oathW, oathH, 0xFF321928, 0xFF171020, 245);
                 r.drawRoundedRect(x, y, oathW, oathH, 10, maxed ? 0xFFFFD858 : 0xFF9D5548, 2);
 
-                // Иконка договора слева (из FORGE_ICONS 6–11)
+                // Иконка договора в левом верхнем углу карты (из FORGE_ICONS 6–11).
+                // Кадр иконки — 2*size вокруг центра, поэтому центр сдвинут внутрь карты,
+                // иначе кадр вылезал над картой и закрывал подсказку сверху.
                 const int oathIconSize = compactShop ? 26 : 32;
-                const int oathTextX = x + 20 + oathIconSize + 10;
-                r.drawForgeIcon(x + 20, y + oathIconSize / 2 + 4, 6 + i, oathIconSize, false);
+                const int oathIconCx = x + 10 + oathIconSize;
+                const int oathIconCy = y + 8 + oathIconSize;
+                const int oathTextX = x + 10 + oathIconSize * 2 + 12;
+                r.drawForgeIcon(oathIconCx, oathIconCy, 6 + i, oathIconSize, false);
 
-                r.drawText(FONT_MED, oathTextX, y + 10, def.name, 0xFFFFE5D0);
                 snprintf(buf, sizeof(buf), "%d / %d", rank, def.maxRank);
-                r.drawTextRight(FONT_SMALL, x + oathW - 16, y + 14, buf, 0xFFFFD878);
-                r.drawTextWrapped(FONT_SMALL, oathTextX, y + 38, oathW - (oathTextX - x) - 16, def.desc, 0xFFE6D5D8, true);
+                // The rank moves down to the pip row: on a 360 px card the title needs the full width,
+                // otherwise "Марш голодной стаи" would be cut right next to the counter.
+                const std::string oathName = fitWrapped(r, FONT_MED, def.name, x + oathW - 16 - oathTextX, 1);
+                r.drawText(FONT_MED, oathTextX, y + 10, oathName.c_str(), 0xFFFFE5D0);
+                r.drawTextRight(FONT_SMALL, x + oathW - 16, y + 86, buf, 0xFFFFD878);
+                const int oathDescY = y + 38;
+                const int oathDescW = x + oathW - 16 - oathTextX;
+                const int oathDescRows = std::max(1, (y + 84 - oathDescY) / std::max(1, FONT_SMALL.lineHeight));
+                const std::string oathDesc = fitWrapped(r, FONT_SMALL, def.desc, oathDescW, oathDescRows);
+                r.drawTextWrapped(FONT_SMALL, oathTextX, oathDescY, oathDescW, oathDesc.c_str(), 0xFFE6D5D8, true);
+                const int pipRoom = x + oathW - 16 - r.textWidth(FONT_SMALL, "10 / 10") - 10 - oathTextX;
+                const int oathPipStep = std::max(12, std::min(25, pipRoom / std::max(1, def.maxRank)));
                 for (int pip = 0; pip < def.maxRank; ++pip)
-                    r.fillRoundedRect(oathTextX + pip * 25, y + 88, 19, 10, 3, pip < rank ? 0xFFFF7158 : 0xFF382638);
+                    r.fillRoundedRect(oathTextX + pip * oathPipStep, y + 88, std::max(8, oathPipStep - 6), 10, 3,
+                                      pip < rank ? 0xFFFF7158 : 0xFF382638);
                 int bx = x + oathW - 160, by = y + 112, bw = 144, bh = 48;
                 bool hov = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
                 r.fillRoundedRect(bx, by, bw, bh, 7, maxed ? 0xFF38304C : (canBuy ? (hov ? 0xFFD14C32 : 0xFF913624) : 0xFF3A2438));

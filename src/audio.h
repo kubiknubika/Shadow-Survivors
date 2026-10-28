@@ -65,6 +65,8 @@ struct SoundEngine {
     std::atomic<float> musicVolume{0.42f};
     // 0 = normal scene mapping, 1 = Soul Forge shop (it reuses the menu mode otherwise).
     std::atomic<int> musicSceneHint{0};
+    // Scene-level trim for the music bus: 0.20 while a level-up card is open (80 % quieter).
+    std::atomic<float> musicSceneGain{1.0f};
 
     // Player-supplied tracks from audio/. When a scene has a file it plays instead of
     // the synthesised score below; otherwise the built-in score keeps the scene alive.
@@ -97,6 +99,7 @@ struct SoundEngine {
     float sfxMuteGain = 1.0f;
     float musicDuckGain = 1.0f;
     float musicVolumeSmooth = 0.42f;
+    float musicSceneGainSmooth = 1.0f;
     float sfxVolumeSmooth = 0.65f;
     float bossMusicBlend = 0.0f; // retained for compatibility with the procedural score state
     uint32_t noiseRng = 987654321u;
@@ -635,6 +638,9 @@ struct SoundEngine {
         musicMuteGain += (muteTarget - musicMuteGain) * 0.00055f;
         const float volumeTarget = musicVolume.load(std::memory_order_relaxed);
         musicVolumeSmooth += (volumeTarget - musicVolumeSmooth) * 0.00045f;
+        // ~120 ms to settle, so opening or closing a level-up card ducks smoothly.
+        const float sceneGainTarget = std::max(0.0f, std::min(1.0f, musicSceneGain.load(std::memory_order_relaxed)));
+        musicSceneGainSmooth += (sceneGainTarget - musicSceneGainSmooth) * (1.0f / (44100.0f * 0.12f));
         if (!musicOn && musicMuteGain < 0.001f) return 0.0f;
 
         // Player tracks in audio/ own the bus whenever the current scene has one.
@@ -648,7 +654,7 @@ struct SoundEngine {
         if (!trackOwnsBus) {
             if (proceduralMusicGain > 0.001f) music = renderProceduralScore(t) * proceduralMusicGain;
         }
-        return music * musicVolumeSmooth * musicMuteGain;
+        return music * musicVolumeSmooth * musicMuteGain * musicSceneGainSmooth;
     }
 
     // The synthesised score (music_composer.h / boss_score.h) used when no file exists.
