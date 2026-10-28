@@ -11,6 +11,15 @@
 Запуск:
     python3 tools/normalize_voice.py audio/voice/mission_brief_11.wav [...]
     python3 tools/normalize_voice.py --all audio/voice/*.wav
+
+Режим --join собирает длинную фразу из коротких кусков:
+
+    python3 tools/normalize_voice.py --join out.wav part1.wav part2.wav part3.wav
+
+Зачем он нужен. Синтез угадывает ударение по контексту, и на длинной фразе
+ошибается на словах-омографах («разомкнут» — это и «разОмкнут», и «разомкнУт»).
+Короткий кусок оставляет модели один смысл, поэтому длинные описания дел
+читаются по одной мысли за раз, а паузы ставит уже сборка.
 """
 import glob
 import os
@@ -28,6 +37,7 @@ FADE_IN = 0.015
 FADE_OUT = 0.060
 PRE_ROLL = 0.080
 TAIL = 0.100
+JOIN_GAP = 0.260          # пауза между кусками при --join: вдох, а не склейка
 RMS_TARGET = 0.115
 RMS_TARGET_LOUD = 0.140   # --loud: короткие боевые выкрики, которые иначе слышны тише
 PEAK_LIMIT = 0.89
@@ -158,6 +168,22 @@ def normalize(data, target=RMS_TARGET):
     return data
 
 
+def join(out_path, parts, target=RMS_TARGET):
+    """Склеивает куски настоящей тишиной — по вдоху между мыслями."""
+    gap = b"\x00\x00" * int(RATE * JOIN_GAP)
+    chunks = []
+    for part in parts:
+        chunks.append(normalize(trim(read(part)), target))
+    data = gap.join(chunks)
+    with wave.open(out_path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(data)
+    seconds = len(data) / 2 / RATE
+    print(f"{os.path.basename(out_path):32s} {seconds:5.2f} с  из {len(parts)} кусков")
+
+
 def process(path, target=RMS_TARGET):
     data = normalize(trim(read(path)), target)
     with wave.open(path, "wb") as w:
@@ -178,6 +204,16 @@ def process(path, target=RMS_TARGET):
 def main():
     loud = "--loud" in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if "--join" in sys.argv:
+        if len(args) < 3:
+            print("--join ждёт: out.wav part1.wav part2.wav [...]")
+            return 1
+        missing = [a for a in args[1:] if not os.path.exists(a)]
+        if missing:
+            print("нет файлов: " + ", ".join(missing))
+            return 1
+        join(args[0], args[1:], RMS_TARGET_LOUD if loud else RMS_TARGET)
+        return 0
     paths = []
     for a in args:
         paths.extend(sorted(glob.glob(a)))

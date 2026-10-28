@@ -135,7 +135,7 @@ MISSIONS = [
          objective="ПОБЕДИ ТРИ ЭХО", boss="АРХИВНЫЙ ПРОТОКОЛ",
          duration=280, bossTime=210, bossType=4, seals=0x0F, prereq=[24], kind=1),
     dict(act=5, case="027", title="ПОСЛЕДНЯЯ НОЧЬ", subtitle="КОЛЬЦО РАЗМЫКАЕТСЯ",
-         briefing="Контур разомкнут, но ночь ещё держится. Последний бой не вернёт погибших — он вернёт живым право помнить самим.",
+         briefing="Контур разорван, но ночь ещё держится. Последний бой не вернёт погибших. Он оставит живым право помнить самим.",
          objective="УДЕРЖИ КОЛЬЦО • ДОЖДИСЬ РАССВЕТА", boss="ПОСЛЕДНИЙ ПРИКАЗ",
          duration=260, bossTime=190, bossType=0, seals=0x0F, prereq=[25], kind=0, reinforced=True),
     dict(act=5, case="028", title="ПРАВО ПОМНИТЬ", subtitle="ДЕЛО ЗАКРЫТО",
