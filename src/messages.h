@@ -56,6 +56,8 @@ enum GameMsgId : int {
     GMSG_STORY_BRANCH,        // branch choice screen
     GMSG_STORY_NO_NAME,       // "Свидетель без имени"
     GMSG_STORY_COPY_WARNING,  // copy of the witness appears
+    GMSG_HUNT_CLEARED,        // quiet hunt: the pack is wiped out
+    GMSG_HUNT_ESCAPED,        // quiet hunt: the pack left the trail
     GMSG_COUNT
 };
 
@@ -109,6 +111,8 @@ static const GameMsgDef GAME_MESSAGES[GMSG_COUNT] = {
     {GMSG_STORY_BRANCH,       "story_branch",       true,  "Выбор ветки. Второй след всё равно придётся пройти.", "экран выбора ветки"},
     {GMSG_STORY_NO_NAME,      "story_no_name",      true,  "Свидетель без имени. В реестре такой строки нет.", "первое дело"},
     {GMSG_STORY_COPY_WARNING, "story_copy_warning", true,  "Это копия. Она отвечает лучше оригинала.", "копия Свидетеля"},
+    {GMSG_HUNT_CLEARED,       "hunt_cleared",       true,  "Стая уничтожена. Награда забрана.", "итог тихой охоты: стая добита"},
+    {GMSG_HUNT_ESCAPED,       "hunt_escaped",       true,  "Стая ушла по следу. Награды нет.", "итог тихой охоты: стая ушла по таймеру"},
 };
 
 struct MessageRegistry {

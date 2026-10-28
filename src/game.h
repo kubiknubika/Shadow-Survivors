@@ -142,7 +142,7 @@ static constexpr int MONSTER_TYPE_COUNT = 11;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 74;
+static constexpr int PATCH_NOTES_COUNT = 75;
 
 struct ItemDef {
     int id;
@@ -2492,16 +2492,14 @@ struct Game {
             save.gold += bounty; runGold += bounty;
             addFloatingText(playerX, playerY - 60.0f, "СТАЯ УНИЧТОЖЕНА", 0xFFFFD874, true);
             spawnParticles(playerX, playerY, 30, 0xFFFFD874, 180.0f, 4, true);
-            announce(GMSG_WORLD_EVENT, "СТАЯ УНИЧТОЖЕНА: НАГРАДА ЗАБРАНА", 3.0f);
+            announce(GMSG_HUNT_CLEARED, "СТАЯ УНИЧТОЖЕНА: НАГРАДА ЗАБРАНА", 3.0f);
         }
     }
 
     void failHuntEvent() {
         huntActive = false;
         for (Monster& mob : monsters) if (mob.fromHunt && mob.hp > 0.0f) mob.fromHunt = false;
-        announce(GMSG_WORLD_EVENT, "СТАЯ УШЛА ПО СЛЕДУ: НАГРАДЫ НЕТ", 3.0f);
-        difficultyBanner = "СТАЯ УШЛА — В СЛЕДУЮЩИЙ РАЗ ДОБЕЙ ВСЕХ";
-        difficultyBannerTimer = 3.5f;
+        announce(GMSG_HUNT_ESCAPED, "СТАЯ УШЛА ПО СЛЕДУ: НАГРАДЫ НЕТ", 3.0f);
     }
 
     void generateUpgradeChoices() {
@@ -5252,31 +5250,6 @@ struct Game {
         }
     }
 
-    int storyToastLineCount(Renderer& r, int maxWidth) const {
-        // Mirror drawTextWrapped's greedy wrap so the panel is exactly as tall as the text.
-        int lines = 0;
-        std::string word, line;
-        auto flush = [&](bool force) {
-            if (!line.empty()) { ++lines; line.clear(); }
-            else if (force) ++lines;
-        };
-        for (size_t i = 0; i <= storyLine.size(); ++i) {
-            const char c = (i < storyLine.size()) ? storyLine[i] : ' ';
-            if (c == ' ' || c == '\n') {
-                if (!word.empty()) {
-                    const std::string cand = line.empty() ? word : (line + " " + word);
-                    if (r.textWidth(FONT_SMALL, cand.c_str()) > maxWidth && !line.empty()) {
-                        flush(false);
-                        line = word;
-                    } else line = cand;
-                    word.clear();
-                }
-                if (c == '\n') flush(true);
-            } else word.push_back(c);
-        }
-        if (!line.empty()) flush(false);
-        return std::max(1, lines);
-    }
 
     // A ring made of separate dots instead of a solid circle with radial ticks: the old
     // ticks read as a "diameter line" drawn next to the mob, which looked broken.
@@ -5302,26 +5275,104 @@ struct Game {
     }
 
     // A translucent window knocked out of the screen centre, with a soft fade in/out.
-    void drawStoryToastPanel(Renderer& r) {
-        if (storyTimer <= 0.0f || storyLine.empty()) return;
+    int textLineCount(Renderer& r, const std::string& text, int maxWidth) const {
+        // Mirror drawTextWrapped's greedy wrap so a panel is exactly as tall as its text.
+        int lines = 0;
+        std::string word, line;
+        auto flush = [&](bool force) {
+            if (!line.empty()) { ++lines; line.clear(); }
+            else if (force) ++lines;
+        };
+        for (size_t i = 0; i <= text.size(); ++i) {
+            const char c = (i < text.size()) ? text[i] : ' ';
+            if (c == ' ' || c == '\n') {
+                if (!word.empty()) {
+                    const std::string cand = line.empty() ? word : (line + " " + word);
+                    if (r.textWidth(FONT_SMALL, cand.c_str()) > maxWidth && !line.empty()) {
+                        flush(false);
+                        line = word;
+                    } else line = cand;
+                    word.clear();
+                }
+                if (c == '\n') flush(true);
+            } else word.push_back(c);
+        }
+        if (!line.empty()) flush(false);
+        return std::max(1, lines);
+    }
+
+    int storyToastLineCount(Renderer& r, int maxWidth) const {
+        return textLineCount(r, storyLine, maxWidth);
+    }
+
+    // Every combat message lives in one bottom-left stack: nothing is drawn in the middle of
+    // the battlefield any more. The voice line still carries the words; the panel is just the
+    // receipt, so the player never has to look away from the fight.
+    void drawCombatNotices(Renderer& r) {
+        struct Row { std::string text; uint32_t edge; uint32_t ink; int alpha; };
+        std::vector<Row> rows;
+        char buf[220];
+
+        // Bottom-most first: the story toast stays closest to the controls.
+        if (storyTimer > 0.0f && !storyLine.empty()) {
+            const float fadeIn = storyDuration > 0.0f ? std::min(1.0f, (storyDuration - storyTimer) * 6.0f) : 1.0f;
+            const float fadeOut = std::min(1.0f, storyTimer * 2.6f);
+            const int alpha = std::max(0, std::min(212, (int)(212.0f * std::min(fadeIn, fadeOut))));
+            rows.push_back({storyLine, 0xFFB58BE8, 0xFFE9D7FF, alpha});
+        }
+        if (difficultyBannerTimer > 0.0f && !difficultyBanner.empty()) {
+            const int alpha = std::min(235, (int)(difficultyBannerTimer * 100.0f));
+            const uint32_t color = getDifficultySegment() == 1 ? 0xFFFF6A48 : 0xFF82E8FF;
+            rows.push_back({difficultyBanner, color, color, alpha});
+        }
+        if (buildTierUpTimer > 0.0f) {
+            const int alpha = std::min(235, 145 + (int)((0.5f + 0.5f * sinf(globalTime * 13.0f)) * 90.0f));
+            snprintf(buf, sizeof(buf), "ТИР СБОРКИ ПОВЫШЕН  •  ТИР %d", buildTierUpValue);
+            rows.push_back({buf, 0xFFFFD75E, 0xFFFFF0B0, alpha});
+        }
+        if (bossWarningTimer > 0.0f) {
+            // The border pulses; the words stay readable for the whole warning.
+            const int alpha = std::min(235, 196 + (int)(39.0f * (0.5f + 0.5f * sinf(globalTime * 12.0f))));
+            snprintf(buf, sizeof(buf), "СТРАЖ ПРИБЛИЖАЕТСЯ  •  %s", bossWarningName.c_str());
+            rows.push_back({buf, 0xFFFF5268, 0xFFFFE7D0, alpha});
+        }
+        if (bossPhaseEventTimer > 0.0f) {
+            static const char* bossShort[4] = {"МОРГАР • ВОРОТА", "МАЛАКОР • ГОЛОС", "КАРДИНАЛ • РЕЕСТР", "АЗАРОТ • АРХИВ"};
+            static const char* roman[3] = {"I", "II", "III"};
+            static const char* phaseNames[3] = {"ОХОТА", "НАТИСК", "ЯРОСТЬ"};
+            const int phase = std::max(1, std::min(3, bossPhaseEventNumber));
+            const uint32_t color = phase == 2 ? 0xFFFFA843 : 0xFFFF456D;
+            const float progress = 1.0f - bossPhaseEventTimer / 3.2f;
+            const int alpha = std::max(0, std::min(235, (int)(235.0f * std::min(1.0f, progress * 7.0f) * std::min(1.0f, bossPhaseEventTimer * 3.0f))));
+            snprintf(buf, sizeof(buf), "ФАЗА %s  •  %s  •  %s", roman[phase - 1], phaseNames[phase - 1],
+                     bossShort[bossPhaseEventType & 3]);
+            rows.push_back({buf, color, 0xFFFFFFFF, alpha});
+        }
+        if (huntActive) {
+            snprintf(buf, sizeof(buf), "ТИХАЯ ОХОТА: ОСТАЛОСЬ %d ИЗ %d  •  %.0f с",
+                     std::max(0, huntPackRemaining), huntPackTotal, ceilf(huntTimer));
+            rows.push_back({buf, 0xFFFFC848, 0xFFFFE6A8, 220});
+        }
+        if (rows.empty()) return;
+
         const bool portrait = SCREEN_H > SCREEN_W;
         const int panelW = std::min(portrait ? SCREEN_W - 24 : 560, SCREEN_W - 24);
-        const int life = std::max(1, (int)std::ceil(storyDuration * 60.0f));
-        (void)life;
-        const float fadeIn = storyDuration > 0.0f ? std::min(1.0f, (storyDuration - storyTimer) * 6.0f) : 1.0f;
-        const float fadeOut = std::min(1.0f, storyTimer * 2.6f);
-        const int alpha = std::max(0, std::min(212, (int)(212.0f * std::min(fadeIn, fadeOut))));
-        if (alpha <= 2) return;
-        const int lines = storyToastLineCount(r, panelW - 34);
-        const int panelH = 20 + lines * FONT_SMALL.lineHeight;
         const int panelX = portrait ? 12 : 18;
-        // Clears the control strip: the compact (portrait) HUD always wraps the hint to two lines.
         const bool twoLineHints = portrait || SCREEN_W < 1100;
-        const int panelY = SCREEN_H - (twoLineHints ? 54 : 36) - panelH - 10;
-        r.fillRoundedRect(panelX, panelY, panelW, panelH, 10, 0xFF0B0714, (int)(alpha * 0.72f));
-        r.drawRoundedRect(panelX, panelY, panelW, panelH, 10, 0xFFB58BE8, 1, alpha);
-        r.fillRoundedRect(panelX + 1, panelY + 8, 3, panelH - 16, 2, 0xFFB58BE8, alpha);
-        r.drawTextWrapped(FONT_SMALL, panelX + 16, panelY + 10, panelW - 32, storyLine.c_str(), 0xFFE9D7FF, false, alpha);
+        int cursorY = SCREEN_H - (twoLineHints ? 54 : 36) - 10;
+        for (const Row& row : rows) {
+            if (row.alpha <= 2 || row.text.empty()) continue;
+            const int lines = textLineCount(r, row.text, panelW - 34);
+            const int h = 20 + lines * FONT_SMALL.lineHeight;
+            const int y = cursorY - h;
+            if (y < 4) break; // never spill over the top of the screen
+            r.fillRoundedRect(panelX, y, panelW, h, 10, 0xFF0B0714, (int)(row.alpha * 0.72f));
+            r.drawRoundedRect(panelX, y, panelW, h, 10, row.edge, 1, row.alpha);
+            r.fillRoundedRect(panelX + 1, y + 8, 3, h - 16, 2, row.edge, row.alpha);
+            r.drawTextWrapped(FONT_SMALL, panelX + 16, y + 10, panelW - 32,
+                              row.text.c_str(), row.ink, false, row.alpha);
+            cursorY = y - 6;
+        }
     }
 
     void renderHUDPortrait(Renderer& r) {
@@ -5415,19 +5466,7 @@ struct Game {
             r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, by + 1, buf, 0xFFFFFFFF);
             ++bossBars;
         }
-        if (bossWarningTimer > 0.0f) {
-            const int alpha = std::min(245, (int)((0.65f + 0.35f * sinf(globalTime * 12.0f)) * 245.0f));
-            drawUIFrame(r, pad, 340, fullW, 38, 0xFFFF5268, true, alpha);
-            snprintf(buf, sizeof(buf), "СТРАЖ ПРИБЛИЖАЕТСЯ • %s", bossWarningName.c_str());
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 350, buf, 0xFFFFE7D0, true, alpha);
-        }
-        if (buildTierUpTimer > 0.0f) {
-            const int alpha = std::min(245, 145 + (int)((0.5f + 0.5f * sinf(globalTime * 13.0f)) * 90.0f));
-            drawUIFrame(r, pad, 390, fullW, 36, 0xFFFFD75E, true, alpha);
-            snprintf(buf, sizeof(buf), "ТИР СБОРКИ ПОВЫШЕН • ТИР %d", buildTierUpValue);
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 400, buf, 0xFFFFF0B0, true, alpha);
-        }
-        drawStoryToastPanel(r);
+        drawCombatNotices(r);
         r.fillRect(0, SCREEN_H - 32, SCREEN_W, 32, 0xFF0E0A18, 218);
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 27, "WASD • ДВИЖЕНИЕ   SPACE • РЫВОК   Q • СУПЕР", 0xFFDDD5EF);
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 13, "ПКМ • КУРСОР   M/N • ЗВУК   F11 • ЭКРАН   ESC • ПАУЗА", 0xFFB8B0D0);
@@ -5489,17 +5528,6 @@ struct Game {
             r.fillRoundedRect(cx + 3, cy + 2, 11, 10, 2, 0xFF0B0910, 245);
             r.drawTextCentered(FONT_SMALL, cx + 8, cy + 1, buf, 0xFFFFDE76);
             ++slotIndex;
-        }
-
-        if (buildTierUpTimer > 0.0f) {
-            const float pulse = 0.5f + 0.5f * sinf(globalTime * 13.0f);
-            const int alpha = std::min(245, 145 + (int)(pulse * 90.0f));
-            r.addGlow(162, 228, 90, 0xFFFFC84D, alpha / 2);
-            r.fillRoundedRect(14, 211, 296, 34, 7, 0xFF30200B, alpha);
-            r.drawRoundedRect(14, 211, 296, 34, 7, 0xFFFFD75E, 2, alpha);
-            char tierLabel[64];
-            snprintf(tierLabel, sizeof(tierLabel), "ТИР СБОРКИ ПОВЫШЕН  •  ТИР %d", buildTierUpValue);
-            r.drawTextCentered(FONT_SMALL, 162, 220, tierLabel, 0xFFFFF0B0, true, alpha);
         }
 
         // The central readout separates the run clock from its chapter and current wave state.
@@ -5583,15 +5611,6 @@ struct Game {
             ++bossBars;
         }
 
-        // Boss Incoming Warning Banner
-        if (bossWarningTimer > 0.0f) {
-            const int alpha = (int)((0.65f + 0.35f * sinf(globalTime * 12.0f)) * 245.0f);
-            const int warningW = std::min(680, SCREEN_W - 40);
-            const int warningX = (SCREEN_W - warningW) / 2;
-            drawUIFrame(r, warningX, 196, warningW, 37, 0xFFFF5268, true, alpha);
-            snprintf(buf, sizeof(buf), "СТРАЖ ПРИБЛИЖАЕТСЯ  •  %s", bossWarningName.c_str());
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 205, buf, 0xFFFFE7D0, true, alpha);
-        }
 
         // 4. Top-right run ledger: fixed-width columns and compact large counters prevent collisions.
         const int ledgerW = 310, ledgerX = SCREEN_W - 324;
@@ -5686,25 +5705,7 @@ struct Game {
         r.fillRoundedRect(ux, uy, uw, uh, 5, 0xFF171025, 245);
         r.fillRoundedRect(ux, uy, (int)(uw * std::min(1.0f, superCharge / 100.0f)), uh, 5, superCharge >= 100.0f ? 0xFFFFB820 : 0xFF8D45C8, 245);
         r.drawRoundedRect(ux, uy, uw, uh, 5, superCharge >= 100.0f ? 0xFFFFE068 : 0xFF786090, 1);
-        drawStoryToastPanel(r);
-        // Quiet hunt counter: the pack is finite, so the player can decide to finish it.
-        if (huntActive) {
-            char huntText[96];
-            snprintf(huntText, sizeof(huntText), "ТИХАЯ ОХОТА: ОСТАЛОСЬ %d ИЗ %d  •  %.0f с",
-                     std::max(0, huntPackRemaining), huntPackTotal, ceilf(huntTimer));
-            const int chipW = std::min(520, SCREEN_W - 40);
-            const int chipX = (SCREEN_W - chipW) / 2;
-            drawUIFrame(r, chipX, 248, chipW, 32, 0xFFFFC848, false, 220);
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 254, huntText, 0xFFFFE6A8);
-        }
-        if (difficultyBannerTimer > 0.0f) {
-            const int alpha = std::min(235, (int)(difficultyBannerTimer * 100.0f));
-            const uint32_t color = getDifficultySegment() == 1 ? 0xFFFF6A48 : 0xFF82E8FF;
-            const int panelW = std::min(730, SCREEN_W - 40);
-            const int panelX = (SCREEN_W - panelW) / 2;
-            drawUIFrame(r, panelX, 284, panelW, 40, color, false, alpha);
-            r.drawTextWrapped(FONT_SMALL, panelX + 15, 288, panelW - 30, difficultyBanner.c_str(), color, true, alpha);
-        }
+        drawCombatNotices(r);
 
         // 6. Bottom Controls Hint Strip
         r.fillRect(0, SCREEN_H - 26, SCREEN_W, 26, 0xFF0E0A18, 210);
@@ -7432,6 +7433,7 @@ struct Game {
             "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ",
             "2.9.72 • МУЗЫКА ИЗ audio/", "2.9.73 • КУЗНИЦА И ТИХИЙ УРОВЕНЬ", "2.9.74 • ГОЛОС, F3 И ЧИСТЫЙ МИР",
             "2.9.75 • ГОЛОС ИЗ ФАЙЛОВ", "2.9.76–2.9.80 • СЮЖЕТ, СЛОВАРЬ И ГОЛОС",
+            "2.9.81 • ТИХИЕ РЕПЛИКИ В УГЛУ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -7509,6 +7511,7 @@ struct Game {
             "Озвучка сообщений: системный голос Windows читает баннеры боя, сюжетные строки\nи предупреждения о боссах; в настройках появился переключатель «Озвучка сообщений».\nВсе сообщения собраны в единый реестр, битые строки видны в оверлее F3.\nF3 — техническая панель как в Minecraft: версия, FPS, сущности, звук и озвучка.\nСообщения боя — прозрачное окно в левом нижнем углу вместо полосы по центру.\nМетки на мобах больше не «диаметр»: спрайты центрируются по видимому рисунку.\nПункт «Музыка» и выбор вариантов убраны: музыка берётся только из audio/.",
             "Озвучка сообщений больше не пользуется системным синтезатором Windows: все фразы —\nзаписанные файлы в audio/voice/, имя файла равно ключу сообщения из реестра.\nФразы идут по шине эффектов, музыка приглушается, пока реплика звучит.\nНет файла — строка молчит, а F3 и настройки показывают, сколько фраз не записано.\ntools/check_voice.py сверяет реестр с папкой; VOICE_LINES.md — таблица всех фраз.\nМетка щита на мобах — дуга со стороны блока вместо «диаметра» рядом с мобом.",
 "Главное за 2.9.76–2.9.80.\n• Кампания: 28 дел в пяти актах — нуар-детектив с уликами, допросами копий и четырьмя печатями. Сценарий — STORY.md.\n• Сейв v7 хранит прогресс маской из 28 дел; старые сейвы переносятся, ветки требуют оба следа.\n• Выход босса очищает арену, затем секунду спавн идёт ×5. Тихая охота — возможность, прорыв — стена.\n• Словарь терминов по G. Озвучка: 36 фраз, все записаны и выровнены по громкости.",
+            "Боевые сообщения живут только в голосе и в левом нижнем углу: страж, фаза босса, тир сборки, сложность, тихая охота и сюжетная строка собраны в одну стопку плашек. Центр поля больше ничем не перекрывается.\n• Элитные и особые враги получили янтарный отсвет и светящийся силуэт — их видно в толпе.\n• Тихая охота не путает итог: у победы и у провала отдельные фразы и отдельная озвучка.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
@@ -8755,44 +8758,9 @@ struct Game {
         }
     }
 
-    void renderBossPhaseTransition(Renderer& r) {
-        if (bossPhaseEventTimer <= 0.0f) return;
-        static const char* bossNames[4] = {"МОРГАР • ВОРОТА", "МАЛАКОР • ГОЛОС", "КАРДИНАЛ • РЕЕСТР", "АЗАРОТ • АРХИВ"};
-        static const char* roman[3] = {"I", "II", "III"};
-        static const char* phaseNames[3] = {"ОХОТА", "НАТИСК", "ЯРОСТЬ"};
-        const int phase = std::max(1, std::min(3, bossPhaseEventNumber));
-        const int type = bossPhaseEventType & 3;
-        const uint32_t color = phase == 2 ? 0xFFFFA843 : 0xFFFF456D;
-        const float progress = 1.0f - bossPhaseEventTimer / 3.2f;
-        const float fadeIn = std::min(1.0f, progress * 7.0f);
-        const float fadeOut = std::min(1.0f, bossPhaseEventTimer * 3.0f);
-        const int alpha = std::max(0, std::min(235, (int)(235.0f * fadeIn * fadeOut)));
-
-        // A compact edge toast keeps the battlefield visible; it replaces the old full-screen veil/rings.
-        const int panelW = std::min(500, SCREEN_W - 32), panelH = 62;
-        const int panelX = (SCREEN_W - panelW) / 2;
-        // Sit directly above the message window instead of guessing: the two panels must never touch.
-        int storyToastH = 0;
-        if (storyTimer > 0.0f && !storyLine.empty()) {
-            const bool portraitToast = SCREEN_H > SCREEN_W || SCREEN_W < 1100;
-            const int toastW = std::min(portraitToast ? SCREEN_W - 24 : 560, SCREEN_W - 24);
-            storyToastH = 20 + storyToastLineCount(r, toastW - 34) * FONT_SMALL.lineHeight + 10;
-        }
-        const int panelY = SCREEN_H - (108 + storyToastH);
-        r.addGlow(panelX + panelW / 2, panelY + panelH / 2, 110, color, alpha / 3);
-        r.fillRoundedRect(panelX, panelY, panelW, panelH, 9, 0xFF100911, (int)(alpha * 0.94f));
-        r.drawRoundedRect(panelX, panelY, panelW, panelH, 9, color, 2, alpha);
-        r.fillRoundedRect(panelX + 12, panelY + 3, panelW - 24, 2, 1, color, alpha);
-        char title[80];
-        snprintf(title, sizeof(title), "ФАЗА %s  •  %s", roman[phase - 1], phaseNames[phase - 1]);
-        r.drawTextCentered(FONT_MED, SCREEN_W / 2, panelY + 9, title, 0xFFFFFFFF, true, alpha);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, panelY + 35, bossNames[type], color, true, alpha);
-        const int ticksW = 48;
-        const int ticksX = SCREEN_W / 2 - (ticksW * 3 + 6 * 2) / 2;
-        for (int i = 0; i < 3; ++i)
-            r.fillRoundedRect(ticksX + i * (ticksW + 6), panelY + panelH - 5, ticksW, 2, 1,
-                              i < phase ? color : 0xFF514454, alpha);
-    }
+    // The phase change is announced in the bottom-left stack (see drawCombatNotices), so this
+    // hook stays empty on purpose: nothing is drawn in the middle of the battlefield any more.
+    void renderBossPhaseTransition(Renderer& r) { (void)r; }
 
     void render(Renderer& r) {
         r.skillIconStyle = std::max(0, std::min(1, options.skillIconStyle));

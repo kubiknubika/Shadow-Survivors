@@ -605,16 +605,46 @@ struct Renderer {
         drawBakedSpriteCentred(HERO_SPRITES[heroClass % 5][frame], cx, cy, facing < 0, hurtFlash, false, 255);
     }
 
-    void drawMonsterSprite(int cx, int cy, int type, float animTime, bool hitFlash, bool isElite, bool frozen = false, bool flipX = false) {
-        if (isElite) {
-            drawCircleRing(cx, cy + 14, 18, 2, 0xFFFFC028, 200, true);
-            addGlow(cx, cy, 24, 0xFFFF9020, 95);
+    // A soft coloured wash over a baked sprite's opaque pixels: cheap, and it survives any
+    // palette because it only tints what is already drawn.
+    void drawBakedSpriteWash(const BakedSprite* spr, int cx, int cy, bool flipX, uint32_t tint, int alpha) {
+        if (!spr || alpha <= 0) return;
+        int dx = 0, dy = 0;
+        bakedSpriteVisualOffset(spr, dx, dy);
+        const int w = spr->width, h = spr->height;
+        const int startX = cx - dx - w / 2;
+        const int startY = cy - dy - h / 2;
+        for (int sy = 0; sy < h; ++sy) {
+            const int py = startY + sy;
+            if ((unsigned)py >= (unsigned)SCREEN_H) continue;
+            const uint32_t* row = spr->pixels + sy * w;
+            for (int sx = 0; sx < w; ++sx) {
+                const int px = startX + (flipX ? (w - 1 - sx) : sx);
+                if ((unsigned)px >= (unsigned)SCREEN_W) continue;
+                const int a = (((row[sx] >> 24) & 0xFF) * alpha) >> 8;
+                if (a > 0) blendPixel(px, py, tint, a);
+            }
         }
-        int frame = ((int)(animTime * 6.5f + cx * 0.04f)) & 1;
+    }
+
+    void drawMonsterSprite(int cx, int cy, int type, float animTime, bool hitFlash, bool isElite, bool frozen = false, bool flipX = false) {
+        const int frame = ((int)(animTime * 6.5f + cx * 0.04f)) & 1;
+        const BakedSprite* spr = MONSTER_SPRITES[type % 11][frame];
+        if (isElite) {
+            // Elite / extra mobs: a breathing amber halo under the silhouette plus a light gold
+            // wash on the body, so they read as "different" at a glance in a full-screen swarm.
+            const float pulse = 0.5f + 0.5f * sinf(animTime * 4.2f);
+            addGlow(cx, cy, 28 + (int)(6.0f * pulse), 0xFFFFA83A, 96);
+            drawCircleRing(cx, cy + 14, 18, 2, 0xFFFFC028, 190, true);
+        }
         int fx = 0, fy = 0;
-        bakedSpriteVisualOffset(MONSTER_SPRITES[type % 11][frame], fx, fy);
+        bakedSpriteVisualOffset(spr, fx, fy);
         drawShadow(cx, cy + 16 - fy, 12, 5);
-        drawBakedSpriteCentred(MONSTER_SPRITES[type % 11][frame], cx, cy, flipX, hitFlash, frozen, 255);
+        drawBakedSpriteCentred(spr, cx, cy, flipX, hitFlash, frozen, 255);
+        if (isElite && !hitFlash) {
+            const float pulse = 0.5f + 0.5f * sinf(animTime * 4.2f);
+            drawBakedSpriteWash(spr, cx, cy, flipX, 0xFFFFC64A, 78 + (int)(26.0f * pulse));
+        }
     }
 
     void drawBossSprite(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged = false) {
