@@ -142,7 +142,7 @@ static constexpr int MONSTER_TYPE_COUNT = 11;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 74;
+static constexpr int PATCH_NOTES_COUNT = 75;
 
 struct ItemDef {
     int id;
@@ -465,6 +465,8 @@ struct Game {
     int selectedStoryMission = 0;
     int storyMissionCursor = 0;
     int campaignActView = 1;   // which act the mission list is showing
+    int helpPage = 0;          // 0 = арсенал, 1 = словарь терминов
+    int glossaryScroll = 0;
 
     bool storyMissionBossSpawned = false;
     bool missionCompletePending = false;
@@ -634,6 +636,11 @@ struct Game {
     float bossWarningTimer = 0.0f;
     std::string bossWarningName;
     float bossPhaseEventTimer = 0.0f;
+    // After a boss appears (or changes phase) the arena is cleared and mobs come back
+    // five times as dense for one second: the boss entrance must read as a beat change.
+    float bossRushTimer = 0.0f;
+    static constexpr float BOSS_RUSH_SECONDS = 1.0f;
+    static constexpr float BOSS_RUSH_MULTIPLIER = 5.0f;
     int bossPhaseEventType = 0;
     int bossPhaseEventNumber = 1;
     float screenShake = 0.0f;
@@ -1600,6 +1607,7 @@ struct Game {
         static const char* bossShort[4] = {"МОРГАР", "МАЛАКОР", "КАРДИНАЛ", "АЗАРОТ"};
         announce(GMSG_BOSS_PHASE, std::string(bossShort[m.bossType & 3]) + " • ФАЗА " + phaseRoman[m.bossPhase - 1] + " — " + phaseTitle[m.bossPhase - 1], 3.2f);
         bossPhaseEventTimer = 3.2f;
+        clearArenaForBoss();
         bossPhaseEventType = m.bossType & 3;
         bossPhaseEventNumber = m.bossPhase;
         sound.play(SFX_BOSS_PHASE, 0.18f);
@@ -1896,6 +1904,7 @@ struct Game {
         nextBossIndex = 0;
         bossWarningTimer = 0.0f;
         bossPhaseEventTimer = 0.0f; bossPhaseEventType = 0; bossPhaseEventNumber = 1;
+        bossRushTimer = 0.0f;
         screenShake = 0.0f;
 
         // Three destructible resonators seed reachable long-range objectives beyond the starting camera.
@@ -2207,6 +2216,23 @@ struct Game {
         addShockwave(boss.x, boss.y, 74.0f, color, 0.42f);
         spawnParticles(boss.x, boss.y, 30, color, 160.0f, 4, true);
         boss.facing = boss.x < playerX ? 1 : -1;
+    }
+
+    // A boss entrance resets the arena: every mob on screen dies at once, and the boss
+    // rush window that follows repopulates it five times as fast.
+    void clearArenaForBoss() {
+        int cleared = 0;
+        for (Monster& mob : monsters) {
+            if (mob.isBoss || mob.isResonator || mob.hp <= 0.0f) continue;
+            spawnParticles(mob.x, mob.y, 10, 0xFFE8DCFF, 150.0f, 3, false);
+            mob.hp = 0.0f;
+            ++cleared;
+        }
+        if (cleared > 0) {
+            addShockwave(playerX, playerY, 420.0f, 0xFFFFE9BC, 0.75f);
+            sound.play(SFX_TIER_UP, 0.10f);
+        }
+        bossRushTimer = BOSS_RUSH_SECONDS;
     }
 
     void spawnMonster(int type, bool isElite, bool isBoss, int bossType = 0) {
@@ -3691,6 +3717,7 @@ struct Game {
         if (screenShake > 0.0f) screenShake = std::max(0.0f, screenShake - dt);
         if (bossWarningTimer > 0.0f) bossWarningTimer = std::max(0.0f, bossWarningTimer - dt);
         if (bossPhaseEventTimer > 0.0f) bossPhaseEventTimer = std::max(0.0f, bossPhaseEventTimer - dt);
+        if (bossRushTimer > 0.0f) bossRushTimer = std::max(0.0f, bossRushTimer - dt);
         if (playerHurtTimer > 0.0f) playerHurtTimer = std::max(0.0f, playerHurtTimer - dt);
         if (playerSlowTimer > 0.0f) playerSlowTimer = std::max(0.0f, playerSlowTimer - dt);
         if (dashCooldown > 0.0f) dashCooldown = std::max(0.0f, dashCooldown - dt);
@@ -3783,7 +3810,9 @@ struct Game {
 
         // Spawning Waves & Bosses
         float baseSpawnRate = 3.2f + std::min(8.5f, runTime / 35.0f) * 0.75f + std::max(0.0f, runTime - 210.0f) / 120.0f;
-        float spawnRate = std::min((baseSpawnRate + getResonatorSpawnRateBonus()) * balance.spawnMultiplier * getSublevelSpawnMultiplier() * getEnemyOathSpawnMultiplier() * campaignDifficultyMultiplier(), 16.0f);
+        const bool bossRush = bossRushTimer > 0.0f;
+        const float rushMultiplier = bossRush ? BOSS_RUSH_MULTIPLIER : 1.0f;
+        float spawnRate = std::min((baseSpawnRate + getResonatorSpawnRateBonus()) * balance.spawnMultiplier * getSublevelSpawnMultiplier() * getEnemyOathSpawnMultiplier() * campaignDifficultyMultiplier() * rushMultiplier, 16.0f * rushMultiplier);
         spawnAccumulator += spawnRate * dt;
         while (spawnAccumulator >= 1.0f) {
             spawnAccumulator -= 1.0f;
@@ -3806,6 +3835,7 @@ struct Game {
             if (!storyMissionBossSpawned && runTime >= mission.bossTimeSeconds && bossSlotAvailable && isCampaignMissionUnlocked(selectedStoryMission)) {
                 storyMissionBossSpawned = true;
                 if (mission.finalTrio) {
+                    clearArenaForBoss();
                     bossTrioStarted = true;
                     bossTrioSpawned = 0;
                     trioBossesDefeated = 0;
@@ -3827,6 +3857,7 @@ struct Game {
                     bossWarningTimer = 6.0f;
                     announce(GMSG_TRIO_INTRO, "ТРИ ЗАПИСИ ЗАЩИЩАЮТ СЕРДЦЕ АРХИВА. ЭТО НЕ ВОСКРЕСШИЕ СТРАЖИ.", 7.0f);
                 } else {
+                    clearArenaForBoss();
                     spawnMonster(mission.bossType, false, true, mission.bossType);
                     if (monsters.back().isBoss) {
                         Monster& boss = monsters.back();
@@ -3849,6 +3880,7 @@ struct Game {
                 const int bType = nextBossIndex % 4;
                 ++nextBossIndex;
                 bossDeferredTimer = 0.0f;
+                clearArenaForBoss();
                 spawnMonster(bType, false, true, bType);
                 const Monster& arrivingBoss = monsters.back();
                 const uint32_t arrivalColor = bType == 0 ? 0xFFFFC848 : (bType == 1 ? 0xFF80FF50 : (bType == 2 ? 0xFFFF4068 : 0xFFFF7620));
@@ -7308,7 +7340,7 @@ struct Game {
         r.drawRoundedRect(panelX, panelY, panelW, panelH, 16, 0xFFFFD058, 3);
         const std::string chronicleTitle = std::string("ХРОНИКА ОБНОВЛЕНИЙ • 2.2–") + GAME_VERSION;
         r.drawTextCentered(FONT_LARGE, SCREEN_W / 2, panelY + 20, chronicleTitle.c_str(), 0xFFFFE068);
-        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ", "2.9.72 • МУЗЫКА ИЗ audio/", "2.9.73 • КУЗНИЦА И ТИХИЙ УРОВЕНЬ", "2.9.74 • ГОЛОС, F3 И ЧИСТЫЙ МИР", "2.9.75 • ГОЛОС ИЗ ФАЙЛОВ", "2.9.76 • КАМПАНИЯ: 28 ДЕЛ, 5 АКТОВ"};
+        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ", "2.9.72 • МУЗЫКА ИЗ audio/", "2.9.73 • КУЗНИЦА И ТИХИЙ УРОВЕНЬ", "2.9.74 • ГОЛОС, F3 И ЧИСТЫЙ МИР", "2.9.75 • ГОЛОС ИЗ ФАЙЛОВ", "2.9.76 • КАМПАНИЯ: 28 ДЕЛ, 5 АКТОВ", "2.9.77 • СЛОВАРЬ И РЫВОК ПОСЛЕ БОССА"};
         static const char* notes[PATCH_NOTES_COUNT] = {
             "Основа игры: пять героев, автоматическое оружие и выбор прокачки во время боя.\nПервые руины, самоцветы опыта, сундуки и сохранение между забегами.",
             "Кампания обрела четыре печати и охоту на боссов.\nПобеды открывают героев, главы и страницы Зала славы.",
@@ -8219,7 +8251,95 @@ struct Game {
         }
     }
 
+    // Plain-language glossary. The game throws a lot of its own vocabulary at the player
+    // ("тихая охота", "прорыв", "резонатор", "печать"), so every term gets a short,
+    // honest explanation here instead of being explained by trial and death.
+    struct GlossaryEntry { const char* term; const char* text; uint32_t color; };
+    static int glossaryRowCount() { return 12; }
+    static const GlossaryEntry& glossaryRow(int i) {
+        static const GlossaryEntry rows[12] = {
+            {"ТИХАЯ ОХОТА",
+             "Событие мира. Стая сбегается по твоему следу: врагов на карте становится заметно больше. "
+             "Убей всех, кого она привела, и подбери 6 монет, которые стая оставила на земле.", 0xFFFFC848},
+            {"ПРОРЫВ",
+             "Раз в 7–15 уровней прокачка замирает и на тебя идёт особая орда. Нужно продержаться 18 секунд "
+             "и не пропустить удар: ранний удар считается провалом. Пережил — получаешь новый тир сборки.", 0xFFFF7088},
+            {"ТИР СБОРКИ",
+             "Общая мощь сборки, I–V. Растёт от новых предметов и прорывов; открывает более сильные версии оружия "
+             "и держит рост характеристик в узде.", 0xFF80E58A},
+            {"РЕЗОНАТОР",
+             "Структура Архива на арене. Пока она цела, враги появляются чаще и подходят плотнее. "
+             "Разбей резонатор — и спавн просядет.", 0xFF5BD8EE},
+            {"ПЕЧАТЬ",
+             "Решение, которое город принял в ночь катастрофы и с тех пор не отменял: Долг, Голос, Имя, "
+             "Свидетельство. Ломается только в финале дела — боссом.", 0xFFE9A0E0},
+            {"СИМБИОЗ",
+             "Эволюция оружия на максимальном уровне прокачки. Меняет механику предмета, "
+             "а не просто добавляет цифры урона.", 0xFFC18AFF},
+            {"МАТРЁШКА",
+             "Враг, из которого при смерти вылезают другие враги. Не оставляй её за спиной "
+             "и не трать на неё одиночный удар в самом начале боя.", 0xFFFF8C43},
+            {"ЭХО-ПОРТАЛ",
+             "Выход с поля боя. Забирает добычу и найденные улики, но закрывает текущее дело без босса: "
+             "печати и прогресс кампании остаются нетронутыми.", 0xFF64D9F4},
+            {"КУЗНИЦА ДУШ",
+             "Мета-прогресс. Сюда идёт золото из всех забегов; здесь покупаются постоянные улучшения, "
+             "которые работают в каждом новом деле.", 0xFFFF9C56},
+            {"АРХИВ",
+             "Машина, построенная, чтобы никто не исчезал. Записывает последние минуты умирающих и хранит "
+             "их копии. Копия отвечает и помнит — и не является человеком.", 0xFFA6C4FF},
+            {"СВИДЕТЕЛЬ",
+             "Ты. Полного имени в реестре нет, поэтому Архив не знает, кому отвечает, — и ты можешь "
+             "задавать вопросы, на которые машина не отвечает.", 0xFFFFE078},
+            {"ДЕЛО И ВЕТКИ",
+             "Кампания — 28 дел в пяти актах. Дело открывается, когда закрыто предыдущее; на ветках "
+             "нужны оба следа, потому что Архив подшивает дело только при двойном подтверждении.", 0xFF9FE5A4},
+        };
+        return rows[std::max(0, std::min(11, i))];
+    }
+
+    void renderGlossary(Renderer& r) {
+        const bool portraitGloss = SCREEN_W < SCREEN_H;
+        const bool compactGloss = SCREEN_W < 1100;
+        renderSubmenuFrame(r, "СЛОВАРЬ ТЕРМИНОВ",
+                           "Что значит «тихая охота», «прорыв», «печать» и всё остальное", 0xFF9FE5A4, 68);
+        const int pad = compactGloss ? 20 : 42, w = SCREEN_W - 2 * pad;
+        const int rows = portraitGloss ? 5 : 4;
+        const int rowH = portraitGloss ? 116 : 104, rowStep = rowH + 8;
+        const int total = glossaryRowCount();
+        const int maxScroll = std::max(0, total - rows);
+        glossaryScroll = std::max(0, std::min(maxScroll, glossaryScroll));
+        const int top = 84;
+        if (mouseWheelDelta != 0) {
+            const int step = mouseWheelDelta < 0 ? 1 : -1;
+            glossaryScroll = std::max(0, std::min(maxScroll, glossaryScroll + step));
+        }
+        for (int i = 0; i < rows; ++i) {
+            const int index = glossaryScroll + i;
+            if (index >= total) break;
+            const GlossaryEntry& e = glossaryRow(index);
+            const int y = top + i * rowStep;
+            r.fillRoundedRect(pad, y, w, rowH, 9, 0xFF18122E, 248);
+            r.drawRoundedRect(pad, y, w, rowH, 9, e.color, 2, 220);
+            r.fillRoundedRect(pad + 8, y + 10, 4, rowH - 20, 2, e.color);
+            r.drawText(compactGloss ? FONT_SMALL : FONT_MED, pad + 22, y + 8, e.term, e.color);
+            r.drawTextWrapped(FONT_SMALL, pad + 22, y + (compactGloss ? 30 : 34), w - 44, e.text, 0xFFDDD5EA, false);
+        }
+        char range[64];
+        snprintf(range, sizeof(range), "ТЕРМИНЫ %d–%d ИЗ %d", glossaryScroll + 1,
+                 std::min(total, glossaryScroll + rows), total);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, top + rows * rowStep + 6, range, 0xFFBEB3D4);
+        const int bw = std::min(320, SCREEN_W - 48), bh = 48;
+        const int bx = (SCREEN_W - bw) / 2, by = SCREEN_H - 56;
+        const bool hov = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
+        r.fillRoundedRect(bx, by, bw, bh, 10, hov ? 0xFF483480 : 0xFF281C48);
+        r.drawRoundedRect(bx, by, bw, bh, 10, 0xFFFFD858, 2);
+        r.drawTextCentered(FONT_MED, SCREEN_W / 2, by + 12, "К АРСЕНАЛУ [ESC]", 0xFFFFFFFF);
+        if (mouseClicked && hov) { sound.play(SFX_CLICK, 0.02f); helpPage = 0; }
+    }
+
     void renderHelpMenu(Renderer& r) {
+        if (helpPage == 1) { renderGlossary(r); return; }
         const bool portraitHelp = SCREEN_W < SCREEN_H;
         const bool compactHelp = SCREEN_W < 1100;
         renderSubmenuFrame(r, "АРСЕНАЛ ОРУЖИЯ И УПРАВЛЕНИЕ",
@@ -8305,6 +8425,14 @@ struct Game {
             sound.play(SFX_CLICK, 0.02f);
             state = STATE_MENU;
         }
+        // Glossary lives next to the arsenal: the same screen explains the vocabulary.
+        const int gw = std::min(300, SCREEN_W - 48), gh = 48;
+        const int gx = SCREEN_W - gw - (SCREEN_W - 48 - gw > 40 ? 40 : 12), gy = by;
+        const bool ghov = mouseX >= gx && mouseX <= gx + gw && mouseY >= gy && mouseY <= gy + gh;
+        r.fillRoundedRect(gx, gy, gw, gh, 10, ghov ? 0xFF2F5A46 : 0xFF1D3A30);
+        r.drawRoundedRect(gx, gy, gw, gh, 10, 0xFF9FE5A4, 2);
+        r.drawTextCentered(FONT_MED, gx + gw / 2, gy + 12, "СЛОВАРЬ [G]", 0xFFFFFFFF);
+        if (mouseClicked && ghov) { sound.play(SFX_CLICK, 0.02f); helpPage = 1; glossaryScroll = 0; }
     }
 
     void onKeyPress(int key) {
@@ -8441,6 +8569,16 @@ struct Game {
         } else if (state == STATE_SHOP) {
             if (key == 27) state = STATE_MENU;
         } else if (state == STATE_HELP) {
+            if (helpPage == 1) {
+                const int maxScroll = std::max(0, glossaryRowCount() - (SCREEN_W < SCREEN_H ? 5 : 4));
+                if (key == 27 || key == 'G' || key == 'g') { helpPage = 0; }
+                else if (key == 38 || key == 'W' || key == 'w') glossaryScroll = std::max(0, glossaryScroll - 1);
+                else if (key == 40 || key == 'S' || key == 's') glossaryScroll = std::min(maxScroll, glossaryScroll + 1);
+                else if (key == 33) glossaryScroll = std::max(0, glossaryScroll - 4);
+                else if (key == 34) glossaryScroll = std::min(maxScroll, glossaryScroll + 4);
+                return;
+            }
+            if (key == 'G' || key == 'g') { helpPage = 1; glossaryScroll = 0; return; }
             const int maxScroll = std::max(0, (ITEM_COUNT + 1) / 2 - 4);
             if (key == 27) state = STATE_MENU;
             else if (key == 38 || key == 'W' || key == 'w') arsenalScrollRow = std::max(0, arsenalScrollRow - 1);
