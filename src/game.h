@@ -142,7 +142,7 @@ static constexpr int MONSTER_TYPE_COUNT = 11;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 75;
+static constexpr int PATCH_NOTES_COUNT = 76;
 
 struct ItemDef {
     int id;
@@ -241,6 +241,7 @@ struct Monster {
     bool iceFractureArmed = false; // Item 35: only Frost Nova freezes can release one non-recursive shatter pulse.
     bool isTrioBoss = false;
     bool isMissionFinalBoss = false;
+    bool fromHunt = false;   // spawned by the quiet-hunt pack (the only pack that can be "cleared")
     int bossPhase = 1; // 1 hunt, 2 assault, 3 fury; determined by remaining health.
     float phaseInvulnTimer = 0.0f; // Brief phase-transition shield, prevents same-frame burst skips.
     int exposeHitStacks = 0; // Repeated hits build a target-specific weak-point mark (item 29).
@@ -597,6 +598,14 @@ struct Game {
     float measuredKillsPerSecond = 0.0f;
     float lowActionTimer = 0.0f;
     float eventCooldown = 35.0f;
+    // Quiet hunt ("тихая охота") is an *opportunity*, not a wall: a finite pack walks the
+    // trail, drops coins as it dies, and pays a bounty if the whole pack is cleared.
+    // The breakthrough is the wall: timed, unavoidable and it blocks progression.
+    bool huntActive = false;
+    int huntPackTotal = 0;
+    int huntPackRemaining = 0;
+    float huntTimer = 0.0f;
+    int huntCoinsDropped = 0;
     int pendingStoryChapter = -1;
     int cutsceneId = 0;
     float cutsceneTimer = 0.0f;
@@ -1890,6 +1899,7 @@ struct Game {
         smartSpawnChance[0] = smartSpawnChance[1] = smartSpawnChance[2] = 0.01f;
         smartStrengthMultiplier[0] = smartStrengthMultiplier[1] = smartStrengthMultiplier[2] = 1.0f;
         pendingResonatorBurst = 0; pendingMatryoshkaSplits.clear(); eventCooldown = 35.0f;
+        huntActive = false; huntPackTotal = huntPackRemaining = 0; huntTimer = 0.0f; huntCoinsDropped = 0;
         measuredKillsPerSecond = 0.0f; lowActionTimer = 0.0f; killWindowTimer = 0.0f;
         particles.clear();
         floatTexts.clear();
@@ -2448,19 +2458,50 @@ struct Game {
     }
 
     void triggerHuntEvent() {
-        const int before = countActiveEnemies();
-        for (int i = 0; i < 18; ++i) spawnMonster(i % 6 == 0 ? 8 : (i % 3 == 0 ? 1 : 0), i % 7 == 0, false);
-        for (int i = 0; i < 6; ++i) {
-            const float a = i * 1.0471976f;
-            Pickup cache{}; cache.x = playerX + cosf(a) * 110.0f; cache.y = playerY + sinf(a) * 110.0f;
-            cache.type = 3; cache.value = 14; cache.bobTime = (rand() % 100) * 0.05f; pickups.push_back(cache);
+        huntActive = true;
+        huntPackTotal = 20;
+        huntPackRemaining = 20;
+        huntTimer = 30.0f;
+        huntCoinsDropped = 0;
+        for (int i = 0; i < huntPackTotal; ++i) {
+            const size_t before = monsters.size();
+            spawnMonster(i % 6 == 0 ? 8 : (i % 3 == 0 ? 1 : 0), i % 7 == 0, false);
+            if (monsters.size() > before) monsters.back().fromHunt = true;
         }
-        char eventText[160]; // Cyrillic status strings are multi-byte UTF-8.
-        snprintf(eventText, sizeof(eventText), "ТИХАЯ ОХОТА: СТАЯ ВЫЗВАНА • ВРАГОВ БЫЛО %d", before);
-        announce(GMSG_WORLD_EVENT, eventText, 3.4f);
-        difficultyBanner = "ПОСЛЕ БОЯ ПОДБЕРИ 6 МОНЕТ, КОТОРЫЕ ОСТАВИЛА СТАЯ"; difficultyBannerTimer = 3.2f;
-        speakOnly(GMSG_COIN_HINT, difficultyBanner);
-        eventCooldown = 72.0f; lowActionTimer = 0.0f;
+        announce(GMSG_WORLD_EVENT, "ТИХАЯ ОХОТА: СТАЯ ИДЁТ ПО СЛЕДУ", 3.4f);
+        difficultyBanner = "СТАЯ НА СЛЕДУ: ДОБЕЙ 20 — ЗАБЕРЁШЬ НАГРАДУ";
+        difficultyBannerTimer = 4.0f;
+        eventCooldown = 72.0f;
+        lowActionTimer = 0.0f;
+    }
+
+    // Called from the kill path for pack members only.
+    void onHuntPackKill(float x, float y) {
+        if (!huntActive) return;
+        --huntPackRemaining;
+        if (huntPackRemaining % 3 == 0 || huntPackRemaining <= 2) {
+            Pickup cache{};
+            cache.x = x; cache.y = y;
+            cache.type = 3; cache.value = 18; cache.bobTime = (rand() % 100) * 0.05f;
+            pickups.push_back(cache);
+            ++huntCoinsDropped;
+        }
+        if (huntPackRemaining <= 0) {
+            huntActive = false;
+            const int bounty = 40 + (int)runTime / 10;
+            save.gold += bounty; runGold += bounty;
+            addFloatingText(playerX, playerY - 60.0f, "СТАЯ УНИЧТОЖЕНА", 0xFFFFD874, true);
+            spawnParticles(playerX, playerY, 30, 0xFFFFD874, 180.0f, 4, true);
+            announce(GMSG_WORLD_EVENT, "СТАЯ УНИЧТОЖЕНА: НАГРАДА ЗАБРАНА", 3.0f);
+        }
+    }
+
+    void failHuntEvent() {
+        huntActive = false;
+        for (Monster& mob : monsters) if (mob.fromHunt && mob.hp > 0.0f) mob.fromHunt = false;
+        announce(GMSG_WORLD_EVENT, "СТАЯ УШЛА ПО СЛЕДУ: НАГРАДЫ НЕТ", 3.0f);
+        difficultyBanner = "СТАЯ УШЛА — В СЛЕДУЮЩИЙ РАЗ ДОБЕЙ ВСЕХ";
+        difficultyBannerTimer = 3.5f;
     }
 
     void generateUpgradeChoices() {
@@ -3127,6 +3168,7 @@ struct Game {
                 addShockwave(m.x, m.y, 64.0f, 0xFFFFD77A, 0.42f);
             }
             kills++;
+            if (m.fromHunt) onHuntPackKill(m.x, m.y);
             if (itemLevels[21] > 0) {
                 if (++dashRuneKillCounter >= getDashRefreshKillsRequired()) {
                     dashRuneKillCounter = 0;
@@ -3684,7 +3726,13 @@ struct Game {
             if (measuredKillsPerSecond < 10.0f) lowActionTimer += 5.0f;
             else lowActionTimer = 0.0f;
         }
-        if (lowActionTimer >= 8.0f && eventCooldown <= 0.0f && countActiveEnemies() < 95 &&
+        if (huntActive) {
+            huntTimer = std::max(0.0f, huntTimer - dt);
+            if (huntTimer <= 0.0f) failHuntEvent();
+        }
+        // The hunt never overlaps the breakthrough: one is an opportunity, the other is a wall.
+        if (!huntActive && !breakthroughActive && lowActionTimer >= 8.0f && eventCooldown <= 0.0f &&
+            countActiveEnemies() < 95 &&
             (options.hardModeEnabled || playerHp / std::max(1.0f, playerMaxHp) > 0.34f)) triggerHuntEvent();
 
         if (breakthroughActive) {
@@ -5637,6 +5685,16 @@ struct Game {
         r.fillRoundedRect(ux, uy, (int)(uw * std::min(1.0f, superCharge / 100.0f)), uh, 5, superCharge >= 100.0f ? 0xFFFFB820 : 0xFF8D45C8, 245);
         r.drawRoundedRect(ux, uy, uw, uh, 5, superCharge >= 100.0f ? 0xFFFFE068 : 0xFF786090, 1);
         drawStoryToastPanel(r);
+        // Quiet hunt counter: the pack is finite, so the player can decide to finish it.
+        if (huntActive) {
+            char huntText[96];
+            snprintf(huntText, sizeof(huntText), "ТИХАЯ ОХОТА: ОСТАЛОСЬ %d ИЗ %d  •  %.0f с",
+                     std::max(0, huntPackRemaining), huntPackTotal, ceilf(huntTimer));
+            const int chipW = std::min(520, SCREEN_W - 40);
+            const int chipX = (SCREEN_W - chipW) / 2;
+            drawUIFrame(r, chipX, 248, chipW, 32, 0xFFFFC848, false, 220);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 254, huntText, 0xFFFFE6A8);
+        }
         if (difficultyBannerTimer > 0.0f) {
             const int alpha = std::min(235, (int)(difficultyBannerTimer * 100.0f));
             const uint32_t color = getDifficultySegment() == 1 ? 0xFFFF6A48 : 0xFF82E8FF;
@@ -7340,7 +7398,7 @@ struct Game {
         r.drawRoundedRect(panelX, panelY, panelW, panelH, 16, 0xFFFFD058, 3);
         const std::string chronicleTitle = std::string("ХРОНИКА ОБНОВЛЕНИЙ • 2.2–") + GAME_VERSION;
         r.drawTextCentered(FONT_LARGE, SCREEN_W / 2, panelY + 20, chronicleTitle.c_str(), 0xFFFFE068);
-        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ", "2.9.72 • МУЗЫКА ИЗ audio/", "2.9.73 • КУЗНИЦА И ТИХИЙ УРОВЕНЬ", "2.9.74 • ГОЛОС, F3 И ЧИСТЫЙ МИР", "2.9.75 • ГОЛОС ИЗ ФАЙЛОВ", "2.9.76 • КАМПАНИЯ: 28 ДЕЛ, 5 АКТОВ", "2.9.77 • СЛОВАРЬ И РЫВОК ПОСЛЕ БОССА"};
+        static const char* versions[PATCH_NOTES_COUNT] = {"2.2 • ПЕПЕЛЬНЫЕ РУИНЫ", "2.3 • ПЕЧАТИ И ОХОТА", "2.4 • КУЗНИЦА ДУШ", "2.5 • РЫВОК И СИМБИОЗЫ", "2.6 • УМНЫЕ ВРАГИ И ЛАБОРАТОРИЯ", "2.7 • ПРОРЫВ И СОВЕТНИК", "2.8 • ПОРТАЛЫ И БЕСКОНЕЧНЫЙ РЕЖИМ", "2.8.1 • МУЗЫКА И ОТКЛИКИ", "2.8.2 • ТИХОЕ МЕНЮ И МЯГЧЕ ЗВУК", "2.8.3 • СЮЖЕТ И БОССЫ", "2.8.4 • ПОЛИРОВКА И ЧЕСТНЫЙ АРТ", "2.8.5 • УМНЫЕ СОВЕТЫ ИИ", "2.9.0 • ПОСЛЕДНЯЯ ЗАПИСЬ", "2.9.1 • ЗВУКОВОЙ МИКС", "2.9.2 • ГОТИЧЕСКАЯ МУЗЫКА", "2.9.3 • РЕЗОНАТОРЫ И МАТРЁШКИ", "2.9.4 • НОВАЯ ПАРТИТУРА", "2.9.5 • ДЕСЯТЬ МУЗЫКАЛЬНЫХ ВАРИАНТОВ", "2.9.6 • ДЛИННАЯ ФОРМА МУЗЫКИ", "2.9.7 • ДЕСЯТЬ РАЗНЫХ МУЗЫКАЛЬНЫХ СТИЛЕЙ", "2.9.8 • НОВЫЕ СОЧИНЁННЫЕ МЕЛОДИИ", "2.9.9 • ОБНОВЛЕНИЕ ПИКСЕЛЬНЫХ СПРАЙТОВ", "2.9.10 • ПРЕДМЕТЫ И МИР В ПИКСЕЛЬНОМ СТИЛЕ", "2.9.11 • ЖИВЫЕ ПАРТИКЛЫ", "2.9.12 • ЧИСТЫЙ ИГРОВОЙ ИНТЕРФЕЙС", "2.9.28 • АРЕНА ПРОСЛУШИВАНИЯ БОССА", "2.9.29 • ПЕРЕКЛЮЧЕНИЕ БЕЗ ОЖИДАНИЯ ТАКТА", "2.9.30 • НОВАЯ МУЗЫКА БОССА И ПРОКАЧКИ", "2.9.31 • ВОЗВРАТ ПРИМЕРА МУЗЫКИ УЛУЧШЕНИЙ", "2.9.32 • МГНОВЕННАЯ МУЗЫКА И ТЕМП ПО ТОЛПЕ", "2.9.33 • БИЛДЫ, СПАВНЫ И ЛЕЧЕНИЕ", "2.9.34 • ТИРЫ, РЕЗОНАТОРЫ И ФИНАЛ", "2.9.35 • РЕЗОНАТОРЫ, ОПЫТ И ОПИСАНИЯ", "2.9.36 • МУЗЫКА, ОПЫТ И НОВЫЕ РЕЛИКВИИ", "2.9.37 • ЧЁТКАЯ ГАЛОЧКА", "2.9.38 • ТЕМП XP И ЗВУК ЗАМОРОЗКИ", "2.9.39 • ДАЛЬНИЕ РЕЗОНАТОРЫ И ТИРЫ", "2.9.40 • АКТИВКИ И ДОГОВОРЫ", "2.9.41 • ВЫБОР МИССИЙ И ТАЙМЕР БОССА", "2.9.42 • УСКОРЕНИЕ РАСТЕРИЗАЦИИ", "2.9.43 • ТЕМП, МИССИИ И РЕЗОНАТОРЫ", "2.9.44 • ДОСЬЕ И ПРОГРЕСС МИССИЙ", "2.9.45 • СНАЧАЛА РЕЖИМ, ПОТОМ ГЕРОЙ", "2.9.46 • ТЕМП И ФАЗЫ БОССОВ", "2.9.47 • ФОКУС ВЫБОРА РЕЖИМА", "2.9.48 • ЗВУК СНАРЯДОВ, КУЗНИЦА ДО 50", "2.9.49 • РАДИАЛЬНЫЕ МЕДАЛЬОНЫ", "2.9.50 • КОЛЕСО ИЗ СЕКТОРОВ", "2.9.51 • ВСЕ РАЗДЕЛЫ В РАДИАЛЬНОМ МЕНЮ", "2.9.52 • КОМПАКТНАЯ ШАПКА И ПОДТВЕРЖДЕНИЕ ВЫХОДА", "2.9.53 • ПОЛНАЯ АДАПТАЦИЯ LANDSCAPE И PORTRAIT", "2.9.54 • ЕДИНЫЙ СТИЛЬ ВСЕХ МЕНЮ", "2.9.55 • HUD, ФАЗЫ И УДАРЫ ПО ЗЕМЛЕ", "2.9.56 • ЗЕРКАЛО УКЛОНЕНИЯ", "2.9.57 • РЕЛИКВИИ, РЕЗОНАТОРЫ И ФАЗЫ БОССОВ", "2.9.58 • АВТОСОРТИРОВКА АРСЕНАЛА", "2.9.59 • ПЕЧАТЬ РАЗОБЛАЧЕНИЯ", "2.9.60 • ЧАША ПЕРЕПОЛНЕНИЯ", "2.9.61 • ОСКОЛОК ПОСЛЕДНЕГО УДАРА", "2.9.62 • КЛЮЧ ПЕПЕЛЬНОГО РИТМА", "2.9.63 • ПРИЗМА ПЕРЕКРЁСТНОГО ОГНЯ", "2.9.64 • УГОЛЬНЫЙ ФИТИЛЬ", "2.9.65 • ОСКОЛОК ОТТЕПЕЛИ", "2.9.66 • ПЕЧАТЬ ОБРАТНОГО ТОКА", "2.9.67 • ЗНАК ПАЛАЧА", "2.9.68 • ПЕЧАТЬ ВОЗМЕЗДИЯ", "2.9.69 • РУНА СВИДЕТЕЛЯ", "2.9.70 • ТИРЫ СЮЖЕТА", "2.9.71 • СБОРКА БЕЗ РАСХОЖДЕНИЙ", "2.9.72 • МУЗЫКА ИЗ audio/", "2.9.73 • КУЗНИЦА И ТИХИЙ УРОВЕНЬ", "2.9.74 • ГОЛОС, F3 И ЧИСТЫЙ МИР", "2.9.75 • ГОЛОС ИЗ ФАЙЛОВ", "2.9.76 • КАМПАНИЯ: 28 ДЕЛ, 5 АКТОВ", "2.9.77 • СЛОВАРЬ И РЫВОК ПОСЛЕ БОССА", "2.9.78 • ТИХАЯ ОХОТА ОТДЕЛЬНО ОТ ПРОРЫВА"};
         static const char* notes[PATCH_NOTES_COUNT] = {
             "Основа игры: пять героев, автоматическое оружие и выбор прокачки во время боя.\nПервые руины, самоцветы опыта, сундуки и сохранение между забегами.",
             "Кампания обрела четыре печати и охоту на боссов.\nПобеды открывают героев, главы и страницы Зала славы.",
@@ -8259,11 +8317,13 @@ struct Game {
     static const GlossaryEntry& glossaryRow(int i) {
         static const GlossaryEntry rows[12] = {
             {"ТИХАЯ ОХОТА",
-             "Событие мира. Стая сбегается по твоему следу: врагов на карте становится заметно больше. "
-             "Убей всех, кого она привела, и подбери 6 монет, которые стая оставила на земле.", 0xFFFFC848},
+             "Возможность, а не стена. На след выходит конечная стая из 20 зверей: они оставляют монеты "
+             "по мере гибели, а за добитую стаю платят награду. Не успел за 30 секунд — стая уходит, "
+             "и ты теряешь только награду. Прогресс не блокирует, смертью не грозит.", 0xFFFFC848},
             {"ПРОРЫВ",
-             "Раз в 7–15 уровней прокачка замирает и на тебя идёт особая орда. Нужно продержаться 18 секунд "
-             "и не пропустить удар: ранний удар считается провалом. Пережил — получаешь новый тир сборки.", 0xFFFF7088},
+             "Стена, а не возможность. Каждые 7–15 уровней на 18 секунд приходит усиленная орда: отсидеться "
+             "нельзя — надо получить один удар, иначе она не отступит. После неё 18 секунд передышки, "
+             "а следующий прорыв будет злее. Обойти нельзя — в отличие от тихой охоты.", 0xFFFF7088},
             {"ТИР СБОРКИ",
              "Общая мощь сборки, I–V. Растёт от новых предметов и прорывов; открывает более сильные версии оружия "
              "и держит рост характеристик в узде.", 0xFF80E58A},
