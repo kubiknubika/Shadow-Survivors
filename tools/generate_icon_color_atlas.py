@@ -584,8 +584,39 @@ def glyph_sigil(c, item):
         c.disc(12 + k * 5, 56, 1.8, ACCENT)
 
 
+ICON_DIR = os.path.join(ROOT, "design", "ai_icons")
+
+
+def ai_art_path(item, key):
+    """ИИ-арт предмета, если он нарисован: design/ai_icons/icon_XX_<ключ>.png."""
+    for name in sorted(os.listdir(ICON_DIR)) if os.path.isdir(ICON_DIR) else []:
+        if name.startswith(f"icon_{item:02d}_") and name.endswith(".png"):
+            return os.path.join(ICON_DIR, name)
+    return None
+
+
+def bake_ai_art(path):
+    """PNG -> индексная картинка 64x64 (палитра + индексы) для встраивания в exe."""
+    from PIL import Image
+    image = Image.open(path).convert("RGB")
+    side = min(image.size)
+    left = (image.width - side) // 2
+    top = (image.height - side) // 2
+    image = image.crop((left, top, left + side, top + side)).resize((SIZE, SIZE), Image.LANCZOS)
+    quantized = image.quantize(colors=127, method=Image.MEDIANCUT)
+    palette = quantized.getpalette()[: 127 * 3]
+    pixels = list(quantized.get_flattened_data() if hasattr(quantized, "get_flattened_data") else quantized.getdata())
+    colors = []
+    for i in range(0, len(palette), 3):
+        colors.append(0xFF000000 | (palette[i] << 16) | (palette[i + 1] << 8) | palette[i + 2])
+    return [0x00000000] + colors, [int(p) + 1 for p in pixels]
+
+
 def build_icon(item):
     key = ORDER[item % 10]
+    path = ai_art_path(item, key)
+    if path:
+        return bake_ai_art(path)
     canvas = Canvas()
     frame(canvas, key)
     if item < 10:
@@ -607,11 +638,19 @@ def emit():
              "#endif", ""]
     tables = []
     for item in range(40):
-        canvas = build_icon(item)
+        built = build_icon(item)
         key = ORDER[item % 10]
-        pal = [0x00000000] + list(HUES[key])
-        pal = pal + [0] * (128 - len(pal))
-        used = sorted({px for row in canvas.px for px in row})
+        if isinstance(built, tuple):
+            pal, flat = built
+            pal = list(pal) + [0] * (128 - len(pal))
+            source = "ии-арт"
+        else:
+            canvas = built
+            pal = [0x00000000] + list(HUES[key])
+            pal = pal + [0] * (128 - len(pal))
+            flat = [px for row in canvas.px for px in row]
+            source = "код"
+        used = sorted(set(flat))
         name = f"SKILL_ICON_COLOR_{item:02d}"
         lines.append(f"static const uint32_t {name}_PALETTE[128] = {{")
         for i in range(0, 128, 8):
@@ -619,13 +658,12 @@ def emit():
         lines.append("};")
         lines.append("")
         lines.append(f"static const uint8_t {name}_PIXELS[4096] = {{")
-        flat = [px for row in canvas.px for px in row]
         for i in range(0, 4096, 32):
             lines.append("    " + ",".join(str(v) for v in flat[i:i + 32]) + ",")
         lines.append("};")
         lines.append("")
         tables.append(name)
-        print(f"  {item:02d}  {key:8s}  цветов: {len(used)}")
+        print(f"  {item:02d}  {key:8s}  {source:6s}  цветов: {len(used)}")
     lines.append("static const BakedIconImage SKILL_ICONS_COLOR[40] = {")
     for name in tables:
         lines.append(f"    {{64,64,{name}_PALETTE,{name}_PIXELS}},")

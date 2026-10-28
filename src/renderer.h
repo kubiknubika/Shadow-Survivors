@@ -687,45 +687,108 @@ struct Renderer {
         return profiles[std::max(0, std::min(11, type))];
     }
 
-    // The rat is drawn from parts rather than baked: a low body, a pointed snout, round
-    // ears and a whipping tail. At swarm density it reads as "many small things running",
-    // which is exactly what it is.
-    void drawRatSprite(int cx, int cy, float animTime, bool hitFlash, bool frozen) {
+    // The rat is rasterised in its own local space and then rotated onto the screen, so a
+    // swarm reads as animals running in a direction instead of a row of stickers. It is
+    // deliberately small: a rat the size of a dog stops being a rat.
+    void drawRatSprite(int cx, int cy, float angle, float animTime, bool hitFlash, bool frozen) {
         const uint32_t fur      = frozen ? 0xFF7FE4FF : (hitFlash ? 0xFFFFF0C0 : 0xFF8B7A6A);
-        const uint32_t furDark  = frozen ? 0xFF4FB8D8 : (hitFlash ? 0xFFFFD890 : 0xFF5E5148);
-        const uint32_t snout    = frozen ? 0xFFBFF2FF : 0xFFB8A896;
-        const uint32_t eye      = frozen ? 0xFFFFFFFF : 0xFFFF5A4A;
-        const int step = ((int)(animTime * 18.0f)) & 1;
-        // legs
-        const int legSwing = step ? 2 : -2;
-        for (int i = -1; i <= 1; i += 2) {
-            drawLine(cx + i * 4 + legSwing, cy + 6, cx + i * 6 - legSwing, cy + 11, furDark, 2, 235);
-            drawLine(cx + i * 8 - legSwing, cy + 6, cx + i * 9 + legSwing, cy + 11, furDark, 2, 200);
+        const uint32_t furDark  = frozen ? 0xFF4FB8D8 : (hitFlash ? 0xFFFFD890 : 0xFF5A4E46);
+        const uint32_t snoutCol = frozen ? 0xFFBFF2FF : 0xFFBFB0A0;
+        const uint32_t eyeCol   = frozen ? 0xFFFFFFFF : 0xFFFF5A4A;
+        const float sway = sinf(animTime * 15.0f);
+
+        const int LW = 40, LH = 24;
+        uint32_t local[LW * LH] = {};
+        auto plot = [&](int x, int y, uint32_t c) {
+            if (x < 0 || y < 0 || x >= LW || y >= LH) return;
+            const int idx = y * LW + x;
+            const int a = (int)((c >> 24) & 0xFF);
+            if (a >= 250) { local[idx] = c; return; }
+            if (a <= 0) return;
+            const uint32_t d = local[idx];
+            const int da = (int)((d >> 24) & 0xFF);
+            if (da >= 250) return;
+            local[idx] = c;
+        };
+        auto ellipse = [&](float ecx, float ecy, float rx, float ry, uint32_t c) {
+            for (int y = (int)(ecy - ry) - 1; y <= (int)(ecy + ry) + 1; ++y)
+                for (int x = (int)(ecx - rx) - 1; x <= (int)(ecx + rx) + 1; ++x) {
+                    const float nx = (x - ecx) / std::max(0.6f, rx);
+                    const float ny = (y - ecy) / std::max(0.6f, ry);
+                    if (nx * nx + ny * ny <= 1.02f) plot(x, y, c);
+                }
+        };
+        auto leg = [&](int x0, int y0, int x1, int y1) {
+            const int steps = std::max(2, std::abs(x1 - x0) + std::abs(y1 - y0));
+            for (int i = 0; i <= steps; ++i) {
+                const float t = (float)i / steps;
+                plot((int)std::lround(x0 + (x1 - x0) * t), (int)std::lround(y0 + (y1 - y0) * t), furDark);
+            }
+        };
+
+        const int cyLocal = LH / 2;
+        const int cxLocal = LW / 2 + 2; // the head sits right of centre: the rat faces +X
+        // tail: thin, whipping behind the body
+        for (int i = 0; i <= 12; ++i) {
+            const float t = i / 12.0f;
+            const int tx = (int)(cxLocal - 8 - t * 11);
+            const int ty = (int)(cyLocal - t * 3 + powf(t, 2.0f) * 6 + sway * t * 2.2f);
+            plot(tx, ty, furDark);
+            if (i > 8) plot(tx, ty - 1, furDark);
         }
-        // tail: a thin curve that lags behind the body
-        const int tailPhase = (int)(sinf(animTime * 9.0f) * 5.0f);
-        drawLine(cx - 12, cy + 1, cx - 20, cy - 4 + tailPhase, furDark, 2, 230);
-        drawLine(cx - 20, cy - 4 + tailPhase, cx - 27, cy - 1 + tailPhase, furDark, 1, 180);
-        // body
-        fillRoundedRect(cx - 13, cy - 5, 25, 12, 6, fur);
-        fillRoundedRect(cx - 13, cy + 2, 25, 4, 2, furDark, 190);
-        // head and snout
-        fillRoundedRect(cx + 7, cy - 7, 12, 11, 5, fur);
-        fillRoundedRect(cx + 15, cy - 3, 8, 6, 3, snout);
-        fillCircle(cx + 23, cy, 2, eye);
+        // legs, alternating in two pairs
+        leg(cxLocal - 5, cyLocal + 3, cxLocal - 6 - (int)(sway * 2), cyLocal + 7);
+        leg(cxLocal - 1, cyLocal + 3, cxLocal - 2 + (int)(sway * 2), cyLocal + 7);
+        leg(cxLocal + 4, cyLocal + 3, cxLocal + 3 + (int)(sway * 2), cyLocal + 7);
+        leg(cxLocal + 7, cyLocal + 3, cxLocal + 8 - (int)(sway * 2), cyLocal + 7);
+        // body, head, snout
+        ellipse(cxLocal - 3, cyLocal, 8.4f, 4.6f, fur);
+        ellipse(cxLocal - 3, cyLocal + 2, 8.0f, 2.6f, furDark);
+        ellipse(cxLocal + 6, cyLocal - 0.5f, 4.6f, 3.8f, fur);
+        ellipse(cxLocal + 10, cyLocal + 1.0f, 3.4f, 2.2f, snoutCol);
         // ears
-        fillCircle(cx + 8, cy - 8, 3, furDark);
-        fillCircle(cx + 13, cy - 8, 3, fur);
+        ellipse(cxLocal + 5, cyLocal - 4.5f, 2.1f, 2.1f, furDark);
+        ellipse(cxLocal + 8, cyLocal - 4.0f, 2.1f, 2.1f, fur);
         // eye
-        fillCircle(cx + 15, cy - 3, 2, eye);
+        ellipse(cxLocal + 8, cyLocal - 0.5f, 1.4f, 1.4f, eyeCol);
+        // A one-pixel dark edge keeps the silhouette readable at swarm size.
+        const uint32_t outline = frozen ? 0xFF1B4A5A : 0xFF241C18;
+        uint32_t ring[LW * LH];
+        memcpy(ring, local, sizeof(ring));
+        for (int y = 1; y < LH - 1; ++y)
+            for (int x = 1; x < LW - 1; ++x) {
+                if ((local[y * LW + x] >> 24) != 0) continue;
+                if ((local[y * LW + x - 1] >> 24) == 0 && (local[y * LW + x + 1] >> 24) == 0 &&
+                    (local[(y - 1) * LW + x] >> 24) == 0 && (local[(y + 1) * LW + x] >> 24) == 0) continue;
+                ring[y * LW + x] = outline;
+            }
+        memcpy(local, ring, sizeof(local));
+
+        // Rotate onto the screen. Scale keeps the rat small enough to read as a swarm.
+        const float scale = 0.80f;
+        const float c = cosf(angle), s = sinf(angle);
+        const int reach = (int)(LW * scale * 0.5f) + 3;
+        for (int dy = -reach; dy <= reach; ++dy) {
+            for (int dx = -reach; dx <= reach; ++dx) {
+                // inverse rotation
+                const float lx = (dx * c + dy * s) / scale;
+                const float ly = (-dx * s + dy * c) / scale;
+                const int ix = (int)std::lround(lx) + LW / 2;
+                const int iy = (int)std::lround(ly) + LH / 2;
+                if (ix < 0 || iy < 0 || ix >= LW || iy >= LH) continue;
+                const uint32_t col = local[iy * LW + ix];
+                if ((col >> 24) == 0) continue;
+                putPixel(cx + dx, cy + dy, col);
+            }
+        }
     }
 
-    void drawMonsterSprite(int cx, int cy, int type, float animTime, bool hitFlash, bool isElite, bool frozen = false, bool flipX = false) {
+    void drawMonsterSprite(int cx, int cy, int type, float animTime, bool hitFlash, bool isElite, bool frozen = false, bool flipX = false, float heading = 0.0f) {
         const MonsterMotion& motion = monsterMotion(type);
         if (type == 11) {
-            const int bob = (int)(sinf(animTime * 16.0f) * motion.bobAmp);
-            drawShadow(cx, cy + 10, motion.shadowW, motion.shadowH);
-            drawRatSprite(cx, cy + bob, animTime, hitFlash, frozen);
+            const int bob = (int)(sinf(animTime * 16.0f) * motion.bobAmp * 0.5f);
+            drawShadow(cx, cy + 8, motion.shadowW, motion.shadowH);
+            drawRatSprite(cx, cy + bob, heading, animTime, hitFlash, frozen);
             return;
         }
         const int frame = ((int)(animTime * motion.fps + cx * 0.04f)) & 1;
@@ -758,15 +821,285 @@ struct Renderer {
         }
     }
 
+    // Four guardians, four silhouettes. They are drawn from primitives instead of sharing
+    // one baked sprite family, because "same shape, different tint" reads as a placeholder.
+    // echo == true renders the trio copy: same shape, spectral and translucent.
+    void drawBossFigure(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged, bool echo, float s = 1.0f) {
+        const int id = bossType % 6;
+        const uint32_t flash = 0xFFFFF0C8;
+        const float breath = 0.5f + 0.5f * sinf(animTime * 2.2f);
+        const int lift = (int)(sinf(animTime * 1.6f) * 2.0f);
+        auto tint = [&](uint32_t c) { return hitFlash ? lerpColor(c, flash, 0.7f) : c; };
+        const int alpha = echo ? 205 : 255;
+
+        // Everything below is written in one canonical 1:1 size; the helpers rescale it so
+        // the same figure works in the arena and on the campaign dossier card.
+        const float sc = s;
+        auto PX = [&](int ax) { return cx + (int)lrintf((ax - cx) * sc); };
+        auto PY = [&](int ay) { return cy + (int)lrintf((ay - cy) * sc); };
+        auto SS = [&](int v) { return std::max(1, (int)lrintf(v * sc)); };
+        auto FR = [&](int x, int y, int w, int h, int rad, uint32_t c, int a = 255) {
+            fillRoundedRect(PX(x), PY(y), SS(w), SS(h), std::max(1, (int)lrintf(rad * sc)), c, a);
+        };
+        auto FC = [&](int x, int y, int r, uint32_t c, int a = 255) { fillCircle(PX(x), PY(y), SS(r), c, a); };
+        auto FX = [&](int x, int y, int w, int h, uint32_t c, int a = 255) { fillRect(PX(x), PY(y), SS(w), SS(h), c, a); };
+        auto DL = [&](int x0, int y0, int x1, int y1, uint32_t c, int th = 1, int a = 255, bool add = false) {
+            drawLine(PX(x0), PY(y0), PX(x1), PY(y1), std::max(1, (int)lrintf(th * sc)), c, a, add);
+        };
+        auto CR = [&](int x, int y, int r, int th, uint32_t c, int a = 255, bool add = false) {
+            drawCircleRing(PX(x), PY(y), SS(r), std::max(1, (int)lrintf(th * sc)), c, a, add);
+        };
+
+        if (id == 0) {
+            // МОРГАР — воротный страж: приземистый, широкий, щит-башня и алебарда с ключом.
+            const uint32_t steel = tint(0xFF7A6A48), steelLit = tint(0xFFB49B62), steelDark = tint(0xFF3E3423);
+            const uint32_t ember = tint(enraged ? 0xFFFF6A2A : 0xFFFFAE3C);
+            // halberd shaft behind the body
+            DL(cx + 30, cy - 62, cx + 22, cy + 46, steelDark, 5, alpha);
+            DL(cx + 30, cy - 62, cx + 22, cy + 46, steel, 3, alpha);
+            // key-head of the halberd
+            FR(cx + 20, cy - 74, 20, 7, 3, steel, alpha);
+            FR(cx + 30, cy - 78, 7, 14, 3, steelLit, alpha);
+            FR(cx + 26, cy - 64, 6, 6, 2, steel, alpha);
+            // legs
+            FR(cx - 26, cy + 18, 18, 34, 5, steelDark, alpha);
+            FR(cx + 6, cy + 18, 18, 34, 5, steelDark, alpha);
+            FR(cx - 28, cy + 46, 22, 8, 3, steel, alpha);
+            FR(cx + 4, cy + 46, 22, 8, 3, steel, alpha);
+            // torso
+            FR(cx - 24, cy - 24 - lift, 48, 50, 12, steel, alpha);
+            FR(cx - 18, cy - 18 - lift, 36, 22, 8, steelLit, alpha);
+            // chest ember slit
+            FR(cx - 9, cy - 6 - lift, 18, 7, 3, ember, alpha);
+            // pauldrons
+            FR(cx - 36, cy - 30 - lift, 18, 20, 8, steelLit, alpha);
+            FR(cx + 18, cy - 30 - lift, 18, 20, 8, steelLit, alpha);
+            // helmet with slit
+            FR(cx - 13, cy - 46 - lift, 26, 24, 8, steel, alpha);
+            FR(cx - 9, cy - 38 - lift, 18, 4, 2, ember, alpha);
+            // tower shield in front, slightly turned
+            FR(cx - 44, cy - 22 - lift, 30, 58, 8, steelDark, alpha);
+            FR(cx - 40, cy - 18 - lift, 22, 50, 6, steel, alpha);
+            FR(cx - 36, cy - 12 - lift, 14, 38, 5, steelLit, alpha);
+            FR(cx - 33, cy + 2 - lift, 8, 10, 3, ember, alpha);
+            // rivets
+            for (int i = 0; i < 3; ++i) FC(cx - 37, cy - 12 + i * 16 - lift, 2, steelDark, alpha);
+        } else if (id == 1) {
+            // МАЛАКОР — алхимик чумы: сгорбленная фигура в капюшоне, респиратор, колба
+            // в вытянутой руке. Тёмный балахон с яркой каймой, чтобы силуэт не тонул
+            // в собственной зелёной дымке.
+            const uint32_t robe = tint(0xFF35502A), robeLit = tint(0xFF6FA04A), robeDark = tint(0xFF141F0F);
+            const uint32_t glass = tint(0xFFA8F07C), plague = tint(enraged ? 0xFFC6FF52 : 0xFF7CE04E);
+            const int sway = (int)(sinf(animTime * 2.6f) * 3.0f);
+            // hunched robe: dark core, bright hem line
+            FR(cx - 26, cy - 10 - lift, 52, 56, 20, robeDark, alpha);
+            FR(cx - 22, cy - 6 - lift, 44, 48, 18, robe, alpha);
+            FR(cx - 22, cy + 30 - lift, 44, 6, 3, robeLit, alpha);
+            // ragged hem strips, clearly separated
+            for (int i = -2; i <= 2; ++i) {
+                const int hx = cx + i * 10 + sway;
+                DL(hx, cy + 32 - lift, hx + (int)(sinf(animTime * 3.1f + i) * 4), cy + 48 - lift, robeLit, 4, alpha);
+            }
+            // shoulders + hood, hood lined with the bright edge
+            FR(cx - 20, cy - 30 - lift, 40, 22, 10, robe, alpha);
+            FR(cx - 16, cy - 46 - lift, 32, 26, 12, robe, alpha);
+            FR(cx - 16, cy - 46 - lift, 32, 4, 2, robeLit, alpha);
+            // face cavity + respirator mask sitting inside the hood
+            FR(cx - 12, cy - 40 - lift, 24, 20, 9, 0xFF0B1206, alpha);
+            FR(cx - 10, cy - 34 - lift, 20, 12, 5, robeLit, alpha);
+            FC(cx - 13, cy - 28 - lift, 5, glass, alpha);
+            FC(cx + 13, cy - 28 - lift, 5, glass, alpha);
+            FC(cx - 13, cy - 28 - lift, 2, plague, alpha);
+            FC(cx + 13, cy - 28 - lift, 2, plague, alpha);
+            FC(cx - 5, cy - 37 - lift, 2, plague, alpha);
+            FC(cx + 5, cy - 37 - lift, 2, plague, alpha);
+            // arm out to the flask
+            DL(cx + 16, cy - 12 - lift, cx + 30 + sway, cy + 4 - lift, robeLit, 5, alpha);
+            // the flask he guards: glass ball, bright rim, glowing contents
+            FC(cx + 34 + sway, cy + 8 - lift, 13, robeLit, alpha);
+            FC(cx + 34 + sway, cy + 8 - lift, 11, glass, alpha);
+            FC(cx + 34 + sway, cy + 11 - lift, 7, plague, alpha);
+            FR(cx + 30 + sway, cy - 12 - lift, 8, 10, 3, glass, alpha);
+            FR(cx + 25 + sway, cy - 18 - lift, 18, 5, 2, robeLit, alpha);
+            // drips that fall away from the flask
+            for (int i = 0; i < 3; ++i) {
+                const int dy = (int)(fmodf(animTime * 30.0f + i * 22.0f, 26.0f));
+                FC(cx + 30 + i * 5, cy + 24 + dy - lift, 2, plague, 180);
+            }
+        } else if (id == 2) {
+            // КАРДИНАЛ — счётчик имён: высокий, в широкой шляпе, с книгой и пером.
+            const uint32_t cloth = tint(0xFF3C1A28), clothLit = tint(0xFF6E2E44), clothDark = tint(0xFF1E0C14);
+            const uint32_t paper = tint(0xFFE8DCC8), ink = tint(0xFFFF4E74);
+            // long robe, narrow silhouette
+            FR(cx - 20, cy - 16 - lift, 40, 62, 14, cloth, alpha);
+            FR(cx - 14, cy - 4 - lift, 28, 48, 12, clothDark, alpha);
+            for (int i = -1; i <= 1; ++i)
+                DL(cx + i * 8, cy + 8 - lift, cx + i * 8 + (int)(sinf(animTime * 2.0f + i) * 3), cy + 46, clothLit, 3, alpha);
+            // shoulders and collar
+            FR(cx - 24, cy - 22 - lift, 48, 16, 8, clothLit, alpha);
+            FR(cx - 12, cy - 20 - lift, 24, 10, 5, paper, alpha);
+            // porcelain mask
+            FR(cx - 11, cy - 44 - lift, 22, 26, 10, paper, alpha);
+            FR(cx - 7, cy - 36 - lift, 5, 3, 1, ink, alpha);
+            FR(cx + 2, cy - 36 - lift, 5, 3, 1, ink, alpha);
+            FR(cx - 4, cy - 27 - lift, 8, 2, 1, ink, alpha);
+            // a crack across the mask
+            DL(cx + 2, cy - 44 - lift, cx - 1, cy - 30 - lift, clothDark, 1, alpha);
+            // wide cardinal hat
+            FR(cx - 30, cy - 52 - lift, 60, 6, 3, clothLit, alpha);
+            FR(cx - 16, cy - 66 - lift, 32, 16, 6, cloth, alpha);
+            FR(cx - 16, cy - 66 - lift, 32, 4, 2, clothLit, alpha);
+            // open ledger
+            FR(cx - 40, cy - 6 - lift, 22, 16, 3, paper, alpha);
+            DL(cx - 29, cy - 4 - lift, cx - 29, cy + 8 - lift, clothDark, 1, alpha);
+            for (int i = 0; i < 3; ++i) DL(cx - 37, cy - 2 + i * 4 - lift, cx - 33, cy - 2 + i * 4 - lift, ink, 1, 170);
+            // quill
+            DL(cx + 24, cy + 6 - lift, cx + 36, cy - 30 - lift, paper, 2, alpha);
+            DL(cx + 33, cy - 24 - lift, cx + 40, cy - 34 - lift, paper, 1, alpha);
+            FC(cx + 26, cy + 4 - lift, 2, ink, alpha);
+            // seal chain hanging from the belt
+            for (int i = 0; i < 3; ++i) CR(cx + 12, cy + 16 + i * 8 - lift, 3, 1, ink, 190, true);
+        } else if (id == 3) {
+            // АЗАРОТ — сердце Архива: не человек, а парящее ядро с кольцами и свитками.
+            const uint32_t metal = tint(0xFF5B4A86), metalLit = tint(0xFF9B84D0), metalDark = tint(0xFF2A2140);
+            const uint32_t core = tint(enraged ? 0xFFFF6A3C : 0xFFFFB45C);
+            const int bob = (int)(sinf(animTime * 1.9f) * 5.0f);
+            const int oy = cy - 8 + bob;
+            // floating scroll arms
+            for (int i = 0; i < 4; ++i) {
+                const float a = animTime * 1.1f + i * 1.5708f;
+                const int ax = cx + (int)(cosf(a) * 40.0f);
+                const int ay = oy + (int)(sinf(a) * 22.0f);
+                DL(cx, oy, ax, ay, metalDark, 3, alpha);
+                FR(ax - 8, ay - 5, 16, 10, 3, metal, alpha);
+                FR(ax - 6, ay - 3, 12, 6, 2, metalLit, alpha);
+            }
+            // three rings, each squashed to read as orbiting in perspective
+            for (int ring = 0; ring < 3; ++ring) {
+                const int rr = 34 + ring * 10;
+                const float spin = animTime * (0.6f + ring * 0.35f) + ring * 1.05f;
+                for (int seg = 0; seg < 22; ++seg) {
+                    const float a0 = spin + seg * 6.2831853f / 22.0f;
+                    const int sx = cx + (int)(cosf(a0) * rr);
+                    const int sy = oy + (int)(sinf(a0) * rr * (0.34f + ring * 0.06f));
+                    FC(sx, sy, ring == 0 ? 2 : 1, ring == 0 ? metalLit : metal, 200);
+                }
+            }
+            // core body
+            FR(cx - 22, oy - 24, 44, 48, 18, metalDark, alpha);
+            FR(cx - 17, oy - 19, 34, 38, 14, metal, alpha);
+            // the lens eye
+            FC(cx, oy, 12, metalLit, alpha);
+            FC(cx, oy, 9, core, alpha);
+            FC(cx, oy, 4, 0xFFFFFFFF, alpha);
+            // lid plates
+            FR(cx - 20, oy - 26, 40, 7, 3, metalLit, alpha);
+            FR(cx - 20, oy + 19, 40, 7, 3, metalLit, alpha);
+            // teeth around the lens
+            for (int i = 0; i < 10; ++i) {
+                const float a = animTime * 0.5f + i * 0.6283f;
+                FX(cx + (int)(cosf(a) * 16) - 1, oy + (int)(sinf(a) * 16) - 1, 2, 2, metalLit, alpha);
+            }
+        } else if (id == 4) {
+            // ПРОТОКОЛИСТ — не тело, а стойка с раскрытым томом: две каменные скрижали,
+            // между ними светящаяся строка, вокруг летают перья. Он не бьёт вблизи —
+            // он пишет через арену строки, между которыми надо успеть встать.
+            const uint32_t stone = tint(0xFF4A5566), stoneLit = tint(0xFF8798AD), stoneDark = tint(0xFF232B36);
+            const uint32_t ink = tint(enraged ? 0xFF6AF0FF : 0xFF49C8E8);
+            const int float_ = (int)(sinf(animTime * 1.7f) * 4.0f);
+            const int oy = cy + 6 + float_;
+            // base pillar
+            FR(cx - 14, oy + 34, 28, 26, 6, stoneDark, alpha);
+            FR(cx - 10, oy + 30, 20, 10, 5, stone, alpha);
+            // two open pages left and right, hinged at the spine
+            for (int side = -1; side <= 1; side += 2) {
+                const int bx = cx + side * 12;
+                FR(bx - (side > 0 ? 0 : 34), oy - 40, 34, 74, 6, stoneDark, alpha);
+                FR(bx - (side > 0 ? 2 : 30), oy - 36, 30, 66, 5, stone, alpha);
+                // written lines that pulse faster when enraged
+                for (int ln = 0; ln < 6; ++ln) {
+                    const float pulse = 0.55f + 0.45f * sinf(animTime * 3.0f + ln * 0.9f + (side > 0 ? 0.6f : 0.0f));
+                    const int w = 18 - (ln % 3) * 4;
+                    FX(bx - (side > 0 ? 8 : 26) + (ln % 2 ? 0 : 3), oy - 28 + ln * 10, w, 2, ink, (int)(90 + 150 * pulse));
+                }
+            }
+            // spine and halo between the tablets
+            FR(cx - 4, oy - 40, 8, 74, 3, stoneLit, alpha);
+            FC(cx, oy - 44, 7, ink, alpha);
+            FC(cx, oy - 44, 3, 0xFFFFFFFF, alpha);
+            // orbiting quills
+            for (int i = 0; i < 3; ++i) {
+                const float a = animTime * 1.35f + i * 2.0944f;
+                const int qx = cx + (int)(cosf(a) * 46.0f);
+                const int qy = oy - 10 + (int)(sinf(a) * 20.0f);
+                DL(qx, qy, qx + (int)(cosf(a + 1.2f) * 16.0f), qy + (int)(sinf(a + 1.2f) * 16.0f), stoneLit, 2, alpha);
+                FC(qx, qy, 3, ink, alpha);
+            }
+        } else {
+            // КОПИЯ-ДВОЙНИК — два стеклянных слепка одного человека. Передний читается
+            // полностью, задний стоит со сдвигом и просвечивает. Он не пишет и не бьёт
+            // площадью: он меняется местами с копией и бьёт сразу из двух точек.
+            const uint32_t glass = tint(0xFF4E7C8A), glassLit = tint(0xFFB4E8F4), glassDark = tint(0xFF16242A);
+            const uint32_t core = tint(enraged ? 0xFFFF5A7A : 0xFF8FF0FF);
+            const int sway = (int)(sinf(animTime * 2.4f) * 4.0f);
+            const int off = 40 + sway;
+            // ---- the mirror twin: same build, dimmer, behind and to the right
+            const int tx = cx + off, ty = cy - 4;
+            FR(tx - 15, ty - 14 - lift, 30, 54, 12, glassDark, 150);
+            FR(tx - 11, ty - 10 - lift, 22, 46, 10, glass, 170);
+            FC(tx, ty - 26 - lift, 11, glassLit, 170);
+            FC(tx, ty - 26 - lift, 7, glassDark, 160);
+            DL(tx - 14, ty + 4 - lift, tx - 24, ty + 22 - lift, glassLit, 3, 150);
+            DL(tx + 14, ty + 4 - lift, tx + 24, ty + 22 - lift, glassLit, 3, 150);
+            DL(tx - 8, ty + 38 - lift, tx - 6, ty + 50 - lift, glass, 4, 150);
+            DL(tx + 8, ty + 38 - lift, tx + 6, ty + 50 - lift, glass, 4, 150);
+            // ---- the real body in front
+            FR(cx - 18, cy - 16 - lift, 36, 58, 14, glassDark, alpha);
+            FR(cx - 14, cy - 12 - lift, 28, 48, 12, glass, alpha);
+            FR(cx - 14, cy - 12 - lift, 6, 48, 3, glassLit, alpha);
+            FR(cx + 8, cy - 12 - lift, 6, 48, 3, glassLit, alpha);
+            // neck and head, filled so it cannot read as a floating ring
+            FR(cx - 7, cy - 24 - lift, 14, 12, 4, glassLit, alpha);
+            FC(cx, cy - 34 - lift, 12, glassLit, alpha);
+            FC(cx, cy - 34 - lift, 9, glass, alpha);
+            FC(cx - 4, cy - 36 - lift, 3, core, alpha);
+            FC(cx + 4, cy - 36 - lift, 3, core, alpha);
+            // arms
+            DL(cx - 13, cy - 6 - lift, cx - 26, cy + 16 - lift, glassLit, 4, alpha);
+            DL(cx + 13, cy - 6 - lift, cx + 24, cy + 16 - lift, glassLit, 4, alpha);
+            // legs
+            DL(cx - 6, cy + 38 - lift, cx - 8, cy + 52 - lift, glass, 4, alpha);
+            DL(cx + 6, cy + 38 - lift, cx + 8, cy + 52 - lift, glass, 4, alpha);
+            // cracks across the glass
+            for (int i = 0; i < 4; ++i) {
+                const float a = animTime * 0.8f + i * 1.57f;
+                DL(cx, cy - 2 - lift, cx + (int)(cosf(a) * 20.0f), cy + (int)(sinf(a) * 24.0f), core, 1, 140);
+            }
+            // the tether: a dotted axis between the two bodies
+            for (int i = 0; i < 5; ++i)
+                FX(cx + 14 + i * 5, cy - 6 - lift, 2, 2 + (i % 2), core, 190);
+            // floating shards
+            for (int i = 0; i < 6; ++i) {
+                const float a = animTime * 1.1f + i * 1.0472f;
+                const int sx2 = cx + (int)(cosf(a) * 44.0f);
+                const int sy2 = cy - 4 + (int)(sinf(a) * 34.0f);
+                FX(sx2 - 2, sy2 - 2, 4, 4, core, 200);
+            }
+        }
+    }
+
     void drawBossSprite(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged = false) {
         int auraRad = 40 + (int)(sinf(animTime * 7.0f) * 5.0f);
-        uint32_t auraCol = enraged ? 0xFFFF2040 : ((bossType == 0) ? 0xFFFFB028 : (bossType == 1 ? 0xFF80FF40 : (bossType == 2 ? 0xFFFF3068 : 0xFFFF6818)));
+        static const uint32_t auraPalette[6] = {0xFFFFB028, 0xFF80FF40, 0xFFFF3068, 0xFFFF6818, 0xFF49C8E8, 0xFF9EDBE8};
+        const int bossId = bossType % 6;
+        uint32_t auraCol = enraged ? 0xFFFF2040 : auraPalette[bossId];
         drawCircleRing(cx, cy + 24, auraRad, 3, auraCol, 210, true);
-        // Each guardian brands the floor with its own sigil: gate bar, broken vial, ledger,
-        // and archive wheel. Same silhouette family, four clearly different presences.
-        const int bossId = bossType & 3;
-        const int ticks = (bossId == 0) ? 4 : (bossId == 1 ? 5 : (bossId == 2 ? 6 : 8));
-        const float spin = animTime * (bossId == 3 ? 0.55f : (bossId == 2 ? 0.30f : 0.42f));
+        // Every guardian brands the floor with its own sigil: gate bars, a broken vial,
+        // ledger rules, an archive wheel, marching protocol lines and mirrored shards.
+        static const int tickTable[6] = {4, 5, 6, 8, 3, 6};
+        const int ticks = tickTable[bossId];
+        static const float spinTable[6] = {0.42f, 0.42f, 0.30f, 0.55f, 0.22f, 0.72f};
+        const float spin = animTime * spinTable[bossId];
         for (int i = 0; i < ticks; ++i) {
             const float a = spin + i * (6.2831853f / ticks);
             const float r0 = auraRad * 0.94f, r1 = auraRad * (1.14f + (i % 2 ? 0.06f : 0.0f));
@@ -790,7 +1123,7 @@ struct Renderer {
             // Кардинал: ruled ledger lines crossing the sigil.
             for (int line = -2; line <= 2; ++line)
                 drawLine(cx - 46, cy + 24 + line * 9, cx + 46, cy + 24 + line * 9, auraCol, 1, 55);
-        } else {
+        } else if (bossId == 3) {
             // Азарот: a toothed archive wheel with a slow inner counter-rotation.
             drawCircleRing(cx, cy + 24, (int)(auraRad * 0.66f), 1, auraCol, 110,
                            true);
@@ -799,13 +1132,26 @@ struct Renderer {
                 const int rr = (int)(auraRad * 0.72f);
                 fillRect(cx + (int)(cosf(a) * rr), cy + 24 + (int)(sinf(a) * rr * 0.42f), 2, 2, auraCol, 120);
             }
+        } else if (bossId == 4) {
+            // Протоколист: ruled lines marching across the floor, one direction only.
+            for (int line = 0; line < 3; ++line) {
+                const int off = (int)(fmodf(animTime * 46.0f + line * 30.0f, 90.0f)) - 45;
+                drawLine(cx - 52 + off / 2, cy + 10 + line * 14, cx + 52 + off / 2, cy + 10 + line * 14, auraCol, 1, 110);
+            }
+        } else {
+            // Двойник: two overlapping sigil rings, half a turn out of phase.
+            drawCircleRing(cx - 12, cy + 24, (int)(auraRad * 0.7f), 1, auraCol, 95, true);
+            drawCircleRing(cx + 12, cy + 24, (int)(auraRad * 0.7f), 1, auraCol, 95, true);
         }
         addGlow(cx, cy, 62, auraCol, enraged ? 190 : 140);
-        int frame = ((int)(animTime * 4.5f)) & 1;
-        int fx = 0, fy = 0;
-        bakedSpriteVisualOffset(BOSS_SPRITES[bossType % 4][frame], fx, fy);
-        drawShadow(cx, cy + 36 - fy, 32, 12);
-        drawBakedSpriteCentred(BOSS_SPRITES[bossType % 4][frame], cx, cy, false, hitFlash, false, 255);
+        drawShadow(cx, cy + 50, 36, 12);
+        drawBossFigure(cx, cy, bossType, animTime, hitFlash, enraged, false, 1.12f);
+    }
+
+    // Эхо-двойники из третьей фазы: та же фигура, но призрачная и полупрозрачная.
+    void drawBossEcho(int cx, int cy, int bossType, float animTime, bool hitFlash) {
+        addGlow(cx, cy, 40, 0xFFFF3058, 80);
+        drawBossFigure(cx, cy, bossType, animTime, hitFlash, true, true);
     }
 
     void drawWeaponIcon(int cx, int cy, int weaponId, int size = 22, bool evolved = false) {

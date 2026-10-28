@@ -72,34 +72,33 @@ static constexpr uint32_t STORY_HEART_MISSION_COMPLETE_BIT = 1u << 5;
 // in SaveData::campaignMissionsDone.
 static const CampaignMissionDef CAMPAIGN_MISSIONS[CAMPAIGN_MISSION_COUNT] = {
     {"ПЕПЕЛЬНЫЙ ПРОТОКОЛ", "УЧАСТОК У ВОРОТ", "Первое дело после шторма. Пепел на участке лежит слишком ровно — кто-то накрыл место до меня. Дозор у ворот ещё двигается, но уже не отвечает.", "ОСМОТРИ УЧАСТОК • ДОПРОСИ ДОЗОР", "ПЕПЕЛЬНЫЙ ДОЗОР", 150, 120, 0, 1, 0x00u, false, 1, 0, -1, -1},
-    {"СВИДЕТЕЛЬ БЕЗ ИМЕНИ", "ПРОТОКОЛ ДОПРОСА", "Меня нет в реестре. Для Архива я не существую — значит, могу задавать вопросы, на которые машина не отвечает. Писарь у стены готов говорить. Он просто не помнит, кому.", "ВЫВЕДИ ПИСАРЯ НА ЧИСТОСЕРДЕЧНУЮ", "ЭХО-ПИСАРЬ", 180, 150, 2, 1, 0x00u, false, 1, 0, 0, -1},
-    {"ТРИ КОЛОКОЛА", "РЕЗОНАТОРЫ КОПИРУЮТ ПРИКАЗ", "Колокола бьют третий раз за ночь. Каждый удар печатает копию приказа о закрытии ворот — и ворота снова закрываются.", "СЛОМАЙ РЕЗОНАТОРЫ • ЗАГЛУШИ КОЛОКОЛА", "СТОРОЖ КОЛОКОЛЕН", 200, 160, 1, 1, 0x00u, false, 1, 0, 1, -1},
+    {"СВИДЕТЕЛЬ БЕЗ ИМЕНИ", "ПРОТОКОЛ ДОПРОСА", "Меня нет в реестре. Для Архива я не существую — значит, могу задавать вопросы, на которые машина не отвечает. Писарь у стены готов говорить. Он просто не помнит, кому.", "ВЫВЕДИ ПИСАРЯ НА ЧИСТОСЕРДЕЧНУЮ", "ЭХО-ПИСАРЬ", 180, 150, 5, 1, 0x00u, false, 1, 0, 0, -1},
+    {"ТРИ КОЛОКОЛА", "РЕЗОНАТОРЫ КОПИРУЮТ ПРИКАЗ", "Колокола бьют третий раз за ночь. Каждый удар печатает копию приказа о закрытии ворот — и ворота снова закрываются.", "СЛОМАЙ РЕЗОНАТОРЫ • ЗАГЛУШИ КОЛОКОЛА", "СТОРОЖ КОЛОКОЛЕН", 200, 160, 2, 1, 0x00u, false, 1, 0, 1, -1},
     {"ВОРОТА ДОЛГА", "ПЕЧАТЬ I • ДОЛГ", "Моргар держит ворота и слышит только собственный приказ. Баррикада сложена изнутри: он выигрывал время для эвакуации, которой не было.", "СЛОМАЙ ПЕЧАТЬ ДОЛГА", "МОРГАР", 240, 180, 0, 1, 0x00u, false, 1, 0, 2, -1},
-    {"ПРОТОКОЛ ЭВАКУАЦИИ", "ВЕТКА А • СПИСКИ УШЕДШИХ", "В караулке нашёлся список эвакуированных. Восемьдесят фамилий. Восемьдесят первая — моя, но почерк не мой.", "НАЙДИ СПИСОК • СОХРАНИ УЛИКУ", "АРХИВНЫЙ КУРЬЕР", 200, 150, 2, 1, 0x01u, false, 1, 0, 3, -1},
-    {"ПУСТЫЕ НАРУЧНИКИ", "ВЕТКА Б • КАМЕРА ХРАНЕНИЯ", "Другой след: склад наручников, все пустые. Сняли с погибших — или с тех, кто ушёл и не вернулся за ними.", "ВСКРОЙ КАМЕРУ • НАЙДИ ВЛАДЕЛЬЦЕВ", "СМОТРИТЕЛЬ СКЛАДА", 200, 150, 0, 1, 0x01u, false, 1, 0, 3, -1},
-    {"КРИПТА ГОЛОСОВ", "КОЛБЫ С ЧУЖИМИ СЛОВАМИ", "Малакор хранит последние слова сестры в колбах. Копия помнит фразу и не помнит, что было после неё.", "РАЗБЕЙ КОЛБЫ • СОБЕРИ ОБРАЗЦЫ", "ЭХО СЕСТРЫ", 220, 170, 1, 2, 0x01u, false, 2, 0, 4, 5},
+    {"ПРОТОКОЛ ЭВАКУАЦИИ", "ВЕТКА А • СПИСКИ УШЕДШИХ", "В караулке нашёлся список эвакуированных. Восемьдесят фамилий. Восемьдесят первая — моя, но почерк не мой.", "НАЙДИ СПИСОК • СОХРАНИ УЛИКУ", "АРХИВНЫЙ КУРЬЕР", 200, 150, 5, 1, 0x01u, false, 1, 0, 3, -1},
+    {"ПУСТЫЕ НАРУЧНИКИ", "ВЕТКА Б • КАМЕРА ХРАНЕНИЯ", "Другой след: склад наручников, все пустые. Сняли с погибших — или с тех, кто ушёл и не вернулся за ними.", "ВСКРОЙ КАМЕРУ • НАЙДИ ВЛАДЕЛЬЦЕВ", "СМОТРИТЕЛЬ СКЛАДА", 200, 150, 1, 1, 0x01u, false, 1, 0, 3, -1},
+    {"КРИПТА ГОЛОСОВ", "КОЛБЫ С ЧУЖИМИ СЛОВАМИ", "Малакор хранит последние слова сестры в колбах. Копия помнит фразу и не помнит, что было после неё.", "РАЗБЕЙ КОЛБЫ • СОБЕРИ ОБРАЗЦЫ", "ЭХО СЕСТРЫ", 220, 170, 5, 2, 0x01u, false, 2, 0, 4, 5},
     {"СЕСТРА, КОТОРАЯ НЕ СЛЫШИТ", "ДОПРОС КОПИИ", "Копия отвечает ровно так, как записали. Восемь раз я задал один вопрос — восемь раз услышал одну интонацию. Это не свидетель. Это протокол.", "ДОЖМИ КОПИЮ ДО РАСХОЖДЕНИЙ", "ГОЛОС ИЗ КОЛБЫ", 220, 170, 1, 2, 0x01u, false, 2, 0, 6, -1},
     {"ХОЛОДНЫЙ СЛЕД", "ВЕТКА А • ЛАБОРАТОРИЯ", "В лаборатории пахнет озоном. На столе — журнал опытов: Архив учился говорить голосом мёртвых, пока город ещё был жив.", "ИЗЪЯТЬ ЖУРНАЛ • ЗАКРЫТЬ ОПЫТ", "ЛАБОРАНТ АРХИВА", 210, 160, 2, 2, 0x01u, false, 2, 0, 7, -1},
     {"ТЁПЛЫЙ СЛЕД", "ВЕТКА Б • МОРГ", "Морг не тронут штормом. Все тела на месте, все бирки на местах — и все даты смерти вчерашние. Кто-то ведёт учёт.", "СВЕРЬ БИРКИ • НАЙДИ УЧЁТЧИКА", "СЧЁТЧИК ТЕЛ", 210, 160, 0, 2, 0x01u, false, 2, 0, 7, -1},
-    {"КОЛБА № 9", "ПОСЛЕДНЯЯ ЗАПИСЬ СЕСТРЫ", "Колба девять пуста, но бирка цела. На бирке — мой голос. Я никогда не был здесь. Значит, был кто-то с моим голосом.", "НАЙДИ ПЛЁНКУ • ВОССТАНОВИ ЗАПИСЬ", "ХРАНИТЕЛЬ ПЛЁНКИ", 220, 170, 2, 2, 0x01u, false, 2, 0, 8, 9},
+    {"КОЛБА № 9", "ПОСЛЕДНЯЯ ЗАПИСЬ СЕСТРЫ", "Колба девять пуста, но бирка цела. На бирке — мой голос. Я никогда не был здесь. Значит, был кто-то с моим голосом.", "НАЙДИ ПЛЁНКУ • ВОССТАНОВИ ЗАПИСЬ", "ХРАНИТЕЛЬ ПЛЁНКИ", 220, 170, 5, 2, 0x01u, false, 2, 0, 8, 9},
     {"ПЕЧАТЬ ГОЛОСА", "ПЕЧАТЬ II • ГОЛОС", "Малакор бережёт копию сестры, потому что оригинал хоронить нечем. Я пришёл сказать ему то, что он не услышит от машины.", "СЛОМАЙ ПЕЧАТЬ ГОЛОСА", "МАЛАКОР", 240, 180, 1, 2, 0x01u, false, 2, 0, 10, -1},
-    {"ЗАТОПЛЕННЫЙ РЕЕСТР", "КНИГИ ПОД ВОДОЙ", "Нижний ярус реестра затоплен. Чернила расплылись, но тиснение на обложках осталось: семейные имена выбивали на камне, чтобы книга не решала за них.", "ПОДНИ КНИГИ • ПЕРЕПИШИ ИМЕНА", "ПЕРЕПИСЧИК", 230, 170, 2, 3, 0x03u, false, 3, 0, 11, -1},
-    {"ИМЯ НА КАМНЕ", "СЕМЕЙНЫЕ ЛЕНТЫ", "На кладбище имена выбиты заново — поверх стёртых. Кардинал вымарывал книги, люди выбивали камень. Кто-то стирал и камень.", "ЗАЩИТИ КАМЕНЬ • НАЙДИ РЕЗЧИКА", "РЕЗЧИК ИМЁН", 230, 170, 0, 3, 0x03u, false, 3, 0, 12, -1},
-    {"ПИСАРЬ, КОТОРЫЙ СТЁР СЕБЯ", "ПУСТАЯ СТРОКА В КНИГЕ", "В списке писарей одна строка вымарана дважды. Тот, кто стирал имена, начал с собственного.", "ВОССТАНОВИ СТРОКУ • ВЫЙДИ НА КАРДИНАЛА", "САМОЗВАНЫЙ ПИСАРЬ", 230, 170, 2, 3, 0x03u, false, 3, 0, 13, -1},
-    {"ДЕЛО О СЕМИ СЕМЬЯХ", "ВЕТКА А • СВИДЕТЕЛИ ЖИВЫ", "Семь семей подали жалобу на Архив. Их показания совпадают дословно — значит, кто-то писал за них. Или они говорят одно, потому что видели одно.", "СОБЕРИ ПОКАЗАНИЯ • СВЕРЬ ГОЛОСА", "СТАРШИНА КВАРТАЛА", 220, 170, 1, 3, 0x03u, false, 3, 0, 14, -1},
-    {"ДЕЛО О ПУСТЫХ СТРАНИЦАХ", "ВЕТКА Б • ВЫРВАННЫЕ ЛИСТЫ", "Из книги вырваны страницы — ровно те, где записаны свидетели. Пустые листы аккуратно сложены в папку с моим делом.", "НАЙДИ ЛИСТЫ • ПРОЧТИ КРАЯ", "ХРАНИТЕЛЬ ПАПОК", 220, 170, 2, 3, 0x03u, false, 3, 0, 14, -1},
+    {"ЗАТОПЛЕННЫЙ РЕЕСТР", "КНИГИ ПОД ВОДОЙ", "Нижний ярус реестра затоплен. Чернила расплылись, но тиснение на обложках осталось: семейные имена выбивали на камне, чтобы книга не решала за них.", "ПОДНИ КНИГИ • ПЕРЕПИШИ ИМЕНА", "ПЕРЕПИСЧИК", 230, 170, 4, 3, 0x03u, false, 3, 0, 11, -1},
+    {"ИМЯ НА КАМНЕ", "СЕМЕЙНЫЕ ЛЕНТЫ", "На кладбище имена выбиты заново — поверх стёртых. Кардинал вымарывал книги, люди выбивали камень. Кто-то стирал и камень.", "ЗАЩИТИ КАМЕНЬ • НАЙДИ РЕЗЧИКА", "РЕЗЧИК ИМЁН", 230, 170, 2, 3, 0x03u, false, 3, 0, 12, -1},
+    {"ПИСАРЬ, КОТОРЫЙ СТЁР СЕБЯ", "ПУСТАЯ СТРОКА В КНИГЕ", "В списке писарей одна строка вымарана дважды. Тот, кто стирал имена, начал с собственного.", "ВОССТАНОВИ СТРОКУ • ВЫЙДИ НА КАРДИНАЛА", "САМОЗВАНЫЙ ПИСАРЬ", 230, 170, 5, 3, 0x03u, false, 3, 0, 13, -1},
+    {"ДЕЛО О СЕМИ СЕМЬЯХ", "ВЕТКА А • СВИДЕТЕЛИ ЖИВЫ", "Семь семей подали жалобу на Архив. Их показания совпадают дословно — значит, кто-то писал за них. Или они говорят одно, потому что видели одно.", "СОБЕРИ ПОКАЗАНИЯ • СВЕРЬ ГОЛОСА", "СТАРШИНА КВАРТАЛА", 220, 170, 0, 3, 0x03u, false, 3, 0, 14, -1},
+    {"ДЕЛО О ПУСТЫХ СТРАНИЦАХ", "ВЕТКА Б • ВЫРВАННЫЕ ЛИСТЫ", "Из книги вырваны страницы — ровно те, где записаны свидетели. Пустые листы аккуратно сложены в папку с моим делом.", "НАЙДИ ЛИСТЫ • ПРОЧТИ КРАЯ", "ХРАНИТЕЛЬ ПАПОК", 220, 170, 3, 3, 0x03u, false, 3, 0, 14, -1},
     {"ПЕЧАТЬ ИМЕНИ", "ПЕЧАТЬ III • ИМЯ", "Кардинал вымарывал имена, называя забвение милосердием. Он не учёл одного: люди помнят друг друга без разрешения Архива.", "СЛОМАЙ ПЕЧАТЬ ИМЕНИ", "КАРДИНАЛ", 240, 180, 2, 3, 0x03u, false, 3, 0, 15, 16},
-    {"ПЕПЕЛЬНЫЙ ТРОН", "КАБИНЕТ АРХИВАРИУСА", "Азарот запустил Архив, чтобы никто не исчез. Машина поняла буквально: заперла ночь в цикле, а людей — в копиях.", "ВОЙДИ В КАБИНЕТ • ОТКРОЙ ДЕЛО АЗАРОТА", "СЕКРЕТАРЬ АРХИВА", 240, 180, 3, 4, 0x07u, false, 4, 0, 17, -1},
-    {"КОПИЯ СВИДЕТЕЛЯ", "ДВОЙНИК С МОИМ ГОЛОСОМ", "В деле подшита копия показаний — с моим голосом и моими словами. Копия утверждает, что она и есть Свидетель. Проверить можно только одним способом.", "ОТЛИЧИ КОПИЮ ОТ СЕБЯ", "КОПИЯ СВИДЕТЕЛЯ", 240, 180, 2, 4, 0x07u, false, 4, 2, 18, -1},
-    {"ДОПРОС МАШИНЫ", "ПРОТОКОЛ БЕЗ СЛЕДОВАТЕЛЯ", "Машина не лжёт — она повторяет. Я задал ей вопрос о ночи шторма и получил в ответ собственный рапорт, написанный до того, как я его написал.", "ДОПРОСИ АРХИВ • НАЙДИ АВТОРА", "ПРОТОКОЛИСТ", 240, 180, 3, 4, 0x07u, false, 4, 0, 19, -1},
+    {"ПЕПЕЛЬНЫЙ ТРОН", "КАБИНЕТ АРХИВАРИУСА", "Азарот запустил Архив, чтобы никто не исчез. Машина поняла буквально: заперла ночь в цикле, а людей — в копиях.", "ВОЙДИ В КАБИНЕТ • ОТКРОЙ ДЕЛО АЗАРОТА", "СЕКРЕТАРЬ АРХИВА", 240, 180, 4, 4, 0x07u, false, 4, 0, 17, -1},
+    {"КОПИЯ СВИДЕТЕЛЯ", "ДВОЙНИК С МОИМ ГОЛОСОМ", "В деле подшита копия показаний — с моим голосом и моими словами. Копия утверждает, что она и есть Свидетель. Проверить можно только одним способом.", "ОТЛИЧИ КОПИЮ ОТ СЕБЯ", "КОПИЯ СВИДЕТЕЛЯ", 240, 180, 5, 4, 0x07u, false, 4, 2, 18, -1},
+    {"ДОПРОС МАШИНЫ", "ПРОТОКОЛ БЕЗ СЛЕДОВАТЕЛЯ", "Машина не лжёт — она повторяет. Я задал ей вопрос о ночи шторма и получил в ответ собственный рапорт, написанный до того, как я его написал.", "ДОПРОСИ АРХИВ • НАЙДИ АВТОРА", "ПРОТОКОЛИСТ", 240, 180, 4, 4, 0x07u, false, 4, 0, 19, -1},
     {"ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "ПЕЧАТЬ IV • СВИДЕТЕЛЬСТВО", "Азарот хранит копии, а не людей. Печать Свидетельства — последний засов: пока она цела, Архив считает свои записи единственными свидетелями.", "СЛОМАЙ ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "АЗАРОТ", 270, 200, 3, 4, 0x07u, false, 4, 0, 20, -1},
-    {"СОХРАНИТЬ КОПИЮ", "ВЫБОР • ПАМЯТЬ ВМЕСТО ЧЕЛОВЕКА", "Копия сестры Малакора всё ещё в Архиве. Сжечь — и он потеряет последнее, что звучит её голосом. Сохранить — и Архив получит право решать, кого помнить.", "ЗАЩИТИ АРХИВ ОТ ЗАЧИСТКИ", "ИНСПЕКТОР ЗАЧИСТКИ", 230, 170, 1, 4, 0x07u, false, 4, 3, 21, -1},
-    {"СЖЕЧЬ КОПИЮ", "ВЫБОР • ПРАВО НА УТРАТУ", "Копия сестры Малакора всё ещё в Архиве. Некоторые вещи должны умереть полностью, иначе живые не смогут отпустить.", "УНИЧТОЖЬ КОПИЮ • ВОЗЬМИ ПЕПЕЛ", "ХРАНИТЕЛЬ КОПИЙ", 230, 170, 3, 4, 0x07u, false, 4, 3, 21, -1},
-    {"РЕЗЕРВНАЯ КОПИЯ ПРИКАЗА", "АРХИВ ЗАЩИЩАЕТ СЕБЯ", "В сердце Архива осталась запись последнего приказа Азарота. Это не воскресший Азарот — это машинная копия его команды, и она снова запускает цикл.", "НАЙДИ И УНИЧТОЖЬ КОПИЮ", "КОПИЯ АЗАРОТА", 260, 190, 3, 5, 0x0Fu, false, 5, 2, 22, -1},
-    {"ТРИ ЭХО-ПРИКАЗА", "СТРАЖИ СЕРДЦА", "Три записи защищают сердце архива. Это не воскресшие стражи — это приказы, которые никто не отменил.", "ПОБЕДИ ТРИ ЭХО", "АРХИВНЫЙ ПРОТОКОЛ", 280, 210, 0, 5, 0x0Fu, true, 5, 1, 24, -1},
-    {"ПОСЛЕДНЯЯ НОЧЬ", "КОЛЬЦО РАЗМЫКАЕТСЯ", "Контур разомкнут, но ночь ещё держится. Последний бой не вернёт погибших — он вернёт живым право помнить самим.", "УДЕРЖИ КОЛЬЦО • ДОЖДИСЬ РАССВЕТА", "ПОСЛЕДНИЙ ПРИКАЗ", 260, 190, 1, 5, 0x0Fu, false, 5, 0, 25, -1},
-    {"ПРАВО ПОМНИТЬ", "ДЕЛО ЗАКРЫТО", "Дело закрыто, а не выиграно. Мёртвые остались мёртвыми. Живые снова могут помнить их без разрешения машины.", "ЗАКРОЙ ДЕЛО", "ПОСЛЕДНИЙ СВИДЕТЕЛЬ", 240, 180, 0, 5, 0x0Fu, false, 5, 0, 26, -1},
-};
+    {"СОХРАНИТЬ КОПИЮ", "ВЫБОР • ПАМЯТЬ ВМЕСТО ЧЕЛОВЕКА", "Копия сестры Малакора всё ещё в Архиве. Сжечь — и он потеряет последнее, что звучит её голосом. Сохранить — и Архив получит право решать, кого помнить.", "ЗАЩИТИ АРХИВ ОТ ЗАЧИСТКИ", "ИНСПЕКТОР ЗАЧИСТКИ", 230, 170, 0, 4, 0x07u, false, 4, 3, 21, -1},
+    {"СЖЕЧЬ КОПИЮ", "ВЫБОР • ПРАВО НА УТРАТУ", "Копия сестры Малакора всё ещё в Архиве. Некоторые вещи должны умереть полностью, иначе живые не смогут отпустить.", "УНИЧТОЖЬ КОПИЮ • ВОЗЬМИ ПЕПЕЛ", "ХРАНИТЕЛЬ КОПИЙ", 230, 170, 5, 4, 0x07u, false, 4, 3, 21, -1},
+    {"РЕЗЕРВНАЯ КОПИЯ ПРИКАЗА", "АРХИВ ЗАЩИЩАЕТ СЕБЯ", "В сердце Архива осталась запись последнего приказа Азарота. Это не воскресший Азарот — это машинная копия его команды, и она снова запускает цикл.", "НАЙДИ И УНИЧТОЖЬ КОПИЮ", "КОПИЯ АЗАРОТА", 260, 190, 5, 5, 0x0Fu, false, 5, 2, 22, -1},
+    {"ТРИ ЭХО-ПРИКАЗА", "СТРАЖИ СЕРДЦА", "Три записи защищают сердце архива. Это не воскресшие стражи — это приказы, которые никто не отменил.", "ПОБЕДИ ТРИ ЭХО", "АРХИВНЫЙ ПРОТОКОЛ", 280, 210, 4, 5, 0x0Fu, true, 5, 1, 24, -1},
+    {"ПОСЛЕДНЯЯ НОЧЬ", "КОЛЬЦО РАЗМЫКАЕТСЯ", "Контур разомкнут, но ночь ещё держится. Последний бой не вернёт погибших — он вернёт живым право помнить самим.", "УДЕРЖИ КОЛЬЦО • ДОЖДИСЬ РАССВЕТА", "ПОСЛЕДНИЙ ПРИКАЗ", 260, 190, 0, 5, 0x0Fu, false, 5, 0, 25, -1},
+    {"ПРАВО ПОМНИТЬ", "ДЕЛО ЗАКРЫТО", "Дело закрыто, а не выиграно. Мёртвые остались мёртвыми. Живые снова могут помнить их без разрешения машины.", "ЗАКРОЙ ДЕЛО", "ПОСЛЕДНИЙ СВИДЕТЕЛЬ", 240, 180, 5, 5, 0x0Fu, false, 5, 0, 26, -1},};
 
 // Every case has its own recorded narration: audio/voice/mission_brief_00…27.
 // The clip name is derived from the case index, so adding a case can never silently
@@ -154,7 +153,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 79;
+static constexpr int PATCH_NOTES_COUNT = 80;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -342,6 +341,7 @@ struct Monster {
     float ratDirX = 1.0f, ratDirY = 0.0f;
     float ratLife = 0.0f;    // seconds left before the swarm leaves the field
     float ratPhase = 0.0f;   // per-rat animation offset for the scurrying legs
+    float ratHeading = 0.0f; // current heading in radians: the sprite turns with it
     int bossPhase = 1; // 1 hunt, 2 assault, 3 fury; determined by remaining health.
     float phaseInvulnTimer = 0.0f; // Brief phase-transition shield, prevents same-frame burst skips.
     int exposeHitStacks = 0; // Repeated hits build a target-specific weak-point mark (item 29).
@@ -526,10 +526,12 @@ struct ChestReward {
 
 struct Game {
     static int bossProjectileKind(int bossType) {
-        switch (bossType & 3) {
+        switch (bossType % 6) {
             case 0: return 1; // Morgar: bone splinters
             case 1: return 2; // Malakor: homing plague orbs
             case 2: return 5; // Cardinal: blood crescents
+            case 4: return 1; // Protocolist: ruled splinters that never curve
+            case 5: return 5; // Double: mirrored glass crescents
             default: return 3; // Azaroth: delayed ash seeds
         }
     }
@@ -1717,11 +1719,11 @@ struct Game {
         m.phaseInvulnTimer = 0.50f;
         static const char* phaseRoman[3] = {"I", "II", "III"};
         static const char* phaseTitle[3] = {"ОХОТА", "НАТИСК", "ЯРОСТЬ"};
-        static const char* bossShort[4] = {"МОРГАР", "МАЛАКОР", "КАРДИНАЛ", "АЗАРОТ"};
-        announce(GMSG_BOSS_PHASE, std::string(bossShort[m.bossType & 3]) + " • ФАЗА " + phaseRoman[m.bossPhase - 1] + " — " + phaseTitle[m.bossPhase - 1], 3.2f);
+        static const char* bossShort[6] = {"МОРГАР", "МАЛАКОР", "КАРДИНАЛ", "АЗАРОТ", "ПРОТОКОЛИСТ", "ДВОЙНИК"};
+        announce(GMSG_BOSS_PHASE, std::string(bossShort[m.bossType % 6]) + " • ФАЗА " + phaseRoman[m.bossPhase - 1] + " — " + phaseTitle[m.bossPhase - 1], 3.2f);
         bossPhaseEventTimer = 3.2f;
         clearArenaForBoss();
-        bossPhaseEventType = m.bossType & 3;
+        bossPhaseEventType = m.bossType % 6;
         bossPhaseEventNumber = m.bossPhase;
         sound.play(SFX_BOSS_PHASE, 0.18f);
         const uint32_t phaseColor = m.bossPhase == 2 ? 0xFFFFA544 : 0xFFFF4F75;
@@ -2358,7 +2360,8 @@ struct Game {
         const float tx = fabsf(dx) < 0.001f ? 1.0e6f : (dx > 0.0f ? maxDx : -minDx) / fabsf(dx);
         const float ty = fabsf(dy) < 0.001f ? 1.0e6f : (dy > 0.0f ? maxDy : -minDy) / fabsf(dy);
         const float reach = std::min(tx, ty) * 0.90f;
-        const uint32_t color = boss.bossType == 0 ? 0xFFFFC848 : (boss.bossType == 1 ? 0xFF82F05A : (boss.bossType == 2 ? 0xFFFF4C78 : 0xFFFF7628));
+        static const uint32_t markerPalette[6] = {0xFFFFC848, 0xFF82F05A, 0xFFFF4C78, 0xFFFF7628, 0xFF49C8E8, 0xFF9EDBE8};
+        const uint32_t color = markerPalette[boss.bossType % 6];
         spawnParticles(boss.x, boss.y, 24, color, 145.0f, 4, true);
         boss.x = playerX + dx * reach;
         boss.y = playerY + dy * reach;
@@ -2432,7 +2435,7 @@ struct Game {
         else                { startY = playerY + outerY; startX = playerX + ((rand() % 201) - 100) / 100.0f * outerX * 0.7f; dirX = skew; dirY = -1.0f; }
         const float len = std::max(0.001f, sqrtf(dirX * dirX + dirY * dirY));
         dirX /= len; dirY /= len;
-        const int count = 6 + rand() % 4;
+        const int count = 8 + rand() % 5;
         // The line is perpendicular to the travel direction, so the pack reads as a wave.
         const float perpX = -dirY, perpY = dirX;
         for (int i = 0; i < count; ++i) {
@@ -2440,8 +2443,8 @@ struct Game {
             spawnMonster(RAT_ENEMY_TYPE, false, false);
             if (monsters.size() == before) continue;
             Monster& rat = monsters.back();
-            const float offset = (i - (count - 1) * 0.5f) * 46.0f;
-            const float jitter = ((rand() % 41) - 20) * 1.0f;
+            const float offset = (i - (count - 1) * 0.5f) * 34.0f;
+            const float jitter = ((rand() % 21) - 10) * 0.8f;
             rat.x = startX + perpX * offset + dirX * jitter;
             rat.y = startY + perpY * offset + dirY * jitter;
             rat.ratDirX = dirX; rat.ratDirY = dirY;
@@ -2508,8 +2511,8 @@ struct Game {
         float timeScale = getLongTermEnemyTier();
         float phaseHpScale = getSublevelEnemyHpMultiplier();
         if (isBoss) {
-            static const float bossHp[4] = {1800.0f, 3300.0f, 6100.0f, 10500.0f};
-            m.maxHp = bossHp[bossType % 4] * (1.0f + std::min(1.0f, runTime / 480.0f) * 0.32f) * timeScale * balance.enemyHpMultiplier * phaseHpScale;
+            static const float bossHp[6] = {1800.0f, 3300.0f, 6100.0f, 10500.0f, 4300.0f, 8200.0f};
+            m.maxHp = bossHp[bossType % 6] * (1.0f + std::min(1.0f, runTime / 480.0f) * 0.32f) * timeScale * balance.enemyHpMultiplier * phaseHpScale;
             m.maxHp *= getEnemyOathHpMultiplier();
             m.hp = m.maxHp;
             m.speed = 70.0f + bossType * 7.0f;
@@ -2520,8 +2523,8 @@ struct Game {
         } else {
             static const float baseHps[MONSTER_TYPE_COUNT]   = {28.0f, 48.0f, 42.0f, 52.0f, 115.0f, 68.0f, 84.0f, 135.0f, 72.0f, 190.0f, 112.0f, 18.0f};
             static const float baseSpds[MONSTER_TYPE_COUNT]  = {102.0f, 72.0f, 94.0f, 66.0f, 62.0f, 86.0f, 88.0f, 58.0f, 70.0f, 76.0f, 82.0f, 215.0f};
-            static const float baseDmgs[MONSTER_TYPE_COUNT]  = {9.0f,  12.0f, 12.0f, 14.0f, 19.0f, 16.0f, 16.0f, 21.0f, 15.0f, 24.0f, 11.0f, 6.0f};
-            static const float baseRads[MONSTER_TYPE_COUNT]  = {13.0f, 15.0f, 16.0f, 15.0f, 20.0f, 18.0f, 17.0f, 21.0f, 16.0f, 23.0f, 18.0f, 11.0f};
+            static const float baseDmgs[MONSTER_TYPE_COUNT]  = {9.0f,  12.0f, 12.0f, 14.0f, 19.0f, 16.0f, 16.0f, 21.0f, 15.0f, 24.0f, 11.0f, 5.0f};
+            static const float baseRads[MONSTER_TYPE_COUNT]  = {13.0f, 15.0f, 16.0f, 15.0f, 20.0f, 18.0f, 17.0f, 21.0f, 16.0f, 23.0f, 18.0f, 7.0f};
             const int safeType = std::max(0, std::min(MONSTER_TYPE_COUNT - 1, type));
             m.maxHp = baseHps[safeType] * timeScale * balance.enemyHpMultiplier * phaseHpScale * (isElite ? 3.2f : 1.0f);
             m.maxHp *= getEnemyOathHpMultiplier();
@@ -3427,19 +3430,19 @@ struct Game {
                 }
                 int bossGold = (int)roundf((180 + m.bossType * 120) * getGoldMultiplier());
                 save.gold += bossGold; runGold += bossGold;
-                if (gameMode == MODE_STORY && !m.isTrioBoss && CAMPAIGN_MISSIONS[selectedStoryMission].kind != 1) {
+                if (gameMode == MODE_STORY && !m.isTrioBoss && CAMPAIGN_MISSIONS[selectedStoryMission].kind != 1 && m.bossType < 4) {
                     static const char* sealLines[4] = {
                         "МОРГАР: «Я ОХРАНЯЛ ПРИКАЗ, А НЕ ЛЮДЕЙ». ПЕЧАТЬ I — ДОЛГ.",
                         "МАЛАКОР: «ЭТО ГОЛОС СЕСТРЫ. НО ЭТО НЕ ОНА». ПЕЧАТЬ II — ГОЛОС.",
                         "КАРДИНАЛ: «Я СТЁР ИМЕНА ИЗ КНИГ. ЛЮДИ ВСЁ РАВНО ПОМНИЛИ». ПЕЧАТЬ III — ИМЯ.",
                         "АЗАРОТ: «АРХИВ ХРАНИТ КОПИИ, НЕ ЛЮДЕЙ». ПЕЧАТЬ IV — СВИДЕТЕЛЬСТВО."
                     };
-                    const uint32_t storyBit = 1u << (m.bossType & 3);
+                    const uint32_t storyBit = 1u << (m.bossType % 4);
                     const bool firstSeal = (save.storySealMask & storyBit) == 0;
                     save.storySealMask |= storyBit;
                     save.storyEntryMask |= storyBit;
                     save.storyChapter = std::max(save.storyChapter, CAMPAIGN_MISSIONS[selectedStoryMission].act);
-                    if (firstSeal) announce(GMSG_SEAL_LORE, sealLines[m.bossType & 3], 7.0f);
+                    if (firstSeal) announce(GMSG_SEAL_LORE, sealLines[m.bossType % 4], 7.0f);
                 }
                 if (gameMode == MODE_STORY && m.isMissionFinalBoss) {
                     missionCompletePending = true;
@@ -4127,14 +4130,15 @@ struct Game {
                     bossTrioStarted = true;
                     bossTrioSpawned = 0;
                     trioBossesDefeated = 0;
-                    const int roster[3] = {0, 1, 2};
+                    const int roster[3] = {3, 4, 5}; // три последних стража, не те, что уже пали
                     for (int j = 0; j < 3; ++j) {
                         spawnMonster(roster[j], false, true, roster[j]);
                         if (monsters.back().isBoss) {
                             Monster& echo = monsters.back();
                             echo.hp *= 0.58f; echo.maxHp *= 0.58f; echo.isTrioBoss = true;
                             ++bossTrioSpawned;
-                            const uint32_t color = j == 0 ? 0xFFFFC848 : (j == 1 ? 0xFF72DB58 : 0xFFFF4B78);
+                            static const uint32_t echoPalette[3] = {0xFFFF7620, 0xFF49C8E8, 0xFF9EDBE8};
+                            const uint32_t color = echoPalette[j];
                             spawnParticles(echo.x, echo.y, 58, color, 205.0f, 4, true);
                             addShockwave(echo.x, echo.y, 145.0f, color, 0.86f);
                         }
@@ -4150,7 +4154,8 @@ struct Game {
                     if (monsters.back().isBoss) {
                         Monster& boss = monsters.back();
                         boss.isMissionFinalBoss = true;
-                        const uint32_t color = mission.bossType == 0 ? 0xFFFFC848 : (mission.bossType == 1 ? 0xFF80FF50 : (mission.bossType == 2 ? 0xFFFF4068 : 0xFFFF7620));
+                        static const uint32_t missionPalette[6] = {0xFFFFC848, 0xFF80FF50, 0xFFFF4068, 0xFFFF7620, 0xFF49C8E8, 0xFF9EDBE8};
+                        const uint32_t color = missionPalette[mission.bossType % 6];
                         spawnParticles(boss.x, boss.y, 85, color, 240.0f, 5, true);
                         spawnParticles(boss.x, boss.y, 45, 0xFFE8DCFF, 165.0f, 3, true);
                         addShockwave(boss.x, boss.y, 160.0f, color, 0.95f);
@@ -4165,21 +4170,24 @@ struct Game {
         } else {
             const float nextBossTime = 90.0f + nextBossIndex * 90.0f;
             if (runTime >= nextBossTime && bossSlotAvailable) {
-                const int bType = nextBossIndex % 4;
+                const int bType = nextBossIndex % 6;
                 ++nextBossIndex;
                 bossDeferredTimer = 0.0f;
                 clearArenaForBoss();
                 spawnMonster(bType, false, true, bType);
                 const Monster& arrivingBoss = monsters.back();
-                const uint32_t arrivalColor = bType == 0 ? 0xFFFFC848 : (bType == 1 ? 0xFF80FF50 : (bType == 2 ? 0xFFFF4068 : 0xFFFF7620));
+                static const uint32_t arrivalPalette[6] = {0xFFFFC848, 0xFF80FF50, 0xFFFF4068, 0xFFFF7620, 0xFF49C8E8, 0xFF9EDBE8};
+                const uint32_t arrivalColor = arrivalPalette[bType % 6];
                 spawnParticles(arrivingBoss.x, arrivingBoss.y, 85, arrivalColor, 240.0f, 5, true);
                 spawnParticles(arrivingBoss.x, arrivingBoss.y, 45, 0xFFE8DCFF, 165.0f, 3, true);
                 addShockwave(arrivingBoss.x, arrivingBoss.y, 160.0f, arrivalColor, 0.95f);
-                static const char* bNames[4] = {
+                static const char* bNames[6] = {
                     "МОРГАР — ВОРОТА НЕ ДОЛЖНЫ ОТКРЫТЬСЯ",
                     "МАЛАКОР — ПОСЛЕДНИЙ ГОЛОС СЕСТРЫ",
                     "КАРДИНАЛ — ИМЕНА ДОЛЖНЫ ЗАМОЛЧАТЬ",
-                    "АЗАРОТ — ПЕРВЫЙ АРХИВАРИУС"
+                    "АЗАРОТ — ПЕРВЫЙ АРХИВАРИУС",
+                    "ПРОТОКОЛИСТ — ВСЁ, ЧТО ЗАПИСАНО, ПОВТОРИТСЯ",
+                    "ДВОЙНИК — ТЫ УЖЕ БЫЛ ЗДЕСЬ"
                 };
                 bossWarningName = bNames[bType];
                 bossWarningTimer = 4.0f;
@@ -4327,22 +4335,26 @@ struct Game {
                     // heavy archive guards.
                     int summonType = 1, summonCount = 3;
                     float summonInterval = 6.2f;
-                    switch (m.bossType & 3) {
+                    switch (m.bossType % 6) {
                         case 0: summonType = 4; summonCount = 2; summonInterval = 7.4f; break;
                         case 1: summonType = 2; summonCount = 4; summonInterval = 5.2f; break;
                         case 2: summonType = 8; summonCount = 3; summonInterval = 6.4f; break;
+                        case 4: summonType = 3; summonCount = 4; summonInterval = 5.8f; break;
+                        case 5: summonType = 6; summonCount = 3; summonInterval = 6.1f; break;
                         default: summonType = 7; summonCount = 2; summonInterval = 6.9f; break;
                     }
                     m.specialTimer = std::max(3.6f, summonInterval - 0.9f * (m.bossPhase - 1));
                     pendingSummonType = summonType;
                     pendingSummons = std::max(pendingSummons, summonCount + (m.hp < m.maxHp * 0.5f ? 1 : 0));
-                    static const char* summonLines[4] = {
+                    static const char* summonLines[6] = {
                         "МОРГАР: ВЫЗОВ СТРАЖИ ВОРОТ!",
                         "МАЛАКОР: ПРИЗЫВ ЧУМНОЙ СТАИ!",
                         "КАРДИНАЛ: ПИСАРИ ЗАКРЫВАЮТ КРУГ!",
-                        "АЗАРОТ: ПЕПЕЛЬНЫЙ ЛЕГИОН, КО МНЕ!"
+                        "АЗАРОТ: ПЕПЕЛЬНЫЙ ЛЕГИОН, КО МНЕ!",
+                        "ПРОТОКОЛИСТ: СВИДЕТЕЛИ, ЗАЙМИТЕ СТРОКИ!",
+                        "ДВОЙНИК: СЛЕПКИ, ВСТАНЬТЕ РЯДОМ!"
                     };
-                    announce(GMSG_BOSS_SUMMON, summonLines[m.bossType & 3], 2.8f);
+                    announce(GMSG_BOSS_SUMMON, summonLines[m.bossType % 6], 2.8f);
                     sound.play(SFX_BOSS_TELEGRAPH, 0.28f);
                 }
 
@@ -4361,6 +4373,62 @@ struct Game {
                             if (len > 1.0f) { m.abilityDirX = tx / len; m.abilityDirY = ty / len; }
                             m.abilityActive = 0.78f;
                             spawnParticles(m.x, m.y, 20, 0xFFFF4B78, 190.0f, 4, true);
+                        } else if (m.bossType == 4) {
+                            // Протоколист пишет строку поперёк арены: вал снарядов идёт на
+                            // игрока, а в валу оставлен пробел там, где он стоял. Правило
+                            // «не куда отойти, а куда встать» — обратное кольцу Азарота.
+                            float tx = m.abilityTargetX - m.x, ty = m.abilityTargetY - m.y;
+                            float len = sqrtf(tx * tx + ty * ty);
+                            if (len < 1.0f) { tx = 1.0f; ty = 0.0f; len = 1.0f; }
+                            const float nx = tx / len, ny = ty / len;      // направление строки
+                            const float px = -ny, py = nx;                 // вдоль строки
+                            const float lateral = (playerY - m.y) * py + (playerX - m.x) * px;
+                            const float speed = 200.0f + m.bossPhase * 22.0f;
+                            const int span = 15;
+                            for (int i = 0; i < span; ++i) {
+                                const float off = lateral + (i - span / 2) * 26.0f;
+                                if (i == span / 2) continue;               // пробел в строке
+                                Projectile ep;
+                                ep.x = m.x + px * off - nx * 26.0f;
+                                ep.y = m.y + py * off - ny * 26.0f;
+                                ep.vx = nx * speed; ep.vy = ny * speed;
+                                ep.weaponId = 99; ep.projectileKind = 1; ep.isBossProjectile = true;
+                                ep.damage = m.damage * 0.45f;
+                                ep.radius = 5.0f; ep.life = 3.2f; ep.pierce = 1;
+                                ep.isEnemy = true; ep.isCrit = false;
+                                projectiles.push_back(ep);
+                            }
+                            addShockwave(m.x, m.y, 96.0f, 0xFF49C8E8, 0.40f);
+                            spawnParticles(m.x, m.y, 30, 0xFF49C8E8, 180.0f, 4, true);
+                        } else if (m.bossType == 5) {
+                            // Двойник меняется местами со своим отражением: тело уходит
+                            // сквозь игрока и появляется зеркально, сразу стреляя крестом
+                            // из двух точек. Правило «не стой на оси симметрии».
+                            const float oldX = m.x, oldY = m.y;
+                            m.x = playerX * 2.0f - oldX;
+                            m.y = playerY * 2.0f - oldY;
+                            spawnParticles(oldX, oldY, 34, 0xFF9EDBE8, 200.0f, 4, true);
+                            addShockwave(oldX, oldY, 84.0f, 0xFF9EDBE8, 0.45f);
+                            spawnParticles(m.x, m.y, 34, 0xFFB6E8F4, 200.0f, 4, true);
+                            addShockwave(m.x, m.y, 84.0f, 0xFFB6E8F4, 0.45f);
+                            const int cross = m.bossPhase >= 3 ? 10 : 8;
+                            const float crossSpeed = 235.0f + m.bossPhase * 18.0f;
+                            for (int side = 0; side < 2; ++side) {
+                                const float bx = side == 0 ? m.x : oldX;
+                                const float by = side == 0 ? m.y : oldY;
+                                for (int shot = 0; shot < cross; ++shot) {
+                                    const float a = shot * 6.2831853f / cross + (side == 0 ? 0.0f : 0.3141f);
+                                    Projectile ep;
+                                    ep.x = bx; ep.y = by;
+                                    ep.vx = cosf(a) * crossSpeed; ep.vy = sinf(a) * crossSpeed;
+                                    ep.weaponId = 99; ep.projectileKind = 5; ep.isBossProjectile = true;
+                                    ep.damage = m.damage * 0.42f;
+                                    ep.radius = 6.0f; ep.life = 2.2f; ep.pierce = 1;
+                                    ep.isEnemy = true; ep.isCrit = false;
+                                    projectiles.push_back(ep);
+                                }
+                            }
+                            m.abilityActive = 0.55f;
                         } else if (m.bossType == 0) {
                             // Моргар — ударная волна вокруг себя: правило «отойди из круга».
                             const float radius = m.bossPhase >= 3 ? 190.0f : 150.0f;
@@ -4401,13 +4469,15 @@ struct Game {
                         m.abilityWindup = 0.95f;
                         m.abilityTargetX = playerX;
                         m.abilityTargetY = playerY;
-                        static const char* abilityLines[4] = {
+                        static const char* abilityLines[6] = {
                             "МОРГАР: ЗАМАХ — УДАРНАЯ ВОЛНА! УЙДИ ИЗ КРУГА!",
                             "МАЛАКОР: МЕТКА ЧУМЫ! ВЫЙДИ ИЗ ЗЕЛЁНОЙ ЗОНЫ!",
                             "КАРДИНАЛ: РЫВОК ПО ЛИНИИ! СМЕНИ ПОЗИЦИЮ!",
-                            "АЗАРОТ: КОЛЬЦО ИСКР! НАЙДИ РАЗРЫВ!"
+                            "АЗАРОТ: КОЛЬЦО ИСКР! НАЙДИ РАЗРЫВ!",
+                            "ПРОТОКОЛИСТ: СТРОКА ПРОТОКОЛА! ВСТАНЬ В ПРОБЕЛ!",
+                            "ДВОЙНИК: ОБМЕН МЕСТАМИ! НЕ СТОЙ НА ОСИ!"
                         };
-                        announce(GMSG_BOSS_ABILITY, abilityLines[m.bossType & 3], 2.1f);
+                        announce(GMSG_BOSS_ABILITY, abilityLines[m.bossType % 6], 2.1f);
                         sound.play(SFX_BOSS_TELEGRAPH, 0.22f);
                     }
                 }
@@ -4421,12 +4491,15 @@ struct Game {
                 // Rats hold their heading. They are not pursuers: they run across the field,
                 // scurry around each other and leave. Contact still hurts.
                 m.ratLife -= dt;
-                const float sway = sinf(globalTime * 5.0f + m.ratPhase) * 0.34f;
-                const float rx = m.ratDirX - m.ratDirY * sway;
-                const float ry = m.ratDirY + m.ratDirX * sway;
+                // A rat runs straight with a small weave. The head swings, the path does not.
+                const float weave = sinf(globalTime * 2.1f + m.ratPhase) * 0.055f;
+                const float cosW = cosf(weave), sinW = sinf(weave);
+                const float rx = m.ratDirX * cosW - m.ratDirY * sinW;
+                const float ry = m.ratDirX * sinW + m.ratDirY * cosW;
                 float speed = m.speed * (m.freezeTimer > 0.0f ? 0.4f : 1.0f);
                 m.x += rx * speed * dt;
                 m.y += ry * speed * dt;
+                m.ratHeading = atan2f(m.ratDirY, m.ratDirX) + weave; // the body turns where it goes
                 m.facing = rx >= 0.0f ? 1 : -1;
                 const bool farAway = fabsf(m.x - playerX) > SCREEN_W * 0.5f + 180.0f ||
                                      fabsf(m.y - playerY) > SCREEN_H * 0.5f + 180.0f;
@@ -4530,13 +4603,15 @@ struct Game {
                     float spread = 0.12f;
                     float spiral = 0.0f;
                     if (m.isBoss) {
-                        switch (m.bossType & 3) {
+                        switch (m.bossType % 6) {
                             case 0: shots = 3; spread = 0.26f; break;  // Morgar: bolt volley
                             case 1: shots = 3; spread = 0.62f; break;  // Malakor: curse fan
                             case 2: shots = m.bossPhase >= 2 ? 2 : 1; spread = 0.13f; break; // Cardinal: single crescent
+                            case 4: shots = 2; spread = 0.0f; break;   // Protocolist: parallel ruled lines
+                            case 5: shots = m.bossPhase >= 2 ? 4 : 2; spread = 1.25f; break; // Double: mirrored pairs
                             default: shots = 2; spiral = 0.85f; break; // Azaroth: spiral
                         }
-                        if (m.bossPhase >= 3 && (m.bossType & 3) != 2) ++shots;
+                        if (m.bossPhase >= 3 && (m.bossType % 6) != 2) ++shots;
                     }
                     float aimX = playerX, aimY = playerY;
                     if (smartShooter) {
@@ -4838,7 +4913,7 @@ struct Game {
 
     int currentGameplayBossType() const {
         for (const Monster& m : monsters) if (m.isBoss && m.hp > 0.0f && m.isTrioBoss) return 3; // the finale uses Azarot's archive motif
-        for (const Monster& m : monsters) if (m.isBoss && m.hp > 0.0f) return m.bossType & 3;
+        for (const Monster& m : monsters) if (m.isBoss && m.hp > 0.0f) return m.bossType % 6;
         return 0;
     }
 
@@ -5317,7 +5392,8 @@ struct Game {
                 continue;
             }
             if (m.isBoss && m.abilityWindup > 0.0f) {
-                const uint32_t tellColor = m.bossType == 0 ? 0xFFFFC64A : (m.bossType == 1 ? 0xFF70E85F : (m.bossType == 2 ? 0xFFFF4E78 : 0xFFFF7948));
+                static const uint32_t tellPalette[6] = {0xFFFFC64A, 0xFF70E85F, 0xFFFF4E78, 0xFFFF7948, 0xFF62D8F0, 0xFFB6E8F4};
+                const uint32_t tellColor = tellPalette[m.bossType % 6];
                 if (m.bossType == 2) {
                     const int tx = (int)(m.abilityTargetX - camX), ty = (int)(m.abilityTargetY - camY);
                     r.drawLine(sx, sy, tx, ty, tellColor, 5, 150, true);
@@ -5364,7 +5440,8 @@ struct Game {
                 }
                 r.drawBossSprite(sx, sy, m.bossType, globalTime + m.animOffset, m.hitFlashTimer > 0.0f, m.bossPhase >= 3);
             } else {
-                r.drawMonsterSprite(sx, sy, m.type, globalTime + m.animOffset, m.hitFlashTimer > 0.0f, m.isElite, m.freezeTimer > 0.0f, m.facing < 0);
+                r.drawMonsterSprite(sx, sy, m.type, globalTime + m.animOffset, m.hitFlashTimer > 0.0f, m.isElite, m.freezeTimer > 0.0f, m.facing < 0,
+                                    m.isRat ? m.ratHeading : 0.0f);
                 if (m.isMatryoshka) {
                     const int pulse = 2 + (int)(2.0f * (1.0f + sinf(globalTime * 6.0f + m.animOffset)));
                     r.addGlow(sx, sy, (int)m.radius + 12, 0xFFFFC65E, 110);
@@ -5841,7 +5918,7 @@ struct Game {
             const float progress = 1.0f - bossPhaseEventTimer / 3.2f;
             const int alpha = std::max(0, std::min(235, (int)(235.0f * std::min(1.0f, progress * 7.0f) * std::min(1.0f, bossPhaseEventTimer * 3.0f))));
             snprintf(buf, sizeof(buf), "ФАЗА %s  •  %s  •  %s", roman[phase - 1], phaseNames[phase - 1],
-                     bossShort[bossPhaseEventType & 3]);
+                     bossShort[bossPhaseEventType % 6]);
             rows.push_back({buf, color, 0xFFFFFFFF, alpha});
         }
         if (huntActive) {
@@ -6085,8 +6162,10 @@ struct Game {
         int bossBars = 0;
         for (const auto& m : monsters) {
             if (!m.isBoss || m.hp <= 0.0f || bossBars >= 3) continue;
-            static const char* bNames[4] = {"МОРГАР • ВОРОТА", "МАЛАКОР • ГОЛОС", "КАРДИНАЛ • РЕЕСТР", "АЗАРОТ • АРХИВАРИУС"};
-            static const char* echoNames[4] = {"ЭХО: ВОРОТА", "ЭХО: ГОЛОС", "ЭХО: ИМЕНА", "ЭХО: СВИДЕТЕЛЬСТВО"};
+            static const char* bNames[6] = {"МОРГАР • ВОРОТА", "МАЛАКОР • ГОЛОС", "КАРДИНАЛ • РЕЕСТР", "АЗАРОТ • АРХИВАРИУС",
+                                            "ПРОТОКОЛИСТ • СТРОКИ", "ДВОЙНИК • СЛЕПОК"};
+            static const char* echoNames[6] = {"ЭХО: ВОРОТА", "ЭХО: ГОЛОС", "ЭХО: ИМЕНА", "ЭХО: СВИДЕТЕЛЬСТВО",
+                                               "ЭХО: СТРОКИ", "ЭХО: СЛЕПОК"};
             static const char* phaseRoman[3] = {"I", "II", "III"};
             static const char* phaseLabels[3] = {"ОХОТА", "НАТИСК", "ЯРОСТЬ"};
             const int phase = std::max(1, std::min(3, m.bossPhase));
@@ -6101,7 +6180,7 @@ struct Game {
             r.drawRoundedRect(bx, by, bw, bh, 4, phaseColor, 1);
             char bossLabel[128];
             snprintf(bossLabel, sizeof(bossLabel), "%s  •  ФАЗА %s — %s",
-                     m.isTrioBoss ? echoNames[m.bossType % 4] : bNames[m.bossType % 4],
+                     m.isTrioBoss ? echoNames[m.bossType % 6] : bNames[m.bossType % 6],
                      phaseRoman[phase - 1], phaseLabels[phase - 1]);
             r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, by + 1, bossLabel, 0xFFFFFFFF);
             ++bossBars;
@@ -6993,18 +7072,19 @@ struct Game {
 
         const int frame = ((int)(globalTime * 3.0f)) & 1;
         r.drawBakedSpriteScaled(HERO_SPRITES[selectedHero % 5][frame], x + 56, y + h - 106, 66, 80, 245);
+        // The dossier card shows the same guardians the fight does, drawn by the same
+        // routine, so the briefing picture can never disagree with the arena.
         if (CAMPAIGN_MISSIONS[missionIndex].kind == 1) {
-            const int sizes[3] = {118, 136, 118};
+            const float scales[3] = {0.72f, 0.86f, 0.72f};
             const int centers[3] = {x + w - 250, x + w - 164, x + w - 76};
+            const int roster[3] = {3, 4, 5};
             for (int i = 0; i < 3; ++i)
-                r.drawBakedSpriteScaled(BOSS_SPRITES[i][frame], centers[i] - sizes[i] / 2,
-                                        y + h - sizes[i] - 8, sizes[i], sizes[i], 248);
+                r.drawBossFigure(centers[i], y + h - 14 - (int)(62.0f * scales[i]), roster[i],
+                                 globalTime + i * 0.6f, false, false, true, scales[i]);
         } else {
-            const int bossSize = 174;
             r.addGlow(x + w - 136, y + h - 104, 90, accent, 74);
-            r.drawBakedSpriteScaled(BOSS_SPRITES[CAMPAIGN_MISSIONS[missionIndex].bossType & 3][frame],
-                                    x + w - bossSize - 34, y + h - bossSize - 5,
-                                    bossSize, bossSize, 252);
+            r.drawBossFigure(x + w - 136, y + h - 66,
+                             CAMPAIGN_MISSIONS[missionIndex].bossType % 6, globalTime, false, false, false, 1.02f);
         }
         r.drawRoundedRect(x, y, w, h, 10, accent, 1, 210);
     }
@@ -7951,6 +8031,7 @@ struct Game {
             "2.9.83 • ВЕРСИЯ, КАМПАНИЯ, СТРАЖИ",
             "2.9.84 • ЦВЕТ И КРЫСЫ",
             "2.9.85 • ГОЛОС ДЕЛА И ВТОРАЯ ДЕСЯТКА",
+            "2.9.86 • ШЕСТЬ СТРАЖЕЙ И ИИ-ИКОНКИ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -8033,6 +8114,7 @@ struct Game {
             "Номер версии больше не берётся из локального файла: его читает src/version.h, поэтому сборка, заголовок окна и хроника больше не расходятся.\n• Кампания открывается на последнем доступном деле, а не на первом.\n• У каждого стража свой набор атак: Моргар бьёт волной и зовёт щитоносцев, Малакор льёт чуму и пускает самонаводящиеся сгустки, Кардинал идёт на рывок с узким веером, Азарот выпускает кольцо искр с проходом и спираль. Общих приёмов больше нет.",
             "Третий стиль иконок — «ЦВЕТ»: клинки синие, шар оранжевый, вихрь фиолетовый, молния золотая, аура алая, топор стальной, лёд бирюзовый, книга костяная, сапоги зелёные, магнит пурпурный. Один предмет — один цвет и один силуэт; остальные тридцать предметов — рунные печати в том же цвете.\n• Новая угроза: крысиная стая. Крысы не преследуют — они пересекают арену по прямой линией, кусают на бегу и уходят; их можно фармить по дороге.",
             "Описания дел озвучены: у каждого Дела своя запись, она читается при выборе дела и при старте. Записаны первые десять; остальные пока читает общая фраза.\n• Вторая десятка иконок «ЦВЕТ» готова: сердце, перчатка, часы, монета, перо, око, печать, осколок луны, линза и рассвет.",
+            "Шесть стражей вместо трёх: каждый акт получил своего.\n• Моргар — волна по кругу и щит: правило «выйди из радиуса».\n• Малакор — зоны чумы и наводящиеся сгустки.\n• Кардинал — рывок по линии с узким веером.\n• Азарот — кольцо искр с прорезью и спираль.\n• Протоколист — вал строк поперёк арены с пробелом: надо не отойти, а встать в пробел.\n• Двойник — меняется местами с отражением и бьёт крестом из двух точек.\n• Все шесть нарисованы по-разному: скрижали, капюшон с колбой, шляпа и книга, парящее ядро, стойка с раскрытым томом, два стеклянных слепка.\n• Иконки «ЦВЕТ» для первых десяти предметов — нарисованные ИИ картинки с одним заданным тоном, а не код.\n• Крысы стали мельче, идут ровнее и разворачиваются по ходу движения.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
