@@ -15,6 +15,10 @@
 # bossType: 0 Моргар (ударная волна), 1 Малакор (зоны чумы), 2 Кардинал (рывок по линии),
 #           3 Азарот (кольцо с разрывом), 4 Протоколист (вал строк), 5 Двойник (обмен местами).
 #           Каждый тип — своя фигура, свои снаряды и свой принцип уклонения.
+# reinforced: страж возвращается во второй раз — тот же силуэт, но злее: больше
+#           HP, быстрее, начинает со второй фазы и зовёт больше помощи. Так сюжет
+#           позволяет сводить игрока с уже знакомыми стражами без новых пейзажей,
+#           и это честно подписано в досье дела.
 # prereq: индексы миссий (0-based), которые должны быть пройдены; None = нет требований
 MISSIONS = [
     # ---------------- АКТ I. ПЕПЕЛ НА СТОЛЕ ----------------
@@ -115,11 +119,11 @@ MISSIONS = [
     dict(act=4, case="023", title="СОХРАНИТЬ КОПИЮ", subtitle="ВЫБОР • ПАМЯТЬ ВМЕСТО ЧЕЛОВЕКА",
          briefing="Копия сестры Малакора всё ещё в Архиве. Сжечь — и он потеряет последнее, что звучит её голосом. Сохранить — и Архив получит право решать, кого помнить.",
          objective="ЗАЩИТИ АРХИВ ОТ ЗАЧИСТКИ", boss="ИНСПЕКТОР ЗАЧИСТКИ",
-         duration=230, bossTime=170, bossType=0, seals=0x07, prereq=[21], kind=3),
+         duration=230, bossTime=170, bossType=0, seals=0x07, prereq=[21], kind=3, reinforced=True),
     dict(act=4, case="024", title="СЖЕЧЬ КОПИЮ", subtitle="ВЫБОР • ПРАВО НА УТРАТУ",
          briefing="Копия сестры Малакора всё ещё в Архиве. Некоторые вещи должны умереть полностью, иначе живые не смогут отпустить.",
          objective="УНИЧТОЖЬ КОПИЮ • ВОЗЬМИ ПЕПЕЛ", boss="ХРАНИТЕЛЬ КОПИЙ",
-         duration=230, bossTime=170, bossType=5, seals=0x07, prereq=[21], kind=3),
+         duration=230, bossTime=170, bossType=5, seals=0x07, prereq=[21], kind=3, reinforced=True),
 
     # ---------------- АКТ V. СЕРДЦЕ АРХИВА ----------------
     dict(act=5, case="025", title="РЕЗЕРВНАЯ КОПИЯ ПРИКАЗА", subtitle="АРХИВ ЗАЩИЩАЕТ СЕБЯ",
@@ -133,11 +137,11 @@ MISSIONS = [
     dict(act=5, case="027", title="ПОСЛЕДНЯЯ НОЧЬ", subtitle="КОЛЬЦО РАЗМЫКАЕТСЯ",
          briefing="Контур разомкнут, но ночь ещё держится. Последний бой не вернёт погибших — он вернёт живым право помнить самим.",
          objective="УДЕРЖИ КОЛЬЦО • ДОЖДИСЬ РАССВЕТА", boss="ПОСЛЕДНИЙ ПРИКАЗ",
-         duration=260, bossTime=190, bossType=0, seals=0x0F, prereq=[25], kind=0),
+         duration=260, bossTime=190, bossType=0, seals=0x0F, prereq=[25], kind=0, reinforced=True),
     dict(act=5, case="028", title="ПРАВО ПОМНИТЬ", subtitle="ДЕЛО ЗАКРЫТО",
          briefing="Дело закрыто, а не выиграно. Мёртвые остались мёртвыми. Живые снова могут помнить их без разрешения машины.",
          objective="ЗАКРОЙ ДЕЛО", boss="ПОСЛЕДНИЙ СВИДЕТЕЛЬ",
-         duration=240, bossTime=180, bossType=5, seals=0x0F, prereq=[26], kind=0),
+         duration=240, bossTime=180, bossType=5, seals=0x0F, prereq=[26], kind=0, reinforced=True),
 ]
 
 ACTS = {
@@ -156,13 +160,14 @@ def cpp_rows():
         out.append(
             '    {{"{title}", "{subtitle}", "{briefing}", "{objective}", "{boss}", '
             "{duration}, {bossTime}, {bossType}, {act}, 0x{seals:02X}u, {trio}, "
-            "{act2}, {kind}, {preA}, {preB}}}".format(
+            "{act2}, {kind}, {preA}, {preB}, {rein}}}".format(
                 title=m["title"], subtitle=m["subtitle"],
                 briefing=m["briefing"].replace('"', '\\"'),
                 objective=m["objective"], boss=m["boss"],
                 duration=m["duration"], bossTime=m["bossTime"], bossType=m["bossType"],
                 act=m["act"], seals=m["seals"], trio="true" if m["kind"] == 1 else "false",
-                act2=m["act"], kind=m["kind"], preA=pre[0], preB=pre[1]) + ",")
+                act2=m["act"], kind=m["kind"], preA=pre[0], preB=pre[1],
+                rein="true" if m.get("reinforced") else "false") + ",")
     return "\n".join(out)
 
 

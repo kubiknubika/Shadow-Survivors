@@ -1088,7 +1088,8 @@ struct Renderer {
         }
     }
 
-    void drawBossSprite(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged = false) {
+    void drawBossSprite(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged = false,
+                        bool reinforced = false) {
         int auraRad = 40 + (int)(sinf(animTime * 7.0f) * 5.0f);
         static const uint32_t auraPalette[6] = {0xFFFFB028, 0xFF80FF40, 0xFFFF3068, 0xFFFF6818, 0xFF49C8E8, 0xFF9EDBE8};
         const int bossId = bossType % 6;
@@ -1142,6 +1143,21 @@ struct Renderer {
             // Двойник: two overlapping sigil rings, half a turn out of phase.
             drawCircleRing(cx - 12, cy + 24, (int)(auraRad * 0.7f), 1, auraCol, 95, true);
             drawCircleRing(cx + 12, cy + 24, (int)(auraRad * 0.7f), 1, auraCol, 95, true);
+        }
+        if (reinforced) {
+            // Возвращение: второй, более широкий и медленный контур и корона осколков.
+            // Достаточно, чтобы ветерана было видно с первого кадра, но силуэт не
+            // перекрывался — игрок должен узнать стража, а не гадать, кто это.
+            const int outer = (int)(auraRad * 1.5f) + 8;
+            drawCircleRing(cx, cy + 24, outer, 2, 0xFFFF3A5A, 150, true);
+            for (int i = 0; i < 8; ++i) {
+                const float a = -animTime * 0.9f + i * 0.7853982f;
+                const int rr = outer + 6;
+                const int px = cx + (int)(cosf(a) * rr);
+                const int py = cy + 24 + (int)(sinf(a) * rr * 0.42f);
+                drawLine(px - 3, py - 3, px + 3, py + 3, 0xFFFF6A80, 2, 190, true);
+                drawLine(px + 3, py - 3, px - 3, py + 3, 0xFFFF6A80, 2, 190, true);
+            }
         }
         addGlow(cx, cy, 62, auraCol, enraged ? 190 : 140);
         drawShadow(cx, cy + 50, 36, 12);
