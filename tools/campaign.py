@@ -20,7 +20,7 @@
 #           позволяет сводить игрока с уже знакомыми стражами без новых пейзажей,
 #           и это честно подписано в досье дела.
 # prereq: индексы миссий (0-based), которые должны быть пройдены; None = нет требований
-MISSIONS = [
+_LEGACY = [
     # ---------------- АКТ I. ПЕПЕЛ НА СТОЛЕ ----------------
     dict(act=1, case="001", title="ПЕПЕЛЬНЫЙ ПРОТОКОЛ", subtitle="УЧАСТОК У ВОРОТ",
          briefing="Первое дело после бури. Пепел на участке лежит слишком ровно — кто-то накрыл место до меня. Дозор у ворот ещё двигается, но уже не отвечает.",
@@ -144,6 +144,75 @@ MISSIONS = [
          duration=240, bossTime=180, bossType=5, seals=0x0F, prereq=[26], kind=0, reinforced=True),
 ]
 
+# ── Новая кампания: два следа вместо линейки ────────────────────────────────────
+# Прежние 28 дел были цепочкой: пара «ВЕТКА А / ВЕТКА Б» сходилась в следующем же
+# деле, поэтому выбор ничего не менял — игрок проходил почти все дела подряд.
+# Теперь после акта I игрок ВЫБИРАЕТ СЛЕД, и дальше это два разных прохождения:
+#
+#   акт I   — 4 общих дела (0–3), заканчивается печатью Долга;
+#   выбор   — «СВИДЕТЕЛЬ» (track 1) или «КОПИЯ» (track 2);
+#   акты II–IV — по 12 дел в каждом следе, у каждого следа свои стражи и свои печати;
+#   акт V   — 4 общих дела, куда сходятся оба следа.
+#
+# Каждая строка раскладки: (источник текста, акт, след, пререквизиты, kind, печати, reinforced).
+# Текст берётся из _LEGACY целиком, поэтому записанная озвучка остаётся той же:
+# поле brief — это номер старого клипа mission_brief_NN.wav (-1 = файла нет).
+_LAYOUT = [
+    # ── Акт I. Пепел на столе: общее начало, выбор следа ещё впереди ──────────
+    #      (текст, акт, след, пререквизиты, kind, печати, злее)
+    (0,  1, 0, [],        0, 0x00, False),  # 01 ПЕПЕЛЬНЫЙ ПРОТОКОЛ
+    (1,  1, 0, [0],       0, 0x00, False),  # 02 СВИДЕТЕЛЬ БЕЗ ИМЕНИ
+    (2,  1, 0, [1],       0, 0x00, False),  # 03 ТРИ КОЛОКОЛА
+    (3,  1, 0, [2],       0, 0x00, False),  # 04 ВОРОТА ДОЛГА
+
+    # ── След А «СВИДЕТЕЛЬ»: идём по живым — показания, списки, реестр ────────
+    (4,  2, 1, [3],       0, 0x01, False),  # 05 ПРОТОКОЛ ЭВАКУАЦИИ
+    (7,  2, 1, [4],       0, 0x01, False),  # 06 СЕСТРА, КОТОРАЯ НЕ СЛЫШИТ
+    (15, 2, 1, [5],       0, 0x01, False),  # 07 ДЕЛО О СЕМИ СЕМЬЯХ
+    (11, 2, 1, [6],       0, 0x01, False),  # 08 ПЕЧАТЬ ГОЛОСА
+    (12, 3, 1, [7],       0, 0x03, False),  # 09 ЗАТОПЛЕННЫЙ РЕЕСТР
+    (13, 3, 1, [8],       0, 0x03, False),  # 10 ИМЯ НА КАМНЕ
+    (17, 3, 1, [9],       0, 0x03, False),  # 11 ПЕЧАТЬ ИМЕНИ
+    (18, 4, 1, [10],      0, 0x07, False),  # 12 ПЕПЕЛЬНЫЙ ТРОН
+    (14, 4, 1, [11],      0, 0x07, False),  # 13 ПИСАРЬ, КОТОРЫЙ СТЁР СЕБЯ
+    (21, 4, 1, [12],      0, 0x07, False),  # 14 ПЕЧАТЬ СВИДЕТЕЛЬСТВА
+
+    # ── След Б «КОПИЯ»: идём по машинам — колбы, слепки, двойники ────────────
+    (5,  2, 2, [3],       0, 0x01, False),  # 15 ПУСТЫЕ НАРУЧНИКИ
+    (6,  2, 2, [14],      0, 0x01, False),  # 16 КРИПТА ГОЛОСОВ
+    (9,  2, 2, [15],      0, 0x01, False),  # 17 ТЁПЛЫЙ СЛЕД
+    (11, 2, 2, [16],      0, 0x01, False),  # 18 ПЕЧАТЬ ГОЛОСА
+    (16, 3, 2, [17],      0, 0x03, False),  # 19 ДЕЛО О ПУСТЫХ СТРАНИЦАХ
+    (8,  3, 2, [18],      0, 0x03, False),  # 20 ХОЛОДНЫЙ СЛЕД
+    (10, 3, 2, [19],      0, 0x03, False),  # 21 КОЛБА № 9
+    (19, 4, 2, [20],      2, 0x07, False),  # 22 КОПИЯ СВИДЕТЕЛЯ
+    (20, 4, 2, [21],      0, 0x07, False),  # 23 ДОПРОС МАШИНЫ
+    (21, 4, 2, [22],      0, 0x07, False),  # 24 ПЕЧАТЬ СВИДЕТЕЛЬСТВА
+
+    # ── Акт V. Сердце Архива: общий финал, здесь же выбор про копию ──────────
+    (24, 5, 0, [13, 23],  2, 0x0F, False),  # 25 РЕЗЕРВНАЯ КОПИЯ ПРИКАЗА
+    (25, 5, 0, [24],      1, 0x0F, False),  # 26 ТРИ ЭХО-ПРИКАЗА
+    (26, 5, 0, [25],      0, 0x0F, False),  # 27 ПОСЛЕДНЯЯ НОЧЬ
+    (22, 5, 0, [26],      3, 0x0F, False),  # 28 СОХРАНИТЬ КОПИЮ
+    (23, 5, 0, [26],      3, 0x0F, False),  # 29 СЖЕЧЬ КОПИЮ
+    (27, 5, 0, [27, 28],  0, 0x0F, True),   # 30 ПРАВО ПОМНИТЬ
+]
+
+# Следы: 0 — общее дело, 1 — «СВИДЕТЕЛЬ», 2 — «КОПИЯ».
+TRACKS = {0: ("ОБЩЕЕ", "общее для обоих следов"),
+          1: ("СВИДЕТЕЛЬ", "идти по живым: показания, списки, реестр"),
+          2: ("КОПИЯ", "идти по машинам: колбы, слепки, двойники")}
+
+MISSIONS = []
+for order, (src, act, track, prereq, kind, seals, reinforced) in enumerate(_LAYOUT):
+    base = dict(_LEGACY[src])
+    base.update(act=act, track=track, prereq=list(prereq), kind=kind,
+                seals=seals, reinforced=reinforced, brief=src,
+                case="%03d" % (order + 1))
+    if track:
+        base["subtitle"] = "СЛЕД %s • %s" % ("А" if track == 1 else "Б", TRACKS[track][0])
+    MISSIONS.append(base)
+
 ACTS = {
     1: ("ПЕПЕЛ НА СТОЛЕ", "Первые дела: участок у ворот, свидетель без имени, три удара колокола."),
     2: ("ГОЛОС В КОЛБЕ", "Крипта, колбы и копия, которая отвечает правильно и не понимает вопросов."),
@@ -160,14 +229,15 @@ def cpp_rows():
         out.append(
             '    {{"{title}", "{subtitle}", "{briefing}", "{objective}", "{boss}", '
             "{duration}, {bossTime}, {bossType}, {act}, 0x{seals:02X}u, {trio}, "
-            "{act2}, {kind}, {preA}, {preB}, {rein}}}".format(
+            "{act2}, {kind}, {preA}, {preB}, {rein}, {track}, {brief}}}".format(
                 title=m["title"], subtitle=m["subtitle"],
                 briefing=m["briefing"].replace('"', '\\"'),
                 objective=m["objective"], boss=m["boss"],
                 duration=m["duration"], bossTime=m["bossTime"], bossType=m["bossType"],
                 act=m["act"], seals=m["seals"], trio="true" if m["kind"] == 1 else "false",
                 act2=m["act"], kind=m["kind"], preA=pre[0], preB=pre[1],
-                rein="true" if m.get("reinforced") else "false") + ",")
+                rein="true" if m.get("reinforced") else "false",
+                track=m.get("track", 0), brief=m.get("brief", -1)) + ",")
     return "\n".join(out)
 
 
@@ -191,14 +261,45 @@ def check():
             if p >= i:
                 print(f"! миссия {i + 1} ссылается вперёд на {p + 1}")
                 problems += 1
+    # В актах с развилкой дел вдвое больше, но лежат они в двух колонках-следах,
+    # поэтому в одной колонке не должно быть больше CAMPAIGN_ACT_MAX_ROWS строк.
     for act in range(1, 6):
-        n = sum(1 for m in MISSIONS if m["act"] == act)
-        if n == 0:
+        rows = {}
+        for m in MISSIONS:
+            if m["act"] == act:
+                t = m.get("track", 0)
+                rows[t] = rows.get(t, 0) + 1
+        if not rows:
             print(f"! акт {act} пуст")
             problems += 1
-        elif n > 6:
-            print(f"! акт {act}: {n} миссий — в списке помещается 6")
+        for track, n in sorted(rows.items()):
+            if n > 6:
+                print(f"! акт {act}, след {track}: {n} дел — в колонке помещается 6")
+                problems += 1
+    # У каждого следа должен быть путь до финала, иначе выбор ветки снова тупик.
+    final = next(m for m in MISSIONS if m["act"] == 5)
+    for track in (1, 2):
+        last = [i for i, m in enumerate(MISSIONS)
+                if m.get("track") == track and m["act"] == 4]
+        if not last:
+            print(f"! след {track} не доходит до конца акта IV")
             problems += 1
+        elif max(last) not in final["prereq"]:
+            print(f"! финал не открывается следом {track}")
+            problems += 1
+        runs = (sum(1 for m in MISSIONS if m["act"] == 1) +
+                sum(1 for m in MISSIONS if m.get("track") == track) +
+                sum(1 for m in MISSIONS if m["act"] == 5))
+        print(f"  прохождение по следу {track}: {runs} дел")
+    # Каждый прежний текст должен найти себе место: иначе пропадёт записанный голос.
+    for old in range(len(_LEGACY)):
+        places = [i for i, m in enumerate(MISSIONS) if m["brief"] == old]
+        if not places:
+            print(f"! текст {old:02d} «{_LEGACY[old]['title']}» никуда не попал")
+            problems += 1
+    if len(MISSIONS) > 32:
+        print(f"! {len(MISSIONS)} дел не влезают в 32-битную маску сейва")
+        problems += 1
     print(f"миссий: {len(MISSIONS)}")
     for act in range(1, 6):
         print(f"  акт {act}: {sum(1 for m in MISSIONS if m['act'] == act)}")
