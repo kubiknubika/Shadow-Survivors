@@ -17,7 +17,7 @@ cd /d "%~dp0"
 
 rem Bump this with the version: it is the fastest way to tell a freshly
 rem downloaded updater from a cached old one in the console and in the log.
-set "SELF=2.10.12"
+set "SELF=2.10.13"
 set "TARGET=main"
 set "REMOTE=origin"
 set "SRC=%cd%\src"
