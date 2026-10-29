@@ -31,6 +31,27 @@ def read(path):
         return fh.read()
 
 
+def updater_problems():
+    """Проверки update.bat через его сборщик: кодировка, метки, номер."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import build_update_bat
+    except ImportError:
+        return []
+    problems = [f"update.bat: {p}" for p in build_update_bat.collect_problems()]
+    expected = build_update_bat.build_bytes()
+    current = None
+    if os.path.exists(build_update_bat.OUT):
+        with open(build_update_bat.OUT, "rb") as fh:
+            current = fh.read()
+    if expected is not None and current != expected:
+        problems.append("update.bat: файл не совпадает с tools/update_bat_src.txt "
+                        "(python3 tools/build_update_bat.py)")
+    return problems
+
+
 def main(argv):
     strict = "--strict" in argv
     problems = []
@@ -76,6 +97,10 @@ def main(argv):
     section = re.search(r"^## (" + SEMVER + r")", changelog, re.M)
     if section and section.group(1) != version:
         problems.append(f"первая секция CHANGELOG.md про {section.group(1)}, а версия {version}")
+
+    # Апдейтер: исходник в UTF-8, сам файл в cp866. Если он разъехался или в
+    # тексте появилась буква, которой в cp866 нет, игрок увидит крякозябры.
+    problems += updater_problems()
 
     print(f"версия: {version}   код: {number}   последняя запись хроники: {last_version}   "
           f"CHANGELOG: {section.group(1) if section else '—'}")

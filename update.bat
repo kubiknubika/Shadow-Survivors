@@ -1,27 +1,34 @@
 @echo off
-chcp 866 >nul
 rem ============================================================================
 rem  Shadow Survivors updater.
 rem
-rem  Файл записан в cp866 - иначе вместо русского текста в консоли кракозябры:
-rem  cmd.exe читает .bat в кодовой странице консоли, а не в UTF-8. Из-за этого
-rem  раньше вывод ломался, и куски строк выполнялись как команды.
-rem  Русский текст встречается только в echo и rem: все команды - ASCII.
-rem  Многострочные if ( ... ) с русским внутри ломаются, как в build_windows.bat.
+rem  ЭТО СГЕНЕРИРОВАННЫЙ ФАЙЛ. Правь tools/update_bat_src.txt (обычный UTF-8),
+rem  потом:  python3 tools/build_update_bat.py
 rem
-rem  Любой выход завершается паузой и записью build\update.log, чтобы окно
-rem  не исчезало раньше, чем видна причина.
+rem  Почему так. cmd.exe читает .bat в кодовой странице консоли, а не в UTF-8:
+rem  файл, сохранённый редактором в UTF-8, показывает русский текст крякозябрами,
+rem  а часть строк вообще выполняет как команды. Поэтому update.bat лежит в cp866,
+rem  а исходник - в UTF-8, где редактор ничего не испортит. Сборщик проверяет,
+rem  что каждая буква влезает в cp866, и что кириллица стоит только в echo и rem.
 rem
-rem  Сеть, ветка и pull не обрывают работу: если обновиться не удалось,
-rem  апдейтер собирает то, что уже лежит на диске, - игра всё равно запустится.
+rem  Русский текст встречается только в echo и rem. Все команды - ASCII,
+rem  многострочных if ( ... ) с русским внутри нет.
+rem
+rem  Ветка для сборки выбирается сама: main или ветка arena/* с самой свежей
+rem  версией в src/version.h. Свою ветку можно задать аргументом:
+rem      update.bat arena/dad71989-shadow-survivors
+rem
+rem  Любой выход ставит паузу и пишет build\update.log.
 rem ============================================================================
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
-rem Версия самого апдейтера: по ней видно, свежий файл скачан или старый.
-set "SELF=2.10.15"
-set "TARGET=main"
+rem Своя версия: по ней видно, свежий файл запущен или закешированный.
+set "SELF=2.10.20"
+set SELF_VER=2.10.20
 set "REMOTE=origin"
+set "WANT=%~1"
+set "FORCED="
 set "SRC=%cd%\src"
 set "BUILD=%cd%\build"
 set "LOG=%BUILD%\update.log"
@@ -29,21 +36,51 @@ set "STEP=%BUILD%\update_step.log"
 set "KEEP=%BUILD%\update.local.bat"
 set "HOLD=1"
 set "STASHED="
-if /i "%~1"=="/nopause" set "HOLD=0"
+set "TARGET=main"
+set "TARGET_REF=origin/main"
+if /i "!WANT!"=="/nopause" set "WANT="
+if /i "!WANT!"=="/nopause" set "HOLD=0"
+if defined WANT set "FORCED=1"
+
+rem --- кодовая страница -------------------------------------------------------
+rem Прежнюю запоминаем, чтобы вернуть её на выходе.
+set "CP_OLD="
+for /f "tokens=2 delims=:" %%c in ('chcp') do set "CP_OLD=%%c"
+if defined CP_OLD set "CP_OLD=!CP_OLD: =!"
+chcp 866 >nul 2>&1
+
+rem --- проверка кодировки самого файла ----------------------------------------
+rem В cp866 слово "Ветка" занимает 5 байт, и cmd прочитает ровно 5 символов.
+rem Те же буквы в UTF-8 дают 10 байт и 10 символов: хвост с пятого не пуст.
+set "PROBE=Ветка"
+if "!PROBE:~5!"=="" goto encoding_ok
+echo WARNING: update.bat is stored in the wrong encoding, so Russian is unreadable.
+echo Expected cp866 (DOS Cyrillic); this file looks like UTF-8 instead.
+echo Trying to restore the file from the repository...
+git checkout -- update.bat >nul 2>&1
+echo.
+echo Close this window and start update.bat again.
+echo If the text is still broken, take the fresh file by hand:
+echo   git fetch origin
+echo   git checkout origin/arena/dad71989-shadow-survivors -- update.bat
+echo The same file lies in the repository root on GitHub.
+if "!HOLD!"=="1" pause
+exit /b 2
+:encoding_ok
 
 if exist "%BUILD%" goto have_build
 mkdir "%BUILD%" >nul 2>&1
 :have_build
 > "%LOG%" echo === Shadow Survivors updater ===
-set "HERE=%cd%"
->> "%LOG%" echo %DATE% %TIME%   folder: !HERE!
+>> "%LOG%" echo %DATE% %TIME%   folder: %cd%
+>> "%LOG%" echo updater: SELF=!SELF! codepage: !CP_OLD!
 >> "%LOG%" echo версия апдейтера: !SELF!
 
 echo === Shadow Survivors: обновление ===
 echo версия апдейтера: !SELF!
 echo.
 
-rem --- проверки окружения ---------------------------------------------------
+rem --- проверки окружения ----------------------------------------------------
 if exist "%SRC%\version.h" goto have_src
 echo ОШИБКА: рядом нет папки src\version.h.
 echo Запусти update.bat из корня игры, а не из другой папки.
@@ -71,8 +108,8 @@ echo Ветка: !BRANCH!, коммит !HEAD_BEFORE!, версия !VER_BEFORE!
 >> "%LOG%" echo current: branch=!BRANCH! commit=!HEAD_BEFORE! version=!VER_BEFORE!
 echo.
 
-rem --- 1/4: свежие данные с GitHub -----------------------------------------
-echo [1/4] git fetch --all --prune
+rem --- 1/5: свежие данные с GitHub --------------------------------------------
+echo [1/5] git fetch --all --prune
 git fetch --all --prune > "%STEP%" 2>&1
 if not errorlevel 1 goto fetched
 echo ОШИБКА: не удалось связаться с GitHub. Проверь сеть и адрес remote:
@@ -80,32 +117,68 @@ echo   git remote -v
 type "%STEP%"
 echo Собираю то, что уже скачано, без обновления.
 >> "%LOG%" echo offline: fetch failed
+if defined FORCED set "TARGET=!WANT!"
+if not defined FORCED set "TARGET=main"
+set "TARGET_REF=%REMOTE%/!TARGET!"
 goto offline_build
 :fetched
 
-git show !REMOTE!/!TARGET!:src/version.h > "%STEP%.h" 2>nul
-if not errorlevel 1 goto have_remote
-echo ВНИМАНИЕ: на !REMOTE! нет ветки !TARGET!. Доступны такие:
+rem --- 2/5: выбор ветки для сборки --------------------------------------------
+rem Игра живёт в ветках сессий, а main часто отстаёт. Поэтому берём ту ветку
+rem из origin, где в src/version.h самая свежая версия.
+echo.
+if defined FORCED goto target_forced
+set "BESTVER="
+set "MAINVER="
+set "TARGET="
+set "TARGET_REF="
+call :consider origin/main
+for /f "tokens=1,2" %%a in ('git branch -r 2^>nul') do call :consider %%a %%b
+if not defined BESTVER goto no_remote
+if /i "!TARGET!"=="main" goto target_ready
+echo [2/5] ветка !TARGET!: версия !BESTVER!, в main !MAINVER!
+echo Собираю самую свежую ветку, а не main.
+>> "%LOG%" echo target: !TARGET_REF! version=!BESTVER! main=!MAINVER!
+goto target_ready
+
+:target_forced
+set "TARGET=!WANT!"
+set "TARGET_REF=%REMOTE%/!TARGET!"
+echo [2/5] ветка !TARGET!, задана вручную.
+git show !TARGET_REF!:src/version.h > "%STEP%.h" 2>nul
+if errorlevel 1 goto no_remote
+for /f "tokens=3" %%v in ('findstr /c:"#define GAME_VERSION " "%STEP%.h"') do set "BESTVER=%%~v"
+del "%STEP%.h" >nul 2>&1
+goto target_ready
+
+:no_remote
+echo ВНИМАНИЕ: не нашёл src/version.h ни в main, ни в ветках arena/*.
+echo Доступные ветки:
 git branch -r
 echo Собираю то, что уже скачано, без обновления.
 >> "%LOG%" echo offline: no remote branch
+if not defined TARGET set "TARGET=main"
+set "TARGET_REF=%REMOTE%/!TARGET!"
 goto offline_build
-:have_remote
+
+:target_ready
+git show !TARGET_REF!:src/version.h > "%STEP%.h" 2>nul
+if errorlevel 1 goto no_remote
 for /f "tokens=3" %%v in ('findstr /c:"#define GAME_VERSION " "%STEP%.h"') do set "VER_REMOTE=%%~v"
-for /f "delims=" %%c in ('git rev-parse --short !REMOTE!/!TARGET!') do set "HEAD_REMOTE=%%c"
+for /f "delims=" %%c in ('git rev-parse --short !TARGET_REF!') do set "HEAD_REMOTE=%%c"
 del "%STEP%.h" >nul 2>&1
 echo На GitHub в !TARGET!: версия !VER_REMOTE!, коммит !HEAD_REMOTE!
 >> "%LOG%" echo remote: !TARGET!=!HEAD_REMOTE! version=!VER_REMOTE!
 echo.
 
-rem --- 2/4: переключение на ветку обновления ---------------------------------
-echo [2/4] ветка !TARGET!
+rem --- 3/5: переключение на ветку обновления ----------------------------------
+echo [3/5] ветка !TARGET!
 if /i "!BRANCH!"=="!TARGET!" goto on_target
 echo Ты на ветке !BRANCH!. Апдейтер собирает ветку !TARGET! - переключаюсь.
 echo Незакоммиченные правки в файлах на !BRANCH! не удаляются.
 git switch !TARGET! > "%STEP%" 2>&1
 if not errorlevel 1 goto switched
-git switch -c !TARGET! --track !REMOTE!/!TARGET! > "%STEP%.c" 2>&1
+git switch -c !TARGET! --track !TARGET_REF! > "%STEP%.c" 2>&1
 if not errorlevel 1 goto switched
 
 rem Отказано. Обычная причина: этот самый файл скачан с GitHub руками, поэтому
@@ -116,7 +189,7 @@ del "%STEP%.c" >nul 2>&1
 set "BLOCKERS="
 for /f "tokens=1,*" %%a in ('git status --porcelain 2^>nul') do call :note_change "%%b"
 if defined BLOCKERS goto switch_blocked
-rem Мешает только update.bat. Скачанный экземпляр сохраняем, ветку чистим,
+rem Мешает только update.bat. Скачанный экземпляр откладываем, ветку чистим,
 rem переключаемся, а скачанный возвращаем после pull.
 if not exist "update.bat" goto retry_switch
 copy /y "update.bat" "%KEEP%" >nul 2>&1
@@ -131,7 +204,7 @@ echo чтобы правки в ветке не мешали переключению, и верну обратно после pull.
 :retry_switch
 git switch !TARGET! > "%STEP%" 2>&1
 if not errorlevel 1 goto switched
-git switch -c !TARGET! --track !REMOTE!/!TARGET! > "%STEP%.c" 2>&1
+git switch -c !TARGET! --track !TARGET_REF! > "%STEP%.c" 2>&1
 if not errorlevel 1 goto switched
 type "%STEP%"
 del "%STEP%.c" >nul 2>&1
@@ -163,13 +236,13 @@ echo Переключился.
 echo.
 :on_target
 
-rem --- 3/4: обновление кода ------------------------------------------------
-echo [3/4] git pull --ff-only
+rem --- 4/5: обновление кода ---------------------------------------------------
+echo [4/5] git pull --ff-only
 set "UPSTREAM="
 for /f "delims=" %%u in ('git rev-parse --abbrev-ref --symbolic-full-name @{u} 2^>nul') do set "UPSTREAM=%%u"
 if defined UPSTREAM goto have_upstream
-echo У !TARGET! нет upstream - привязываю к !REMOTE!/!TARGET!.
-git branch --set-upstream-to=!REMOTE!/!TARGET! > "%STEP%" 2>&1
+echo У !TARGET! нет upstream - привязываю к !TARGET_REF!.
+git branch --set-upstream-to=!TARGET_REF! > "%STEP%" 2>&1
 if errorlevel 1 goto fail_step
 :have_upstream
 rem Скачанный руками update.bat новее того, что лежит в ветке. Если обновление
@@ -193,11 +266,11 @@ if not errorlevel 1 goto pulled
 echo.
 echo ВНИМАНИЕ: pull не удался - обновление кода не прошло.
 set "AHEAD="
-for /f "delims=" %%n in ('git rev-list --count !REMOTE!/!TARGET!..HEAD 2^>nul') do set "AHEAD=%%n"
+for /f "delims=" %%n in ('git rev-list --count !TARGET_REF!..HEAD 2^>nul') do set "AHEAD=%%n"
 if not defined AHEAD goto no_ahead
 if "!AHEAD!"=="0" goto no_ahead
-echo В твоей ветке есть коммиты, которых нет в !REMOTE!/!TARGET!: !AHEAD! - поэтому ff-only не проходит.
-echo   git log --oneline !REMOTE!/!TARGET!..HEAD
+echo В твоей ветке есть коммиты, которых нет в !TARGET_REF!: !AHEAD! - поэтому ff-only не проходит.
+echo   git log --oneline !TARGET_REF!..HEAD
 :no_ahead
 echo   git status          посмотреть состояние файлов
 echo   git stash -u        убрать правки на время обновления
@@ -217,14 +290,14 @@ if /i "!VER_AFTER!"=="!VER_REMOTE!" goto matched
 goto drifted
 :matched
 echo Локальная копия совпадает с !TARGET! на GitHub.
-echo Если это не то, что ты ждал - посмотри, что нового в рабочей ветке:
-echo   git log --oneline !REMOTE!/!TARGET! -3
+echo Если это не то, что ты ждал - посмотри, что нового в ветке:
+echo   git log --oneline !TARGET_REF! -3
 goto build
 :drifted
 echo На GitHub в !TARGET! уже !VER_REMOTE!, а локально !VER_AFTER! -
 echo файлы расходятся с репозиторием:
 echo   git status
-echo   git diff !REMOTE!/!TARGET! --stat
+echo   git diff !TARGET_REF! --stat
 goto build
 :moved
 echo Обновлено: !HEAD_BEFORE! -^> !HEAD_AFTER!, версия !VER_AFTER!
@@ -240,17 +313,35 @@ echo.
 echo Обновление кода пропущено - собираю версию, которая уже лежит на диске.
 >> "%LOG%" echo offline: version=!VER_AFTER! commit=!HEAD_AFTER!
 
-rem --- 4/4: сборка ---------------------------------------------------------
+rem --- 5/5: сборка ------------------------------------------------------------
 :build
 if not exist "%KEEP%" goto no_restore
+rem Два экземпляра апдейтера: скачанный и лежащий в ветке. Оставляем свежий,
+rem иначе старая копия с кривым текстом живёт в папке годами и обновляет сама себя.
+set "KEEPV="
+set "REPOV="
+for /f "tokens=2 delims==" %%v in ('findstr /b /c:"set SELF_VER=" "%KEEP%"') do set "KEEPV=%%v"
+for /f "tokens=2 delims==" %%v in ('findstr /b /c:"set SELF_VER=" "update.bat"') do set "REPOV=%%v"
+if not defined REPOV goto keep_newer
+if not defined KEEPV goto keep_repo
+call :vercmp "%REPOV%" "!KEEPV!"
+if "!VERCMP!"=="-1" goto keep_newer
+:keep_repo
+del "%KEEP%" >nul 2>&1
+echo.
+echo Скачанный update.bat старше версии в !TARGET! - оставил свежий из ветки.
+echo Следующий запуск пойдёт уже с ним.
+>> "%LOG%" echo updater: kept repo copy
+goto no_restore
+:keep_newer
 copy /y "%KEEP%" "update.bat" >nul 2>&1
 del "%KEEP%" >nul 2>&1
 echo.
-echo Скачанный update.bat возвращён - он новее версии в !TARGET!.
-echo Если следующее обновление его снова затрёт:  git checkout -- update.bat
+echo Скачанный update.bat новее версии в !TARGET! - вернул его на место.
+>> "%LOG%" echo updater: restored downloaded copy
 :no_restore
 echo.
-echo [4/4] сборка !VER_AFTER!
+echo [5/5] сборка !VER_AFTER!
 call "%~dp0build_windows.bat"
 if errorlevel 1 goto fail
 
@@ -287,13 +378,92 @@ goto :eof
 
 rem Вызывается для каждого изменённого пути: блокирует переключение всё,
 rem кроме самого апдейтера. cmd кладёт первый токен в первую переменную,
-rem поэтому путь здесь - вторая переменная; старая версия сравнивала пустой
-rem остаток с update.bat и всегда находила помеху.
+rem поэтому путь здесь - вторая переменная.
 :note_change
 set "CHANGED=%~1"
 if not defined CHANGED goto :eof
 if /i "!CHANGED!"=="update.bat" goto :eof
 set "BLOCKERS=1"
+goto :eof
+
+rem Сравнивает две версии вида 2.10.20: части дополняются нулями и сравниваются
+rem как строки, поэтому 2.10.20 больше 2.10.4, а 2.10.4 больше 2.9.99.
+:vercmp
+setlocal
+set "A1=0"
+set "A2=0"
+set "A3=0"
+set "B1=0"
+set "B2=0"
+set "B3=0"
+for /f "tokens=1,2,3 delims=." %%a in ("%~1") do (
+    set "A1=%%a"
+    set "A2=%%b"
+    set "A3=%%c"
+)
+for /f "tokens=1,2,3 delims=." %%a in ("%~2") do (
+    set "B1=%%a"
+    set "B2=%%b"
+    set "B3=%%c"
+)
+if not defined A1 set "A1=0"
+if not defined A2 set "A2=0"
+if not defined A3 set "A3=0"
+if not defined B1 set "B1=0"
+if not defined B2 set "B2=0"
+if not defined B3 set "B3=0"
+set "PA=000!A1!"
+set "PA=!PA:~-3!"
+set "QA=000!A2!"
+set "QA=!QA:~-3!"
+set "RA=000!A3!"
+set "RA=!RA:~-3!"
+set "PB=000!B1!"
+set "PB=!PB:~-3!"
+set "QB=000!B2!"
+set "QB=!QB:~-3!"
+set "RB=000!B3!"
+set "RB=!RB:~-3!"
+set "KA=!PA!!QA!!RA!"
+set "KB=!PB!!QB!!RB!"
+set "R=0"
+if "!KA!" GTR "!KB!" set "R=1"
+if "!KA!" LSS "!KB!" set "R=-1"
+endlocal & set "VERCMP=%R%"
+goto :eof
+
+rem Разбирает одну удалённую ветку: берёт версию из src/version.h и запоминает
+rem ветку, если версия там свежее уже найденной. При равных версиях выигрывает
+rem main: она остаётся точкой сборки по умолчанию.
+:consider
+if defined FORCED goto :eof
+set "CAND=%~1"
+if not defined CAND goto :eof
+if /i "!CAND!"=="origin/HEAD" goto :eof
+if "%~2"=="->" goto :eof
+set "SHORT=!CAND:origin/=!"
+if /i "!SHORT!"=="main" goto consider_ok
+if /i "!SHORT:~0,6!"=="arena/" goto consider_ok
+goto :eof
+:consider_ok
+git show !CAND!:src/version.h > "%STEP%.h" 2>nul
+if errorlevel 1 goto consider_done
+set "CVER="
+for /f "tokens=3" %%v in ('findstr /c:"#define GAME_VERSION " "%STEP%.h"') do set "CVER=%%~v"
+del "%STEP%.h" >nul 2>&1
+if not defined CVER goto consider_done
+if /i "!SHORT!"=="main" set "MAINVER=!CVER!"
+if not defined BESTVER goto take_cand
+call :vercmp "!CVER!" "!BESTVER!"
+if "!VERCMP!"=="1" goto take_cand
+if not "!VERCMP!"=="0" goto consider_done
+if /i "!SHORT!"=="main" goto take_cand
+goto consider_done
+:take_cand
+set "BESTVER=!CVER!"
+set "TARGET=!SHORT!"
+set "TARGET_REF=!CAND!"
+:consider_done
 goto :eof
 
 :fail_step
@@ -305,9 +475,11 @@ echo.
 echo Обновление не завершено. Подробности в файле: !LOG!
 call :put_back
 >> "%LOG%" echo FAILED - see the messages above
+if defined CP_OLD chcp !CP_OLD! >nul 2>&1
 if "!HOLD!"=="1" pause
 exit /b 1
 
 :done
+if defined CP_OLD chcp !CP_OLD! >nul 2>&1
 if "!HOLD!"=="1" pause
 exit /b 0
