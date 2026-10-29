@@ -30,8 +30,18 @@ ASSIGN = [
     ("violet", "dark"), ("cyan", "dark"), ("violet", "deep"), ("cyan", "bright"), ("red", "bright"),
     ("green", "dark"), ("teal", "pure"), ("teal", "deep"), ("magenta", "bright"), ("blue", "pure"),
     ("green", "bright"), ("blue", "dark"), ("lime", "dark"), ("cyan", "deep"), ("lime", "bright"),
-    ("green", "deep"), ("red", "deep"), ("amber", "pure"), ("teal", "bright"), ("red", "dark"),
-    ("teal", "dark"), ("blue", "deep"), ("magenta", "deep"), ("orange", "dark"), ("violet", "pure"),
+    # 30–39: нарисованы ИИ, цвет выбран вручную и разнесён по кругу,
+    # чтобы соседние предметы не читались одним оттенком.
+    ("green", "deep"),     # 30 чаша переполнения — нефрит
+    ("blue", "pure"),      # 31 осколок последнего удара — сталь
+    ("violet", "deep"),    # 32 ключ пепельного ритма
+    ("lime", "pure"),      # 33 призма перекрёстного огня — янтарь
+    ("lime", "bright"),    # 34 угольный фитиль — зелёное пламя
+    ("cyan", "bright"),     # 35 осколок оттепели — бледная бирюза
+    ("magenta", "deep"),   # 36 печать обратного тока
+    ("red", "bright"),     # 37 знак палача — багровый
+    ("amber", "pure"),     # 38 печать возмездия — золото
+    ("blue", "deep"),      # 39 руна свидетеля — индиго
 ]
 FAMILY_HUE = {"red": 352, "orange": 20, "amber": 42, "lime": 72, "green": 132,
               "teal": 168, "cyan": 190, "blue": 222, "violet": 268, "magenta": 312}
