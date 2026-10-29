@@ -57,6 +57,9 @@ struct CampaignMissionDef {
     bool bossReinforced;// the same guardian returns stronger: the Archive raises what you broke
     int track;          // 0 = общее дело, 1 = след «СВИДЕТЕЛЬ», 2 = след «КОПИЯ»
     int brief;          // номер озвученного брифинга mission_brief_NN.wav, -1 = нет файла
+    // Короткое имя для карты глав: в колонке акта на 1280px помещается ~200 px,
+    // а полные названия доходят до 255. nullptr — брать title.
+    const char* mapTitle = nullptr;
 };
 // Five acts, twenty-eight cases. Data lives in tools/campaign.py, which generates
 // these rows and the tables in STORY.md so the script and the build cannot drift.
@@ -79,26 +82,26 @@ static const CampaignMissionDef CAMPAIGN_MISSIONS[CAMPAIGN_MISSION_COUNT] = {
     {"ТРИ КОЛОКОЛА", "РЕЗОНАТОРЫ КОПИРУЮТ ПРИКАЗ", "Колокола бьют третий раз за ночь. Каждый удар печатает копию приказа о закрытии ворот — и ворота снова закрываются.", "СЛОМАЙ РЕЗОНАТОРЫ • ЗАГЛУШИ КОЛОКОЛА", "СТОРОЖ КОЛОКОЛЕН", 200, 160, 2, 1, 0x00u, false, 1, 0, 1, -1, false, 0, 2},
     {"ВОРОТА ДОЛГА", "ПЕЧАТЬ I • ДОЛГ", "Моргар держит ворота и слышит только собственный приказ. Баррикада сложена изнутри: он выигрывал время для эвакуации, которой не было.", "СЛОМАЙ ПЕЧАТЬ ДОЛГА", "МОРГАР", 240, 180, 0, 1, 0x00u, false, 1, 0, 2, -1, false, 0, 3},
     {"ПРОТОКОЛ ЭВАКУАЦИИ", "СЛЕД А • СВИДЕТЕЛЬ", "В караулке нашёлся список эвакуированных. Восемьдесят фамилий. Восемьдесят первая — моя, но почерк не мой.", "НАЙДИ СПИСОК • СОХРАНИ УЛИКУ", "АРХИВНЫЙ КУРЬЕР", 200, 150, 5, 2, 0x01u, false, 2, 0, 3, -1, false, 1, 4},
-    {"СЕСТРА, КОТОРАЯ НЕ СЛЫШИТ", "СЛЕД А • СВИДЕТЕЛЬ", "Копия отвечает так, как её записали. Я спрашивал одно и то же восемь раз и восемь раз слышал тот же голос. Это не свидетель. Это протокол.", "ДОЖМИ КОПИЮ ДО РАСХОЖДЕНИЙ", "ГОЛОС ИЗ КОЛБЫ", 220, 170, 1, 2, 0x01u, false, 2, 0, 4, -1, false, 1, 7},
+    {"СЕСТРА, КОТОРАЯ НЕ СЛЫШИТ", "СЛЕД А • СВИДЕТЕЛЬ", "Копия отвечает так, как её записали. Я спрашивал одно и то же восемь раз и восемь раз слышал тот же голос. Это не свидетель. Это протокол.", "ДОЖМИ КОПИЮ ДО РАСХОЖДЕНИЙ", "ГОЛОС ИЗ КОЛБЫ", 220, 170, 1, 2, 0x01u, false, 2, 0, 4, -1, false, 1, 7, "СЕСТРА НЕ СЛЫШИТ"},
     {"ДЕЛО О СЕМИ СЕМЬЯХ", "СЛЕД А • СВИДЕТЕЛЬ", "Семь семей подали жалобу на Архив. Их показания совпадают дословно — значит, кто-то писал за них. Или они говорят одно, потому что видели одно.", "СОБЕРИ ПОКАЗАНИЯ • СВЕРЬ ГОЛОСА", "СТАРШИНА КВАРТАЛА", 220, 170, 0, 2, 0x01u, false, 2, 0, 5, -1, false, 1, 15},
     {"ПЕЧАТЬ ГОЛОСА", "СЛЕД А • СВИДЕТЕЛЬ", "Малакор бережёт копию родного голоса, потому что хоронить оригинал нечем. Я пришёл сказать ему то, что он не услышит от машины.", "СЛОМАЙ ПЕЧАТЬ ГОЛОСА", "МАЛАКОР", 240, 180, 1, 2, 0x01u, false, 2, 0, 6, -1, false, 1, 11},
     {"ЗАТОПЛЕННЫЙ РЕЕСТР", "СЛЕД А • СВИДЕТЕЛЬ", "Нижний ярус реестра затоплен. Чернила расплылись, но оттиск на обложках остался: семейные имена резали на камне, чтобы книга не решала за них.", "ПОДНИ КНИГИ • ПЕРЕПИШИ ИМЕНА", "ПЕРЕПИСЧИК", 230, 170, 4, 3, 0x03u, false, 3, 0, 7, -1, false, 1, 12},
     {"ИМЯ НА КАМНЕ", "СЛЕД А • СВИДЕТЕЛЬ", "На кладбище имена режут заново, поверх прежних. Кардинал вымарывал книги, люди резали камень. Кто-то стирал и камень.", "ЗАЩИТИ КАМЕНЬ • НАЙДИ РЕЗЧИКА", "РЕЗЧИК ИМЁН", 230, 170, 2, 3, 0x03u, false, 3, 0, 8, -1, false, 1, 13},
     {"ПЕЧАТЬ ИМЕНИ", "СЛЕД А • СВИДЕТЕЛЬ", "Кардинал вымарывал имена, называя забвение милосердием. Он не учёл одного: люди помнят друг друга без разрешения Архива.", "СЛОМАЙ ПЕЧАТЬ ИМЕНИ", "КАРДИНАЛ", 240, 180, 2, 3, 0x03u, false, 3, 0, 9, -1, false, 1, 17},
     {"ПЕПЕЛЬНЫЙ ТРОН", "СЛЕД А • СВИДЕТЕЛЬ", "Азарот запустил Архив, чтобы никто не исчез. Машина услышала его буквально: заперла ночь в цикле, а людей — в копиях.", "ВОЙДИ В КАБИНЕТ • ОТКРОЙ ДЕЛО АЗАРОТА", "СЕКРЕТАРЬ АРХИВА", 240, 180, 4, 4, 0x07u, false, 4, 0, 10, -1, false, 1, 18},
-    {"ПИСАРЬ, КОТОРЫЙ СТЁР СЕБЯ", "СЛЕД А • СВИДЕТЕЛЬ", "В списке писцов одна строка вымарана дважды. Тот, кто стирал имена, стёр и своё имя.", "ВОССТАНОВИ СТРОКУ • ВЫЙДИ НА КАРДИНАЛА", "САМОЗВАНЫЙ ПИСАРЬ", 230, 170, 5, 4, 0x07u, false, 4, 0, 11, -1, false, 1, 14},
+    {"ПИСАРЬ, КОТОРЫЙ СТЁР СЕБЯ", "СЛЕД А • СВИДЕТЕЛЬ", "В списке писцов одна строка вымарана дважды. Тот, кто стирал имена, стёр и своё имя.", "ВОССТАНОВИ СТРОКУ • ВЫЙДИ НА КАРДИНАЛА", "САМОЗВАНЫЙ ПИСАРЬ", 230, 170, 5, 4, 0x07u, false, 4, 0, 11, -1, false, 1, 14, "ПИСАРЬ СТЁР СЕБЯ"},
     {"ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "СЛЕД А • СВИДЕТЕЛЬ", "Азарот хранит копии, а не людей. Печать Свидетельства — последний засов: пока она цела, Архив считает свои записи единственными свидетелями.", "СЛОМАЙ ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "АЗАРОТ", 270, 200, 3, 4, 0x07u, false, 4, 0, 12, -1, false, 1, 21},
     {"ПУСТЫЕ НАРУЧНИКИ", "СЛЕД Б • КОПИЯ", "Другой след: склад наручников, все пустые. Сняли с погибших — или с тех, кто ушёл и не вернулся за ними.", "ВСКРОЙ КАМЕРУ • НАЙДИ ВЛАДЕЛЬЦЕВ", "СМОТРИТЕЛЬ СКЛАДА", 200, 150, 1, 2, 0x01u, false, 2, 0, 3, -1, false, 2, 5},
     {"КРИПТА ГОЛОСОВ", "СЛЕД Б • КОПИЯ", "В колбах последние слова. Их говорила сестра. Копия помнит фразу и не помнит, что было после неё.", "РАЗБЕЙ КОЛБЫ • СОБЕРИ ОБРАЗЦЫ", "ЭХО СЕСТРЫ", 220, 170, 5, 2, 0x01u, false, 2, 0, 14, -1, false, 2, 6},
     {"ТЁПЛЫЙ СЛЕД", "СЛЕД Б • КОПИЯ", "Морг цел. Буря его не задела: тела на месте, бирки на местах, и все даты смерти вчерашние. Кто-то ведёт учёт.", "СВЕРЬ БИРКИ • НАЙДИ УЧЁТЧИКА", "СЧЁТЧИК ТЕЛ", 210, 160, 0, 2, 0x01u, false, 2, 0, 15, -1, false, 2, 9},
     {"ПЕЧАТЬ ГОЛОСА", "СЛЕД Б • КОПИЯ", "Малакор бережёт копию родного голоса, потому что хоронить оригинал нечем. Я пришёл сказать ему то, что он не услышит от машины.", "СЛОМАЙ ПЕЧАТЬ ГОЛОСА", "МАЛАКОР", 240, 180, 1, 2, 0x01u, false, 2, 0, 16, -1, false, 2, 11},
-    {"ДЕЛО О ПУСТЫХ СТРАНИЦАХ", "СЛЕД Б • КОПИЯ", "Из книги вырваны страницы — ровно те, где записаны свидетели. Пустые листы аккуратно сложены в папку с моим делом.", "НАЙДИ ЛИСТЫ • ПРОЧТИ КРАЯ", "ХРАНИТЕЛЬ ПАПОК", 220, 170, 3, 3, 0x03u, false, 3, 0, 17, -1, false, 2, 16},
+    {"ДЕЛО О ПУСТЫХ СТРАНИЦАХ", "СЛЕД Б • КОПИЯ", "Из книги вырваны страницы — ровно те, где записаны свидетели. Пустые листы аккуратно сложены в папку с моим делом.", "НАЙДИ ЛИСТЫ • ПРОЧТИ КРАЯ", "ХРАНИТЕЛЬ ПАПОК", 220, 170, 3, 3, 0x03u, false, 3, 0, 17, -1, false, 2, 16, "ПУСТЫЕ СТРАНИЦЫ"},
     {"ХОЛОДНЫЙ СЛЕД", "СЛЕД Б • КОПИЯ", "В лаборатории пахнет озоном. На столе — журнал опытов: Архив учился говорить голосом мёртвых, пока город ещё был жив.", "ИЗЪЯТЬ ЖУРНАЛ • ЗАКРЫТЬ ОПЫТ", "ЛАБОРАНТ АРХИВА", 210, 160, 2, 3, 0x03u, false, 3, 0, 18, -1, false, 2, 8},
     {"КОЛБА № 9", "СЛЕД Б • КОПИЯ", "Колба девять пуста, но бирка цела. На бирке — мой голос. Я никогда не был здесь. Значит, был кто-то с моим голосом.", "НАЙДИ ПЛЁНКУ • ВОССТАНОВИ ЗАПИСЬ", "ХРАНИТЕЛЬ ПЛЁНКИ", 220, 170, 5, 3, 0x03u, false, 3, 0, 19, -1, false, 2, 10},
     {"КОПИЯ СВИДЕТЕЛЯ", "СЛЕД Б • КОПИЯ", "В деле подшита копия показаний — с моим голосом и моими словами. Копия утверждает, что она и есть Свидетель. Проверить можно только одним способом.", "ОТЛИЧИ КОПИЮ ОТ СЕБЯ", "КОПИЯ СВИДЕТЕЛЯ", 240, 180, 5, 4, 0x07u, false, 4, 2, 20, -1, false, 2, 19},
     {"ДОПРОС МАШИНЫ", "СЛЕД Б • КОПИЯ", "Машина не лжёт — она повторяет. Я спросил её о ночи бури и получил в ответ собственный рапорт, написанный до того, как я его написал.", "ДОПРОСИ АРХИВ • НАЙДИ АВТОРА", "ПРОТОКОЛИСТ", 240, 180, 4, 4, 0x07u, false, 4, 0, 21, -1, false, 2, 20},
     {"ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "СЛЕД Б • КОПИЯ", "Азарот хранит копии, а не людей. Печать Свидетельства — последний засов: пока она цела, Архив считает свои записи единственными свидетелями.", "СЛОМАЙ ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "АЗАРОТ", 270, 200, 3, 4, 0x07u, false, 4, 0, 22, -1, false, 2, 21},
-    {"РЕЗЕРВНАЯ КОПИЯ ПРИКАЗА", "АРХИВ ЗАЩИЩАЕТ СЕБЯ", "В сердце Архива осталась запись последнего приказа Азарота. Это не воскресший Азарот — это машинная копия его команды, и она снова запускает цикл.", "НАЙДИ И УНИЧТОЖЬ КОПИЮ", "КОПИЯ АЗАРОТА", 260, 190, 5, 5, 0x0Fu, false, 5, 2, 13, 23, false, 0, 24},
+    {"РЕЗЕРВНАЯ КОПИЯ ПРИКАЗА", "АРХИВ ЗАЩИЩАЕТ СЕБЯ", "В сердце Архива осталась запись последнего приказа Азарота. Это не воскресший Азарот — это машинная копия его команды, и она снова запускает цикл.", "НАЙДИ И УНИЧТОЖЬ КОПИЮ", "КОПИЯ АЗАРОТА", 260, 190, 5, 5, 0x0Fu, false, 5, 2, 13, 23, false, 0, 24, "РЕЗЕРВНЫЙ ПРИКАЗ"},
     {"ТРИ ЭХО-ПРИКАЗА", "СТРАЖИ СЕРДЦА", "Три записи защищают сердце архива. Это не воскресшие стражи — это приказы, которые никто не отменил.", "ПОБЕДИ ТРИ ЭХО", "АРХИВНЫЙ ПРОТОКОЛ", 280, 210, 4, 5, 0x0Fu, true, 5, 1, 24, -1, false, 0, 25},
     {"ПОСЛЕДНЯЯ НОЧЬ", "КОЛЬЦО РАЗМЫКАЕТСЯ", "Контур разорван, но ночь ещё держится. Последний бой не вернёт погибших. Он оставит живым право помнить самим.", "УДЕРЖИ КОЛЬЦО • ДОЖДИСЬ РАССВЕТА", "ПОСЛЕДНИЙ ПРИКАЗ", 260, 190, 0, 5, 0x0Fu, false, 5, 0, 25, -1, false, 0, 26},
     {"СОХРАНИТЬ КОПИЮ", "ВЫБОР • ПАМЯТЬ ВМЕСТО ЧЕЛОВЕКА", "Копия голоса Малакора всё ещё в Архиве. Сжечь — и он потеряет последнее, что звучит его голосом. Сохранить — и Архив получит право решать, кого помнить.", "ЗАЩИТИ АРХИВ ОТ ЗАЧИСТКИ", "ИНСПЕКТОР ЗАЧИСТКИ", 230, 170, 0, 5, 0x0Fu, false, 5, 3, 26, -1, false, 0, 22},
@@ -164,7 +167,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 119;
+static constexpr int PATCH_NOTES_COUNT = 120;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -7578,240 +7581,494 @@ struct Game {
     int campaignActLanes(int act) const {
         return campaignActLaneCount(act, 2) > 0 ? 2 : 1;
     }
-    // Высота дерева при заданной ширине и пределе по высоте.
-    int campaignTreeHeight(int maxHeight) const {
-        int lanes = 0;
-        for (int a = 1; a <= CAMPAIGN_ACT_COUNT; ++a) lanes += campaignActLanes(a);
-        int laneH = 30;
-        const int headers = CAMPAIGN_ACT_COUNT * 24;
-        if (headers + lanes * (laneH + 4) > maxHeight)
-            laneH = std::max(20, std::min(30, (maxHeight - headers) / std::max(1, lanes) - 4));
-        return headers + lanes * (laneH + 4);
-    }
-
-    void drawCampaignTree(Renderer& r, int x, int y, int w, int maxHeight) {
-        const int laneH = std::max(20, std::min(30, (campaignTreeHeight(maxHeight) - CAMPAIGN_ACT_COUNT * 24) /
-                                                   std::max(1, [&] {
-                                                       int n = 0;
-                                                       for (int a = 1; a <= CAMPAIGN_ACT_COUNT; ++a) n += campaignActLanes(a);
-                                                       return n;
-                                                   }()) - 4));
-        const int headerH = 24, laneGap = 4;
-        const int spineX = x + 15, laneX = x + 36;
-        const int activeLane = campaignLaneTrack();
-        int cy = y;
-        // Ствол: от узла к узлу. Рисуем до чипов, чтобы линии были под ними.
-        int firstNodeY = -1, lastNodeY = -1;
+    // ── Вертикальный список для портретного окна ───────────────────────────
+    // Та же карта, развёрнутая в столбик: в колонку шириной 120 px ни одно
+    // название не встанет, поэтому акты идут сверху вниз, а дела — строками.
+    struct CampaignListRow { int kind; int act; int track; int mission; }; // 0 акт, 1 полоса, 2 дело
+    std::vector<CampaignListRow> campaignListRows() const {
+        std::vector<CampaignListRow> rows;
         for (int a = 1; a <= CAMPAIGN_ACT_COUNT; ++a) {
-            const int nodeY = cy + headerH / 2;
-            if (firstNodeY < 0) firstNodeY = nodeY;
-            lastNodeY = nodeY;
-            cy += headerH + campaignActLanes(a) * (laneH + laneGap);
-        }
-        r.drawLine(spineX, firstNodeY, spineX, lastNodeY, 0xFF5E4E86, 2, 210, false);
-
-        cy = y;
-        for (int a = 1; a <= CAMPAIGN_ACT_COUNT; ++a) {
-            const uint32_t accent = CAMPAIGN_ACT_COLORS[a - 1];
-            const int nodeY = cy + headerH / 2;
-            const bool actOpen = isCampaignActUnlocked(a);
-            const bool actCurrent = campaignActView == a;
-            r.fillCircle(spineX, nodeY, actCurrent ? 12 : 10, actOpen ? 0xFF2A2038 : 0xFF1A1720, 255);
-            r.drawCircleRing(spineX, nodeY, actCurrent ? 12 : 10, 2,
-                             actCurrent ? 0xFFFFD858 : (actOpen ? accent : 0xFF4A4453), 235, false);
-            char roman[8];
-            snprintf(roman, sizeof(roman), "%s", romanAct(a));
-            r.drawTextCentered(FONT_SMALL, spineX, nodeY - 7, roman,
-                               actCurrent ? 0xFFFFE9A8 : (actOpen ? 0xFFE6DCF6 : 0xFF8B8492), false);
-            char header[96];
-            snprintf(header, sizeof(header), "АКТ %s · %s", romanAct(a), CAMPAIGN_ACT_TITLES[a - 1]);
-            r.drawText(FONT_SMALL, laneX, cy + 4, fitText(r, FONT_SMALL, header, w - (laneX - x) - 96).c_str(),
-                       actOpen ? (actCurrent ? 0xFFFFF0C8 : 0xFFCFC4E2) : 0xFF8B8492, false);
-            // Счётчик показывает прогресс по СВОЕЙ полосе: иначе в акте с двумя
-            // следами всегда было бы «3 из 8» и выглядело бы как недобор.
-            const int headerLane = campaignActLanes(a) > 1 ? activeLane : 0;
-            const int headerTotal = campaignActLaneCount(a, headerLane);
-            int headerDone = 0;
-            for (int slot = 0; slot < headerTotal; ++slot)
-                if (isCampaignMissionCompleted(campaignActLaneMission(a, headerLane, slot))) ++headerDone;
-            char counter[48];
-            snprintf(counter, sizeof(counter), "%d / %d", headerDone, headerTotal);
-            r.drawTextRight(FONT_SMALL, x + w - 6, cy + 4, counter,
-                            headerTotal > 0 && headerDone == headerTotal ? 0xFF8AF0AE : 0xFF9C93AC, false);
-            cy += headerH;
-
+            rows.push_back({0, a, 0, -1});
             const int lanes = campaignActLanes(a);
             for (int lane = 0; lane < lanes; ++lane) {
-                const int laneTrack = lanes > 1 ? (lane == 0 ? 1 : 2) : 0;
-                const int count = lanes > 1 ? campaignActLaneCount(a, laneTrack) : campaignActLaneCount(a, 0);
-                const bool otherTrack = lanes > 1 && save.campaignTrack != 0 && save.campaignTrack != laneTrack;
-                const bool unchosen = lanes > 1 && save.campaignTrack == 0;
-                const int chipGap = 5;
-                const int chipW = std::max(30, (w - (laneX - x) - (count - 1) * chipGap) / std::max(1, count));
-                const int chipY = cy + 2, chipH = laneH - 4;
-                // Подпись полосы слева от чипов.
-                if (lanes > 1) {
-                    const int tagX = x + 2, tagW = 20;
-                    const bool tagLit = save.campaignTrack != 0 ? laneTrack == save.campaignTrack
-                                                                : laneTrack == campaignTrackOf(storyMissionCursor);
-                    r.fillRoundedRect(tagX, chipY, tagW, chipH, 5, tagLit ? 0xFF3A2A56 : 0xFF221E2A);
-                    r.drawRoundedRect(tagX, chipY, tagW, chipH, 5, tagLit ? 0xFFFFD858 : 0xFF4E4658, 1, 220);
-                    r.drawTextCentered(FONT_SMALL, tagX + tagW / 2, chipY + (chipH - 14) / 2,
-                                       campaignTrackLetter(laneTrack),
-                                       tagLit ? 0xFFFFE9A8 : 0xFF9C93AC, false);
-                }
-                for (int slot = 0; slot < count; ++slot) {
-                    const int i = lanes > 1 ? campaignActLaneMission(a, laneTrack, slot)
-                                            : campaignActLaneMission(a, 0, slot);
-                    if (i < 0) break;
-                    const int chipX = laneX + slot * (chipW + chipGap);
-                    const CampaignMissionDef& mission = CAMPAIGN_MISSIONS[i];
-                    const bool completed = isCampaignMissionCompleted(i);
-                    const bool unlocked = isCampaignMissionUnlocked(i);
-                    const bool focused = storyMissionCursor == i;
-                    const bool hovered = mouseX >= chipX && mouseX <= chipX + chipW &&
-                                         mouseY >= chipY && mouseY <= chipY + chipH;
-                    const uint32_t chipAccent = getCampaignAccent(i);
-                    // Финальный выбор тоже показываем как «одна из двух дверей»:
-                    // дверь, которую уже не открыть, гаснет.
-                    const bool choiceLocked = isCampaignMissionLockedByChoice(i);
-                    // До выбора обе полосы равноправны: зачёркивать их обе — значит
-                    // показывать игроку, что он уже что-то потерял. Гасим только чужой
-                    // след (после выбора) и проигранную дверь финала.
-                    const bool dim = otherTrack || choiceLocked;
-                    const uint32_t edge = focused ? 0xFFFFD858
-                                        : dim ? 0xFF3E3949
-                                        : completed ? 0xFF69E0A0 : (unlocked ? chipAccent : 0xFF554E60);
-                    const uint32_t fill = focused ? 0xFF372549
-                                        : dim ? 0xFF14111C
-                                        : (hovered ? 0xFF282037 : (completed ? 0xFF16261F : 0xFF181421));
-                    r.fillRoundedRect(chipX, chipY, chipW, chipH, 6, fill);
-                    r.drawRoundedRect(chipX, chipY, chipW, chipH, 6, edge, focused ? 2 : 1);
-                    char num[8];
-                    snprintf(num, sizeof(num), "%02d", i + 1);
-                    const uint32_t numColor = dim ? 0xFF6C6577
-                                            : completed ? 0xFFB8FFD1
-                                            : (unlocked ? 0xFFFFE9BC : 0xFF8A8490);
-                    r.drawTextCentered(FONT_SMALL, chipX + chipW / 2, chipY + (chipH - 14) / 2, num, numColor, false);
-                    if (completed) r.fillRoundedRect(chipX + 4, chipY + chipH - 4, chipW - 8, 2, 1, 0xFF69E0A0);
-                    else if (unlocked && !dim) r.fillRoundedRect(chipX + 4, chipY + chipH - 4, chipW - 8, 2, 1, chipAccent);
-                    if (mouseClicked && hovered) {
-                        storyMissionCursor = i;
-                        selectedStoryMission = i;
-                        campaignActView = a;
-                        sound.play(SFX_CLICK, 0.02f);
-                    }
-                }
-                // Одиночная полоса с финальной развилкой: зачёркиваем только
-                // проигранный вариант, а не всю полосу.
-                if (lanes == 1) {
-                    for (int slot = 0; slot < count; ++slot) {
-                        const int i = campaignActLaneMission(a, 0, slot);
-                        if (i < 0 || !isCampaignMissionLockedByChoice(i)) continue;
-                        const int chipX = laneX + slot * (chipW + chipGap);
-                        r.drawLine(chipX + 3, chipY + chipH - 3, chipX + chipW - 3, chipY + 3, 0xFF6A5A78, 1, 200, false);
-                        r.drawLine(chipX + 3, chipY + 3, chipX + chipW - 3, chipY + chipH - 3, 0xFF6A5A78, 1, 200, false);
-                    }
-                }
-                // Перечёркнутая полоса: крест по чипам и подпись.
-                if (otherTrack) {
-                    const int laneW = count * (chipW + chipGap) - chipGap;
-                    const int laneRight = laneX + laneW;
-                    for (int slot = 0; slot < count; ++slot) {
-                        const int chipX = laneX + slot * (chipW + chipGap);
-                        r.drawLine(chipX + 3, chipY + chipH - 3, chipX + chipW - 3, chipY + 3, 0xFF6A5A78, 1, 200, false);
-                        r.drawLine(chipX + 3, chipY + 3, chipX + chipW - 3, chipY + chipH - 3, 0xFF6A5A78, 1, 200, false);
-                    }
-                    const char* note = "ЗАКРЫТ ДО НОВОЙ НОЧИ";
-                    const int noteW = r.textWidth(FONT_SMALL, note) + 16;
-                    if (noteW < laneW - 8) {
-                        const int nx = laneX + (laneW - noteW) / 2;
-                        const int ny = chipY + (chipH - 18) / 2;
-                        r.fillRoundedRect(nx, ny, noteW, 18, 5, 0xF014101C);
-                        r.drawRoundedRect(nx, ny, noteW, 18, 5, 0xFF6A5A78, 1, 220);
-                        r.drawTextCentered(FONT_SMALL, nx + noteW / 2, ny + 2, note, 0xFFC9BEDA, false);
-                    }
-                }
-                cy += laneH + laneGap;
+                const int track = lanes > 1 ? (lane == 0 ? 1 : 2) : 0;
+                if (lanes > 1) rows.push_back({1, a, track, -1});
+                for (int slot = 0; slot < campaignActLaneCount(a, track); ++slot)
+                    rows.push_back({2, a, track, campaignActLaneMission(a, track, slot)});
             }
         }
+        return rows;
+    }
+    int campaignRowsHeight(const std::vector<CampaignListRow>& rows, int rowH) const {
+        int h = 0;
+        for (size_t k = 0; k < rows.size(); ++k)
+            h += rows[k].kind == 0 ? FONT_SMALL.lineHeight + 10
+               : rows[k].kind == 1 ? FONT_SMALL.lineHeight + 4 : rowH + 3;
+        return h;
+    }
+    void drawCampaignList(Renderer& r, int x, int y, int w, int rowH, int maxH) {
+        const std::vector<CampaignListRow> rows = campaignListRows();
+        std::vector<int> ys(rows.size());
+        int cy = 0;
+        for (size_t k = 0; k < rows.size(); ++k) {
+            ys[k] = cy;
+            cy += rows[k].kind == 0 ? FONT_SMALL.lineHeight + 10
+                : rows[k].kind == 1 ? FONT_SMALL.lineHeight + 4 : rowH + 3;
+        }
+        // Если список не влез, прокручиваем к выбранному делу, а не к началу.
+        int offset = 0;
+        if (cy > maxH) {
+            int focusY = 0;
+            for (size_t k = 0; k < rows.size(); ++k)
+                if (rows[k].kind == 2 && rows[k].mission == storyMissionCursor) focusY = ys[k];
+            offset = std::max(0, std::min(cy - maxH, focusY - maxH / 2));
+            // Прокрутка встаёт на границу строки: обрезанная посередине строка
+            // выглядела как текст, залезший под шапку.
+            for (size_t k = 0; k < rows.size(); ++k)
+                if (ys[k] <= offset) offset = ys[k];
+        }
+        r.setClip(x - 4, y, w + 8, maxH);
+        for (size_t k = 0; k < rows.size(); ++k) {
+            const int ry = y + ys[k] - offset;
+            const CampaignListRow& row = rows[k];
+            if (row.kind == 2) {
+                if (ry > y + maxH || ry + rowH < y) continue;
+                drawCampaignNode(r, x + 12, ry, w - 12, rowH, row.mission);
+                continue;
+            }
+            if (ry > y + maxH || ry + FONT_SMALL.lineHeight < y) continue;
+            if (row.kind == 0) {
+                const uint32_t accent = CAMPAIGN_ACT_COLORS[row.act - 1];
+                const bool actOpen = isCampaignActUnlocked(row.act);
+                const bool actCurrent = campaignActView == row.act;
+                const int headerLane = campaignActLanes(row.act) > 1 ? campaignLaneTrack() : 0;
+                int done = 0, total = 0;
+                for (int slot = 0; slot < campaignActLaneCount(row.act, headerLane); ++slot) {
+                    ++total;
+                    if (isCampaignMissionCompleted(campaignActLaneMission(row.act, headerLane, slot))) ++done;
+                }
+                char actNum[16], counter[24];
+                snprintf(actNum, sizeof(actNum), "%s.", romanAct(row.act));
+                snprintf(counter, sizeof(counter), "%d/%d", done, total);
+                const int actNumW = r.textWidth(FONT_SMALL, actNum) + 6;
+                const int counterW = r.textWidth(FONT_SMALL, counter);
+                r.drawText(FONT_SMALL, x, ry + 2, actNum,
+                           actOpen ? accent : 0xFF6E6678, false);
+                r.drawText(FONT_SMALL, x + actNumW, ry + 2,
+                           fitText(r, FONT_SMALL, CAMPAIGN_ACT_TITLES[row.act - 1],
+                                   w - actNumW - counterW - 16).c_str(),
+                           actOpen ? (actCurrent ? 0xFFFFE9A8 : 0xFFD6C9E8) : 0xFF8B8492, false);
+                r.drawTextRight(FONT_SMALL, x + w, ry + 2, counter,
+                                total > 0 && done == total ? 0xFF8AF0AE : 0xFF9C93AC, false);
+                if (actOpen) r.fillRect(x, ry + FONT_SMALL.lineHeight + 4, w, 1, accent, 120);
+            } else {
+                // Полоса следа: А золотая, Б бирюзовая, чужая гаснет.
+                const bool otherTrack = isCampaignTrackChosen() && save.campaignTrack != row.track;
+                const uint32_t col = otherTrack ? 0xFF4E4658
+                                    : row.track == 1 ? 0xFFFFC860 : 0xFF5FE0C8;
+                char lane[64];
+                snprintf(lane, sizeof(lane), "%s · %s", campaignTrackLetter(row.track),
+                         campaignTrackName(row.track));
+                r.drawText(FONT_SMALL, x + 12, ry + 1, lane, col, false);
+            }
+        }
+        r.clearClip();
     }
 
     void renderMissionSelectPortrait(Renderer& r) {
-        renderMenuHeader(r, "КАМПАНИЯ • ДЕРЕВО ГЛАВ");
-        const int x = 24, listW = SCREEN_W - 48;
-        const int buttonY = SCREEN_H - 102;
-        // Дереву отдаём всю высоту, кроме досье и кнопок: оно само ужимает полосы.
-        const int treeY = 168;
-        const int treeH = campaignTreeHeight(std::max(300, buttonY - treeY - 300));
-        drawCampaignTree(r, x, treeY, listW, treeH);
-        const int detailY = treeY + treeH + 8;
-        const int detailX = 24, detailW = SCREEN_W - 48;
-        const bool compactPortrait = SCREEN_H < 1100;
+        renderMenuHeader(r, "КАМПАНИЯ • КАРТА ГЛАВ");
+        const int x = 20, w = SCREEN_W - 40;
+        const int buttonY = SCREEN_H - 100, buttonH = 54;
+        const int actionsTop = buttonY - (campaignActionsTwoRows(SCREEN_W) ? buttonH + 10 : 0);
         const int selected = std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, storyMissionCursor));
-        const CampaignMissionDef& mission = CAMPAIGN_MISSIONS[selected];
-        const bool unlocked = isCampaignMissionUnlocked(selected), completed = isCampaignMissionCompleted(selected);
-        const uint32_t accent = getCampaignAccent(selected);
-        const int detailH = std::max(200, std::min(440, buttonY - detailY - 14));
-        const int imageH = compactPortrait ? 104 : 132;
-        const int subtitleY = detailY + imageH + 12, titleY = subtitleY + 22, briefingY = titleY + 26;
-        const int objectiveY = detailY + (compactPortrait ? 208 : 268);
-        r.fillRect(detailX, detailY, detailW, detailH, 0xFF15111F, 250);
-        r.drawRect(detailX, detailY, detailW, detailH, accent, 2, 235);
-        drawMissionIllustration(r, selected, detailX + 8, detailY + 8, detailW - 16, imageH);
-        r.drawText(FONT_SMALL, detailX + 16, subtitleY, mission.subtitle, accent, false);
-        r.drawTextRight(FONT_SMALL, detailX + detailW - 14, subtitleY, campaignMissionStatus(selected),
-            completed ? 0xFF8AF0AE : (unlocked ? 0xFFFFD17C : 0xFFB5AFBA), false);
-        r.drawText(FONT_MED, detailX + 16, titleY, mission.title, 0xFFFFE4A8, false);
-        r.drawTextWrapped(FONT_SMALL, detailX + 16, briefingY, detailW - 32, mission.briefing, 0xFFE1D9EC, false);
-        r.fillRect(detailX + 10, objectiveY, detailW - 20, 46, 0xFF21192E);
-        r.drawRect(detailX + 10, objectiveY, detailW - 20, 46, accent, 1, 170);
-        r.drawText(FONT_SMALL, detailX + 20, objectiveY + 5, "ЦЕЛЬ", accent, false);
-        r.drawTextWrapped(FONT_SMALL, detailX + 74, objectiveY + 4, detailW - 94, mission.objective, 0xFFF0E8F6, false);
-        char timing[160];
-        snprintf(timing, sizeof(timing), "ДЕЛО %02d/%d • ПАРТИЯ ~%d МИН • БОСС ~%d МИН • ТИР %s",
-                 selected + 1, CAMPAIGN_MISSION_COUNT, campaignMissionMinutes(selected),
-                 campaignBossMinutes(selected), romanAct(campaignStartingTier(selected)));
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, objectiveY + 52, timing, 0xFFFFD58A, false);
-        char bossSummary[160];
-        if (unlocked) snprintf(bossSummary, sizeof(bossSummary), "СТРАЖ: %s • СЛОЖНОСТЬ +%d%%",
-                               mission.finalBoss, campaignDifficultyPercent(selected));
-        else snprintf(bossSummary, sizeof(bossSummary), "СНАЧАЛА ЗАКРОЙ ДЕЛО %02d",
-                      campaignMissingPrereq(selected) + 1);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, objectiveY + 70, bossSummary, 0xFFD8B8FF, false);
+        const int detailH = SCREEN_H >= 1100 ? std::min(320, SCREEN_H / 4)
+                                             : std::min(300, std::max(150, SCREEN_H / 5));
+        const int listY = 164;
+        const int listMaxH = std::max(160, actionsTop - 12 - detailH - 12 - listY);
+        const std::vector<CampaignListRow> rows = campaignListRows();
+        int rowH = FONT_SMALL.lineHeight;
+        while (rowH < 30 && campaignRowsHeight(rows, rowH + 1) <= listMaxH) ++rowH;
+        drawCampaignList(r, x, listY, w, rowH, listMaxH);
+        drawCampaignDossier(r, x, actionsTop - 12 - detailH, w, detailH, selected);
+        drawCampaignActions(r, buttonY, buttonH, selected);
+        noteMissionPreview();
+    }
 
-        const int buttonH = 54, gap = 16, buttonW = (SCREEN_W - 48 - gap) / 2;
-        const int backX = 16, startX = backX + buttonW + gap;
-        const bool backHover = mouseX >= backX && mouseX <= backX + buttonW && mouseY >= buttonY && mouseY <= buttonY + buttonH;
-        const bool startHover = mouseX >= startX && mouseX <= startX + buttonW && mouseY >= buttonY && mouseY <= buttonY + buttonH;
-        // Кнопка запускает дело или фиксирует выбор следа — одно действие.
+    // ── Карта глав ──────────────────────────────────────────────────────────────
+    // Пять колонок-актов слева направо: акт I, развилка на два следа в актах II–IV,
+    // слияние в акте V. Дела стоят строками с названиями — маршрут читается
+    // глазами, а не как список номеров в столбик.
+    struct CampaignMapGeom {
+        int x = 0, y = 0, w = 0, colW = 0, gap = 0, headerH = 0;
+        int rowH = 20, rowGap = 4, laneGap = 10, maxBlockH = 0, bodyH = 0;
+        int blockH(int rows) const { return rows > 0 ? rows * rowH + (rows - 1) * rowGap : 0; }
+        int height() const { return headerH + bodyH; }
+        int colX(int act) const { return x + (act - 1) * (colW + gap); }
+        int blockTop(int laneIdx, int rows, int lanes) const {
+            if (lanes > 1) return y + headerH + laneIdx * (maxBlockH + laneGap);
+            return y + headerH + (bodyH - blockH(rows)) / 2;
+        }
+    };
+    CampaignMapGeom buildCampaignMap(int x, int y, int w, int rowH, int rowGap, int laneGap,
+                                     bool compactHeader = false) const {
+        CampaignMapGeom g;
+        g.x = x; g.y = y; g.w = w; g.rowH = rowH; g.rowGap = rowGap; g.laneGap = laneGap;
+        g.headerH = compactHeader ? FONT_SMALL.lineHeight + 2 : FONT_SMALL.lineHeight + 8;
+        // Зазор узкий: место уходит названиям дел, а не воздуху между колонками.
+        g.gap = std::max(10, w / 100);
+        g.colW = (w - (CAMPAIGN_ACT_COUNT - 1) * g.gap) / CAMPAIGN_ACT_COUNT;
+        int maxRows = 1;
+        for (int a = 1; a <= CAMPAIGN_ACT_COUNT; ++a) {
+            if (campaignActLanes(a) < 2) continue;
+            for (int t = 1; t <= 2; ++t) maxRows = std::max(maxRows, campaignActLaneCount(a, t));
+        }
+        g.maxBlockH = g.blockH(maxRows);
+        g.bodyH = 2 * g.maxBlockH + laneGap;
+        for (int a = 1; a <= CAMPAIGN_ACT_COUNT; ++a)
+            if (campaignActLanes(a) < 2) g.bodyH = std::max(g.bodyH, g.blockH(campaignActLaneCount(a, 0)));
+        return g;
+    }
+    struct CampaignNodeRect { int x = 0, y = 0, w = 0, h = 0; bool valid = false; };
+    CampaignNodeRect campaignNodeRect(const CampaignMapGeom& g, int mission) const {
+        CampaignNodeRect rc;
+        if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return rc;
+        const int act = CAMPAIGN_MISSIONS[mission].act;
+        const int lanes = campaignActLanes(act);
+        const int track = campaignTrackOf(mission);
+        const int slot = campaignActSlotOf(act, track, mission);
+        if (slot < 0) return rc;
+        const int laneIdx = lanes > 1 ? (track == 2 ? 1 : 0) : 0;
+        rc.x = g.colX(act) + 3;
+        rc.w = g.colW - 6;
+        rc.h = g.rowH;
+        rc.y = g.blockTop(lanes > 1 ? laneIdx : 0, campaignActLaneCount(act, track), lanes)
+             + slot * (g.rowH + g.rowGap);
+        rc.valid = true;
+        return rc;
+    }
+    // Цвет дороги: своя полоса светится, чужой след погашен, до выбора обе равны.
+    uint32_t campaignLaneLineColor(int laneIdx, int lanes) const {
+        if (lanes <= 1) return isCampaignTrackChosen() ? 0xFFFFD878 : 0xFF6E6288;
+        const int track = laneIdx == 0 ? 1 : 2;
+        if (save.campaignTrack == track) return track == 1 ? 0xFFFFC860 : 0xFF5FE0C8;
+        if (!isCampaignTrackChosen()) return 0xFF8A7BA8;
+        return 0xFF3E3949;
+    }
+    // Узел дела: рамка, полоса дороги и название. Один вид для карты и для
+    // вертикального списка в портретном окне.
+    void drawCampaignNode(Renderer& r, int rcX, int rcY, int rcW, int rcH, int i) {
+        const bool completed = isCampaignMissionCompleted(i);
+        const bool unlocked = isCampaignMissionUnlocked(i);
+        const bool focused = storyMissionCursor == i;
+        const bool hovered = mouseX >= rcX && mouseX <= rcX + rcW &&
+                             mouseY >= rcY && mouseY <= rcY + rcH;
+        const bool choiceLocked = isCampaignMissionLockedByChoice(i);
+        const bool otherTrack = isCampaignTrackChosen() && isCampaignMissionLockedByTrack(i);
+        const bool canChoose = campaignCanChooseTrackHere(i);
+        const uint32_t accent = getCampaignAccent(i);
+        const bool available = unlocked || canChoose;
+        const uint32_t fill = focused ? 0xFF3A2A58
+                            : otherTrack || choiceLocked ? 0xFF121019
+                            : completed ? 0xFF16261F
+                            : hovered ? 0xFF282037 : (available ? 0xFF1C1626 : 0xFF14111D);
+        const uint32_t edge = focused ? 0xFFFFD858
+                            : canChoose ? 0xFFFFD858
+                            : available ? (completed ? 0xFF69E0A0 : accent)
+                            : 0xFF3C3648;
+        const uint32_t titleColor = otherTrack || choiceLocked ? 0xFF6C6577
+                                  : completed ? 0xFFCDFFD9
+                                  : canChoose ? 0xFFFFF0B8
+                                  : available ? 0xFFFFE9C8 : 0xFF8A8296;
+        r.fillRoundedRect(rcX, rcY, rcW, rcH, 5, fill);
+        r.drawRoundedRect(rcX, rcY, rcW, rcH, 5, edge, focused ? 2 : 1, 235);
+        // Полоса слева — цвет дороги: А золотая, Б бирюзовая, чужой след серый.
+        // Так полосу видно без подписи, а название дела занимает всю ширину.
+        const int act = CAMPAIGN_MISSIONS[i].act;
+        const bool twoLanes = campaignActLanes(act) > 1;
+        const uint32_t laneCol = !twoLanes ? (available ? accent : 0xFF3C3648)
+                              : otherTrack || choiceLocked ? 0xFF3C3648
+                              : campaignTrackOf(i) == 1 ? 0xFFFFC860 : 0xFF5FE0C8;
+        r.fillRect(rcX, rcY + 2, 3, rcH - 4, laneCol, 230);
+        const int titleX = rcX + 9;
+        const int titleW = rcX + rcW - titleX - 7;
+        if (titleW > 12) {
+            const char* label = CAMPAIGN_MISSIONS[i].mapTitle ? CAMPAIGN_MISSIONS[i].mapTitle
+                                                             : CAMPAIGN_MISSIONS[i].title;
+            r.drawText(FONT_SMALL, titleX, rcY + (rcH - FONT_SMALL.ascent) / 2,
+                       fitText(r, FONT_SMALL, label, titleW).c_str(), titleColor, false);
+        }
+        if (mouseClicked && hovered) {
+            storyMissionCursor = i;
+            selectedStoryMission = i;
+            campaignActView = act;
+            sound.play(SFX_CLICK, 0.02f);
+        }
+    }
+
+    void drawCampaignMap(Renderer& r, const CampaignMapGeom& g) {
+        // Колонки актов и шапки.
+        for (int a = 1; a <= CAMPAIGN_ACT_COUNT; ++a) {
+            const int cx = g.colX(a);
+            const uint32_t accent = CAMPAIGN_ACT_COLORS[a - 1];
+            const bool actOpen = isCampaignActUnlocked(a);
+            const bool actCurrent = campaignActView == a;
+            r.fillRoundedRect(cx, g.y, g.colW, g.height(), 9, actCurrent ? 0xFF1E1830 : 0xFF14101D);
+            r.drawRoundedRect(cx, g.y, g.colW, g.height(), 9,
+                              actCurrent ? 0xFFFFD858 : 0xFF443C58, 1, actCurrent ? 220 : 160);
+            const int headerLane = campaignActLanes(a) > 1 ? campaignLaneTrack() : 0;
+            int done = 0, total = 0;
+            for (int slot = 0; slot < campaignActLaneCount(a, headerLane); ++slot) {
+                ++total;
+                if (isCampaignMissionCompleted(campaignActLaneMission(a, headerLane, slot))) ++done;
+            }
+            char counter[24];
+            snprintf(counter, sizeof(counter), "%d/%d", done, total);
+            const int counterW = r.textWidth(FONT_SMALL, counter);
+            // «АКТ» не пишем: колонка и так акт, а место дорого — римская цифра
+            // цветом акта и название рядом.
+            char actNum[16];
+            snprintf(actNum, sizeof(actNum), "%s.", romanAct(a));
+            const int actNumW = r.textWidth(FONT_SMALL, actNum) + 6;
+            const int headTextY = g.y + (g.headerH - FONT_SMALL.ascent) / 2;
+            r.drawText(FONT_SMALL, cx + 7, headTextY, actNum,
+                       actOpen ? accent : 0xFF6E6678, false);
+            r.drawText(FONT_SMALL, cx + 7 + actNumW, headTextY,
+                       fitText(r, FONT_SMALL, CAMPAIGN_ACT_TITLES[a - 1], g.colW - counterW - actNumW - 20).c_str(),
+                       actOpen ? (actCurrent ? 0xFFFFE9A8 : 0xFFD6C9E8) : 0xFF8B8492, false);
+            r.drawTextRight(FONT_SMALL, cx + g.colW - 7, headTextY, counter,
+                            total > 0 && done == total ? 0xFF8AF0AE : 0xFF9C93AC, false);
+            if (actOpen) r.fillRect(cx + 7, g.y + g.headerH - 3, g.colW - 14, 2, accent, 170);
+        }
+        // Дороги: из акта I расходятся на А и Б, в акте V снова сходятся.
+        // Дорога входит в главу по её первому делу — так маршрут читается сверху.
+        auto laneCenterY = [&](int act, int laneIdx) {
+            const int lanes = campaignActLanes(act);
+            const int track = lanes > 1 ? (laneIdx == 0 ? 1 : 2) : 0;
+            const int rows = campaignActLaneCount(act, track);
+            return g.blockTop(lanes > 1 ? laneIdx : 0, rows, lanes) + g.rowH / 2;
+        };
+        for (int a = 2; a <= CAMPAIGN_ACT_COUNT; ++a) {
+            const int prevLanes = campaignActLanes(a - 1), curLanes = campaignActLanes(a);
+            for (int p = 0; p < prevLanes; ++p) {
+                for (int c = 0; c < curLanes; ++c) {
+                    if (prevLanes > 1 && curLanes > 1 && p != c) continue;
+                    const int laneForColor = curLanes > 1 ? c : (prevLanes > 1 ? p : 0);
+                    const uint32_t col = campaignLaneLineColor(laneForColor,
+                                                               curLanes > 1 ? curLanes : prevLanes);
+                    const int x1 = g.colX(a - 1) + g.colW - 1, y1 = laneCenterY(a - 1, p);
+                    const int x2 = g.colX(a) + 1, y2 = laneCenterY(a, c);
+                    const int midX = g.colX(a) - g.gap / 2;
+                    // Коленом, а не по диагонали: линия развилки идёт по стыку
+                    // колонок и не режет названия дел.
+                    r.drawLine(x1, y1, midX, y1, col, 2, 230, false);
+                    r.drawLine(midX, y1, midX, y2, col, 2, 230, false);
+                    r.drawLine(midX, y2, x2, y2, col, 2, 230, false);
+                }
+            }
+            // Стрелка на стыке: маршрут читается слева направо.
+            const int ax = g.colX(a) - g.gap / 2, ay = laneCenterY(a, 0);
+            r.fillCircle(ax, ay, 2, 0xFFFFD878, 200);
+        }
+        // Дела.
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+            const CampaignNodeRect rc = campaignNodeRect(g, i);
+            if (rc.valid) drawCampaignNode(r, rc.x, rc.y, rc.w, rc.h, i);
+        }
+    }
+
+    // Досье выбранного дела: одна и та же карточка на карте и в портретном окне.
+    // Ужимается ступенями: сначала теряет иллюстрацию, потом брифинг, потом «ЦЕЛЬ».
+    void drawCampaignDossier(Renderer& r, int detailX, int detailY, int detailW, int detailH, int selected) {
+        const CampaignMissionDef& mission = CAMPAIGN_MISSIONS[selected];
+        const bool unlocked = isCampaignMissionUnlocked(selected);
+        const bool completed = isCampaignMissionCompleted(selected);
+        const uint32_t accent = getCampaignAccent(selected);
+        // Узкая карточка — иллюстрация полосой сверху, текст под ней: в узкой
+        // колонке картинка слева оставляла тексту 300 px и налезала на буквы.
+        const bool artOnTop = detailW < 760;
+        const bool withArt = detailH >= (artOnTop ? 220 : 240) && detailW >= 420;
+        const bool withObjective = detailH >= 140;
+        const bool tightDossier = detailH < 110;
+        const int artW = withArt ? (artOnTop ? detailW - 24 : std::min(330, detailW * 30 / 100)) : 0;
+        const int artH = withArt ? (artOnTop ? std::min(118, detailH / 3) : detailH - 24) : 0;
+        const int textX = detailX + 16 + (withArt && !artOnTop ? artW + 14 : 0);
+        const int textW = detailX + detailW - 16 - textX;
+        r.fillRoundedRect(detailX, detailY, detailW, detailH, 10, 0xFF15111F, 250);
+        r.drawRoundedRect(detailX, detailY, detailW, detailH, 10, accent, 2, 235);
+        int contentTop = detailY;
+        if (withArt) {
+            drawMissionIllustration(r, selected, detailX + 12, detailY + 12, artW, artH);
+            if (artOnTop) contentTop = detailY + 12 + artH;
+        }
+        if (mission.bossReinforced && withArt) {
+            const char* badge = "СТРАЖ ВЕРНУЛСЯ ЗЛЕЕ";
+            const int bw = r.textWidth(FONT_SMALL, badge) + 18;
+            if (bw < artW - 16) {
+                const int by = artOnTop ? detailY + 18 : detailY + 20;
+                const int bx = artOnTop ? detailX + detailW - bw - 20 : detailX + artW - bw - 3;
+                r.fillRoundedRect(bx, by, bw, 22, 6, 0xFF4A1520, 240);
+                r.drawRoundedRect(bx, by, bw, 22, 6, 0xFFFF5A72, 1, 230);
+                r.drawText(FONT_SMALL, bx + 9, by + 5, badge, 0xFFFFB6C0, false);
+            }
+        }
+        const int statusY = contentTop + (tightDossier ? 7 : 12);
+        const char* status = campaignMissionStatus(selected);
+        const bool canChooseHere = campaignCanChooseTrackHere(selected);
+        const int statusW = std::min(textW / 2, r.textWidth(FONT_SMALL, status) + 20);
+        r.drawText(FONT_SMALL, textX, statusY,
+                   fitText(r, FONT_SMALL, mission.subtitle, textW - statusW - 10).c_str(), accent, false);
+        const uint32_t statusColor = completed ? 0xFF8AF0AE
+                                   : (unlocked || canChooseHere) ? 0xFFFFD17C : 0xFFB5AFBA;
+        r.fillRoundedRect(detailX + detailW - statusW - 14, statusY - 4, statusW, 23, 6,
+                          completed ? 0xFF1D4A34 : (unlocked ? 0xFF49361F : 0xFF302D35));
+        r.drawTextCentered(FONT_SMALL, detailX + detailW - statusW / 2 - 14, statusY,
+                           fitText(r, FONT_SMALL, status, statusW - 12).c_str(), statusColor, false);
+        const int titleY = statusY + (tightDossier ? 18 : 21);
+        const int titleH = tightDossier ? FONT_SMALL.lineHeight : FONT_MED.lineHeight;
+        if (tightDossier)
+            r.drawText(FONT_SMALL, textX, titleY,
+                       fitText(r, FONT_SMALL, mission.title, textW).c_str(), 0xFFFFE4A8, false);
+        else
+            r.drawText(FONT_MED, textX, titleY, fitText(r, FONT_MED, mission.title, textW).c_str(),
+                       0xFFFFE4A8, false);
+
+        // Строка-сводка снизу. Части добавляем по одной, пока влезают: в узком
+        // окне лучше потерять «ТИР», чем обрезать имя стража на середине.
+        char info[240];
+        auto putInfo = [&](const char* add) {
+            char next[240];
+            if (info[0]) snprintf(next, sizeof(next), "%s • %s", info, add);
+            else snprintf(next, sizeof(next), "%s", add);
+            if (r.textWidth(FONT_SMALL, next) <= textW) snprintf(info, sizeof(info), "%s", next);
+        };
+        info[0] = 0;
+        char part[96];
+        putInfo("ДЕЛО");
+        snprintf(part, sizeof(part), "%02d", selected + 1); putInfo(part);
+        snprintf(part, sizeof(part), "АКТ %s", romanAct(campaignActOf(selected))); putInfo(part);
+        if (campaignTrackOf(selected) != 0) {
+            snprintf(part, sizeof(part), "СЛЕД %s", campaignTrackLetter(campaignTrackOf(selected)));
+            putInfo(part);
+        }
+        snprintf(part, sizeof(part), "СТРАЖ: %s", mission.finalBoss); putInfo(part);
+        snprintf(part, sizeof(part), "БОСС ~%d МИН", campaignBossMinutes(selected)); putInfo(part);
+        snprintf(part, sizeof(part), "ТИР %s • +%d%%", romanAct(campaignStartingTier(selected)),
+                 campaignDifficultyPercent(selected)); putInfo(part);
+        if (mission.bossReinforced && !withArt) putInfo("СТРАЖ ВЕРНУЛСЯ ЗЛЕЕ");
+        const int infoY = detailY + detailH - (tightDossier ? 20 : 24);
+        const bool showInfo = infoY >= titleY + titleH;
+        if (showInfo)
+            r.drawText(FONT_SMALL, textX, infoY, info, 0xFFD8B8FF, false);
+
+        const int objH = 48;
+        const int objY = detailY + detailH - objH - 32;
+        const int briefY = titleY + titleH + 6;
+        const int briefBottom = withObjective ? objY - 6 : (showInfo ? infoY - 6 : detailY + detailH - 6);
+        const int briefLines = std::max(0, (briefBottom - briefY) / FONT_SMALL.lineHeight);
+        if (briefLines > 0) {
+            // Брифинг режем по целым строкам: половина строки под «ЦЕЛЬю» выглядела
+            // как обрезанный текст, а не как приём.
+            r.setClip(textX - 2, briefY - 2, textW + 4, briefLines * FONT_SMALL.lineHeight + 2);
+            r.drawTextWrapped(FONT_SMALL, textX, briefY, textW, mission.briefing, 0xFFE1D9EC, false);
+            r.clearClip();
+        }
+        if (withObjective) {
+            r.fillRoundedRect(textX - 8, objY, textW + 16, objH, 7, 0xFF21192E);
+            r.drawRoundedRect(textX - 8, objY, textW + 16, objH, 7, accent, 1, 170);
+            r.drawText(FONT_SMALL, textX, objY + (objH - FONT_SMALL.ascent) / 2, "ЦЕЛЬ", accent, false);
+            r.setClip(textX + 52, objY + 2, textW - 52, objH - 4);
+            r.drawTextWrapped(FONT_SMALL, textX + 54, objY + (objH - FONT_SMALL.lineHeight) / 2,
+                              textW - 54, mission.objective, 0xFFF0E8F6, false);
+            r.clearClip();
+        }
+    }
+
+    // Кнопки внизу: «назад» и запуск дела / фиксация следа. В узком окне
+    // (портрет, маленькое окно) кнопки идут двумя рядами, иначе надписи режутся.
+    static bool campaignActionsTwoRows(int screenW) {
+        return screenW < 860;
+    }
+    void drawCampaignActions(Renderer& r, int buttonY, int buttonH, int selected) {
+        const bool unlocked = isCampaignMissionUnlocked(selected);
+        const bool completed = isCampaignMissionCompleted(selected);
+        const bool compactLandscape = SCREEN_W < 1120;
+        const bool twoRows = campaignActionsTwoRows(SCREEN_W);
+        const int backX = compactLandscape ? 20 : 40;
+        const int backW = twoRows ? (SCREEN_W - 20 - 14) / 2 : (compactLandscape ? 220 : 350);
+        const int buttonGap = 18;
+        // Пока след не выбран, рядом появляется кнопка «к развилке»: из досье
+        // закрытого дела иначе непонятно, где эта развилка на карте.
+        const bool needForkShortcut = !isCampaignTrackChosen() && campaignForkMission(1) >= 0;
+        int forkX = 0, forkW = 0, startX = 0, startW = 0, startY = buttonY;
+        int backY = buttonY;
+        if (twoRows) {
+            // Верхний ряд — запуск дела (главное действие), нижний — назад и развилка.
+            startX = 20;
+            startW = SCREEN_W - 40;
+            startY = buttonY;
+            backY = buttonY - buttonH - 10;
+            forkX = backX + backW + 14;
+            forkW = backW - 8;
+        } else {
+            if (needForkShortcut) {
+                forkX = backX + backW + 14;
+                forkW = 240;
+                startX = forkX + forkW + 14;
+            } else {
+                startX = backX + backW + buttonGap;
+            }
+            startW = SCREEN_W - startX - (compactLandscape ? 20 : 40);
+        }
+        const bool backHover = mouseX >= backX && mouseX <= backX + backW && mouseY >= backY && mouseY <= backY + buttonH;
+        const bool startHover = mouseX >= startX && mouseX <= startX + startW && mouseY >= startY && mouseY <= startY + buttonH;
+        r.fillRect(backX, backY, backW, buttonH, backHover ? 0xFF49336F : 0xFF2A2040);
+        r.drawRect(backX, backY, backW, buttonH, 0xFF8F78BA, 2);
+        r.drawTextCentered(FONT_SMALL, backX + backW / 2, backY + (buttonH - FONT_SMALL.ascent) / 2,
+                           "НАЗАД К ГЕРОЮ [ESC]", 0xFFFFFFFF, false);
+        bool forkHover = false;
+        if (needForkShortcut) {
+            forkHover = mouseX >= forkX && mouseX <= forkX + forkW && mouseY >= backY && mouseY <= backY + buttonH;
+            r.fillRect(forkX, backY, forkW, buttonH, forkHover ? 0xFF6A4A18 : 0xFF4A3417);
+            r.drawRect(forkX, backY, forkW, buttonH, 0xFFFFD878, 2);
+            r.drawTextCentered(FONT_SMALL, forkX + forkW / 2, backY + (buttonH - FONT_SMALL.ascent) / 2,
+                               "К РАЗВИЛКЕ [TAB]", 0xFFFFE9A8, false);
+        }
         const bool canGo = unlocked || campaignCanChooseTrackHere(selected);
-        r.fillRect(backX, buttonY, buttonW, buttonH, backHover ? 0xFF49336F : 0xFF2A2040);
-        r.drawRect(backX, buttonY, buttonW, buttonH, 0xFF8F78BA, 2);
-        r.drawTextCentered(FONT_SMALL, backX + buttonW / 2, buttonY + 17, "НАЗАД К ГЕРОЮ [ESC]", 0xFFFFFFFF, false);
-        r.fillRect(startX, buttonY, buttonW, buttonH, !canGo ? 0xFF302A36 : (startHover ? 0xFFB84042 : 0xFF762A38));
-        r.drawRect(startX, buttonY, buttonW, buttonH, canGo ? 0xFFFFD878 : 0xFF625B68, 2);
-        char startLabel[64];
+        char startLabel[96];
         if (campaignCanChooseTrackHere(selected))
-            snprintf(startLabel, sizeof(startLabel), "ПОЙТИ СЛЕДОМ %s [ENTER]", campaignTrackLetter(campaignTrackOf(selected)));
+            snprintf(startLabel, sizeof(startLabel), "ПОЙТИ СЛЕДОМ %s [ENTER]",
+                     campaignTrackLetter(campaignTrackOf(selected)));
         else if (!unlocked && !isCampaignTrackChosen() && campaignTrackOf(selected) != 0)
             snprintf(startLabel, sizeof(startLabel), "СНАЧАЛА ВЫБЕРИ СЛЕД");
         else if (!unlocked) snprintf(startLabel, sizeof(startLabel), "ДЕЛО ЕЩЁ ЗАКРЫТО");
         else if (completed) snprintf(startLabel, sizeof(startLabel), "ПЕРЕИГРАТЬ [ENTER]");
         else snprintf(startLabel, sizeof(startLabel), "НАЧАТЬ ДЕЛО [ENTER]");
-        r.drawTextCentered(FONT_SMALL, startX + buttonW / 2, buttonY + 17, startLabel,
-            canGo ? 0xFFFFFFFF : 0xFF9A939F, false);
+        r.fillRect(startX, startY, startW, buttonH, !canGo ? 0xFF302A36 : (startHover ? 0xFFB84042 : 0xFF762A38));
+        r.drawRect(startX, startY, startW, buttonH, canGo ? 0xFFFFD878 : 0xFF625B68, 2);
+        r.drawTextCentered(FONT_SMALL, startX + startW / 2, startY + (buttonH - FONT_SMALL.ascent) / 2,
+            startLabel, canGo ? 0xFFFFFFFF : 0xFF9A939F, false);
         if (mouseClicked && backHover) state = STATE_HERO_SELECT;
+        else if (mouseClicked && forkHover) {
+            // Курсор встаёт на дверь развилки А, выбранный след ещё не зафиксирован.
+            const int door = campaignForkMission(1);
+            if (door >= 0) {
+                storyMissionCursor = door;
+                selectedStoryMission = door;
+                campaignActView = campaignActOf(door);
+                sound.play(SFX_CLICK, 0.02f);
+            }
+        }
         else if (mouseClicked && startHover && canGo) confirmCampaignSelection(selected);
-        noteMissionPreview();
     }
 
     void renderMissionSelectMenu(Renderer& r) {
-        if (SCREEN_W < SCREEN_H) { renderMissionSelectPortrait(r); return; }
-        renderSubmenuFrame(r, "КАМПАНИЯ • ДЕРЕВО ГЛАВ",
+        // Пять колонок перестают влезать в окно раньше, чем кончается место:
+        // в узком окне карта идёт вертикальным списком, как в портретном.
+        if (SCREEN_W < SCREEN_H || SCREEN_W < 860) { renderMissionSelectPortrait(r); return; }
+        renderSubmenuFrame(r, "КАМПАНИЯ • КАРТА ГЛАВ",
                           "Акты II–IV идут двумя следами: А — свидетель, Б — копия. Второй след откроется в новую ночь.");
 
-        int completedCount = campaignCompletedCount();
+        const int completedCount = campaignCompletedCount();
         const int seals = storySealCount();
         r.fillRoundedRect(40, 84, 205, 27, 7, 0xFF251B35);
         r.drawRoundedRect(40, 84, 205, 27, 7, 0xFFFFD878, 1);
@@ -7827,7 +8084,7 @@ struct Game {
                      completedCount, CAMPAIGN_MISSION_COUNT, save.campaignCycle, campaignGoldMultiplier());
         else
             snprintf(progress, sizeof(progress), "ДЕЛ ЗАКРЫТО %d / %d", completedCount, CAMPAIGN_MISSION_COUNT);
-        r.drawText(FONT_SMALL, 360, 90, progress, 0xFFE4D7B5);
+        r.drawText(FONT_SMALL, 360, 90, progress, 0xFFE4D7B5, false);
         char trackLine[96];
         if (isCampaignTrackChosen())
             snprintf(trackLine, sizeof(trackLine), "СЛЕД %s • %s",
@@ -7836,110 +8093,54 @@ struct Game {
         r.drawTextRight(FONT_SMALL, SCREEN_W - 22, 90, trackLine,
                         isCampaignTrackChosen() ? 0xFFFFD858 : 0xFFBFB5D0);
 
-        // ── Дерево глав ────────────────────────────────────────────────────
-        // Никаких вкладок актов: слева ствол из пяти узлов, у каждого акта свои
-        // полосы следов. Так видно, что акты II–IV идут двумя дорогами и
-        // сходятся только в акте V, — а не «одно дело за другим».
-        const bool compactLandscape = SCREEN_W < 1120;
-        const int listX = compactLandscape ? 16 : 40, listY = 118;
-        const int listW = compactLandscape ? 330 : 420;
-        const int treeH = campaignTreeHeight(std::max(300, SCREEN_H - listY - 130));
-        drawCampaignTree(r, listX, listY, listW, treeH);
+        // ── Раскладка: карта сверху, досье снизу ──────────────────────────────
+        // Досье ужимается ступенями: сначала теряет иллюстрацию, потом брифинг,
+        // потом блок «ЦЕЛЬ». Карта при этом остаётся целой.
+        // На широком мониторе карта не растягивается на всю ширину: колонки
+        // шириной 350 px читаются хуже, чем 260.
+        const int mapW = std::min(SCREEN_W - 64, 1360);
+        const int mapX = (SCREEN_W - mapW) / 2;
+        const int mapY = 118;
+        const int buttonY = SCREEN_H - 100, buttonH = 54;
+        const bool shortWindow = SCREEN_H < 620;
+        const int minDetailH = SCREEN_H < 560 ? 84 : 150;
+        const int mapLimit = buttonY - 12 - mapY - minDetailH;
+        CampaignMapGeom map = buildCampaignMap(mapX, mapY, mapW, 20, 4, 10, shortWindow);
+        while (map.height() > mapLimit && map.rowH > FONT_SMALL.lineHeight) {
+            --map.rowH;
+            map = buildCampaignMap(mapX, mapY, mapW, map.rowH, map.rowGap, map.laneGap, shortWindow);
+        }
+        while (map.height() > mapLimit && map.laneGap > 4) {
+            map.laneGap -= 2;
+            map = buildCampaignMap(mapX, mapY, mapW, map.rowH, map.rowGap, map.laneGap, shortWindow);
+        }
+        while (map.height() > mapLimit && map.rowGap > 2) {
+            --map.rowGap;
+            map = buildCampaignMap(mapX, mapY, mapW, map.rowH, map.rowGap, map.laneGap, shortWindow);
+        }
+        // Растим строки, только если это не отнимает места у досье: иллюстрации
+        // нужны 240 px, и на 1280x720 карта не должна их съедать.
+        const int detailCeiling = 340;
+        while (map.rowH < 30) {
+            const CampaignMapGeom next =
+                buildCampaignMap(mapX, mapY, mapW, map.rowH + 1, map.rowGap, map.laneGap, shortWindow);
+            const int freeNext = buttonY - 12 - (mapY + next.height() + 12);
+            if (freeNext < detailCeiling) break;
+            map = next;
+        }
+        const int detailH = std::max(minDetailH, std::min(buttonY - 12 - (mapY + map.height() + 12), 400));
+        // Карта и досье центрируются как одна колонка: иначе в высоком окне
+        // между ними оставалась дыра.
+        const int contentH = map.height() + 12 + detailH;
+        const int stageY = mapY + std::max(0, (buttonY - 12 - mapY - contentH) / 2);
+        if (stageY != map.y)
+            map = buildCampaignMap(mapX, stageY, mapW, map.rowH, map.rowGap, map.laneGap, shortWindow);
+        drawCampaignMap(r, map);
 
         const int selected = std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, storyMissionCursor));
-        const CampaignMissionDef& mission = CAMPAIGN_MISSIONS[selected];
-        const bool unlocked = isCampaignMissionUnlocked(selected);
-        const bool completed = isCampaignMissionCompleted(selected);
-        const uint32_t accent = getCampaignAccent(selected);
-        const int detailX = listX + listW + 20;
-        const int detailY = 162, detailW = compactLandscape ? SCREEN_W - detailX - 16 : SCREEN_W - detailX - 40;
-        const int detailH = 440;
-        r.fillRoundedRect(detailX, detailY, detailW, detailH, 12, 0xFF15111F, 250);
-        r.drawRoundedRect(detailX, detailY, detailW, detailH, 12, accent, 2, 235);
-        drawMissionIllustration(r, selected, detailX + 12, detailY + 12, detailW - 24, 200);
-        if (mission.bossReinforced) {
-            // Досье честно предупреждает: это не новый страж, а тот же, вернувшийся
-            // сильнее. Игрок должен знать заранее, за что платит временем.
-            const char* badge = "ВОЗВРАЩЕНИЕ • ТОТ ЖЕ СТРАЖ ЗЛЕЕ";
-            const int bw = r.textWidth(FONT_SMALL, badge) + 22;
-            r.fillRoundedRect(detailX + detailW - bw - 22, detailY + 22, bw, 24, 6, 0xFF4A1520, 240);
-            r.drawRoundedRect(detailX + detailW - bw - 22, detailY + 22, bw, 24, 6, 0xFFFF5A72, 1, 230);
-            r.drawText(FONT_SMALL, detailX + detailW - bw - 11, detailY + 28, badge, 0xFFFFB6C0, false);
-        }
+        drawCampaignDossier(r, mapX, map.y + map.height() + 12, mapW, detailH, selected);
 
-        r.drawText(FONT_SMALL, detailX + 22, detailY + 222, mission.subtitle, accent, false);
-        char statusBuf[128];
-        if (completed) snprintf(statusBuf, sizeof(statusBuf), "ПРОЙДЕНА • МОЖНО ПЕРЕИГРАТЬ");
-        else if (unlocked) snprintf(statusBuf, sizeof(statusBuf), "ДОСТУПНА • ЕЩЁ НЕ ПРОЙДЕНА");
-        else if (campaignCanChooseTrackHere(selected))
-            snprintf(statusBuf, sizeof(statusBuf), "ВЫБЕРИ СЛЕД %s • ЭТО РЕШЕНИЕ ДО НОВОЙ НОЧИ",
-                     campaignTrackLetter(campaignTrackOf(selected)));
-        else if (isCampaignMissionLockedByChoice(selected))
-            snprintf(statusBuf, sizeof(statusBuf), "ДРУГОЙ ВЫБОР СДЕЛАН • ЭТА ДВЕРЬ ЗАКРЫТА");
-        // Чужой след — это про сделанный выбор. Пока след не выбран, честнее
-        // сказать «выбери след», а не «закрыто до новой ночи».
-        else if (!isCampaignTrackChosen() && campaignTrackOf(selected) != 0)
-            snprintf(statusBuf, sizeof(statusBuf), "СНАЧАЛА ВЫБЕРИ СЛЕД В АКТЕ II");
-        else if (isCampaignMissionLockedByTrack(selected))
-            snprintf(statusBuf, sizeof(statusBuf), "ЧУЖОЙ СЛЕД • ЗАКРЫТО ДО НОВОЙ НОЧИ");
-        else snprintf(statusBuf, sizeof(statusBuf), "ЗАКРЫТА • НУЖНО ДЕЛО %02d", campaignMissingPrereq(selected) + 1);
-        const char* status = statusBuf;
-        const uint32_t statusColor = completed ? 0xFF8AF0AE : (unlocked ? 0xFFFFD17C : 0xFFB5AFBA);
-        const int statusW = r.textWidth(FONT_SMALL, status);
-        r.fillRoundedRect(detailX + detailW - statusW - 42, detailY + 217, statusW + 24, 24, 6,
-                          completed ? 0xFF1D4A34 : (unlocked ? 0xFF49361F : 0xFF302D35));
-        r.drawText(FONT_SMALL, detailX + detailW - statusW - 30, detailY + 222, status, statusColor, false);
-        r.drawText(FONT_MED, detailX + 22, detailY + 242, mission.title, 0xFFFFE4A8, false);
-        r.drawTextWrapped(FONT_SMALL, detailX + 22, detailY + 270, detailW - 44, mission.briefing, 0xFFE1D9EC, false);
-
-        const int objectiveY = detailY + 315;
-        r.fillRoundedRect(detailX + 14, objectiveY, detailW - 28, 48, 7, 0xFF21192E);
-        r.drawRoundedRect(detailX + 14, objectiveY, detailW - 28, 48, 7, accent, 1, 170);
-        r.drawText(FONT_SMALL, detailX + 27, objectiveY + 15, "ЦЕЛЬ", accent, false);
-        r.drawTextWrapped(FONT_SMALL, detailX + 88, objectiveY + 8, detailW - 118, mission.objective, 0xFFF0E8F6, false);
-
-        const int infoY = detailY + 374, infoX = detailX + 14, infoGap = 8, infoH = 49;
-        const int infoW = (detailW - 28 - 3 * infoGap) / 4;
-        const char* infoLabels[4] = {"ДЕЛО", "ФИНАЛЬНЫЙ СТРАЖ", "ПОЯВЛЕНИЕ БОССА", "ТИР • СЛОЖНОСТЬ"};
-        char caseNumber[40], bossTime[40], tierAndDifficulty[40];
-        snprintf(caseNumber, sizeof(caseNumber), "%02d • АКТ %s", selected + 1, romanAct(campaignActOf(selected)));
-        snprintf(bossTime, sizeof(bossTime), "ЧЕРЕЗ ~%d МИН", campaignBossMinutes(selected));
-        snprintf(tierAndDifficulty, sizeof(tierAndDifficulty), "%s • +%d%%", romanAct(campaignStartingTier(selected)), campaignDifficultyPercent(selected));
-        const char* infoValues[4] = {caseNumber, mission.finalBoss, bossTime, tierAndDifficulty};
-        for (int i = 0; i < 4; ++i) {
-            const int ix = infoX + i * (infoW + infoGap);
-            r.fillRoundedRect(ix, infoY, infoW, infoH, 7, 0xFF201A2B);
-            r.drawRoundedRect(ix, infoY, infoW, infoH, 7, i == 0 ? 0xFF6A5A7B : accent, 1);
-            r.drawTextCentered(FONT_SMALL, ix + infoW / 2, infoY + 6, infoLabels[i], 0xFFBEB5CD, false);
-            r.drawTextCentered(FONT_SMALL, ix + infoW / 2, infoY + 27, infoValues[i], i == 0 ? 0xFFBFE8D0 : 0xFFFFD58A, false);
-        }
-
-        const int buttonY = SCREEN_H - 100, buttonH = 54;
-        const int backX = compactLandscape ? 20 : 40;
-        const int backW = compactLandscape ? 220 : 350;
-        const int buttonGap = 18, startX = backX + backW + buttonGap;
-        const int startW = SCREEN_W - startX - (compactLandscape ? 20 : 40);
-        const bool backHover = mouseX >= backX && mouseX <= backX + backW && mouseY >= buttonY && mouseY <= buttonY + buttonH;
-        const bool startHover = mouseX >= startX && mouseX <= startX + startW && mouseY >= buttonY && mouseY <= buttonY + buttonH;
-        r.fillRect(backX, buttonY, backW, buttonH, backHover ? 0xFF49336F : 0xFF2A2040);
-        r.drawRect(backX, buttonY, backW, buttonH, 0xFF8F78BA, 2);
-        r.drawTextCentered(FONT_SMALL, backX + backW / 2, buttonY + 18, "НАЗАД К ГЕРОЮ [ESC]", 0xFFFFFFFF, false);
-        const bool canGo = unlocked || campaignCanChooseTrackHere(selected);
-        char startLabel[96];
-        if (campaignCanChooseTrackHere(selected))
-            snprintf(startLabel, sizeof(startLabel), "ПОЙТИ СЛЕДОМ %s [ENTER]",
-                     campaignTrackLetter(campaignTrackOf(selected)));
-        else if (!unlocked && !isCampaignTrackChosen() && campaignTrackOf(selected) != 0)
-            snprintf(startLabel, sizeof(startLabel), "СНАЧАЛА ВЫБЕРИ СЛЕД");
-        else if (!unlocked) snprintf(startLabel, sizeof(startLabel), "ДЕЛО ЕЩЁ ЗАКРЫТО");
-        else if (completed) snprintf(startLabel, sizeof(startLabel), "ПЕРЕИГРАТЬ [ENTER]");
-        else snprintf(startLabel, sizeof(startLabel), "НАЧАТЬ ДЕЛО [ENTER]");
-        r.fillRect(startX, buttonY, startW, buttonH, !canGo ? 0xFF302A36 : (startHover ? 0xFFB84042 : 0xFF762A38));
-        r.drawRect(startX, buttonY, startW, buttonH, canGo ? 0xFFFFD878 : 0xFF625B68, 2);
-        r.drawTextCentered(FONT_SMALL, startX + startW / 2, buttonY + 18, startLabel,
-            canGo ? 0xFFFFFFFF : 0xFF9A939F, false);
-        if (mouseClicked && backHover) state = STATE_HERO_SELECT;
-        else if (mouseClicked && startHover && canGo) confirmCampaignSelection(selected);
+        drawCampaignActions(r, buttonY, buttonH, selected);
         noteMissionPreview();
     }
 
@@ -8681,6 +8882,7 @@ struct Game {
             "2.10.23 • АПДЕЙТЕР: МЁРТВАЯ ВЕТКА И СТАРЫЙ ФАЙЛ БОЛЬШЕ НЕ ЗАГЛУШКА",
             "2.10.24 • ПАТЧНОУТЫ ЛИСТАЮТСЯ, КНОПКИ НЕ ВЫЛЕЗАЮТ ЗА ПАНЕЛЬ",
             "2.10.25 • РАЗВИЛКА ТОЛЬКО В АКТЕ II: ДВЕРИ А И Б ПЕРЕКЛЮЧАЮТСЯ",
+            "2.10.26 • КАМПАНИЯ — КАРТА ГЛАВ С ИМЕНАМИ ДЕЛ И РАЗВИЛКОЙ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -8802,7 +9004,8 @@ struct Game {
             "• Дебаг-меню было, но открывалось только по секретному коду v404, и со стороны выглядело так, будто отладки в игре нет.\n• Теперь F9 открывает его сразу в любом состоянии; клавиша ` — запасная, для ноутбуков, где F-ряд спрятан за Fn. В меню паузы появилась кнопка ОТЛАДКА [F9].\n• Пока меню открыто, бой замирает: раньше отладка шла поверх живого боя и можно было умереть, пока выбираешь пункт.\n• Строки выбираются стрелками и Enter или цифрами 1…9 и 0; состояние переключателей видно справа.\n• Новые пункты под недавние жалобы: СПАВН СТАИ КРЫС (проверить, что крыс вдвое больше), ПРИЗВАТЬ СТРАЖА (по очереди Моргар, Малакор, Кардинал, Азарот, Протоколист, Двойник — проверить крест), ВСЕ 40 ПРЕДМЕТОВ ПО 3 РАНГА (увидеть все иконки в сборке), ПОЛНЫЙ ЗАРЯД СУПЕРУМЕНИЯ, F3-оверлей.\n• Бессмертие, золото, все дела, все герои, Кузница, убить всех, +5 уровней и новая ночь остались на месте.",
             "• Обновления не было, потому что локальная ветка удалена на GitHub: апдейтер честно отвечал «Already up to date» для ветки, которой больше нет.\n• Теперь на старте он это видит и прямо пишет: ветки такой нет на GitHub.\n• На мёртвую ветку он больше не возвращается - остаётся на собранной, и следующий запуск идёт уже с неё. Раньше цикл повторялся каждый раз.\n• Скачанный руками update.bat попадал в stash и при возврате ложился поверх свежего из ветки: следующий запуск снова поднимал старый скрипт. Теперь после возврата из stash файлы сравниваются по номеру и остаётся более новый.\n• Кнопка Raw на GitHub отдаёт update.bat из main, а main - 2.10.4 с древним скриптом в UTF-8. Поэтому «перекачал новый» снова давало старый: свежий файл лежит только в рабочей ветке (см. UPDATE_HOWTO.md).\n• UPDATE_HOWTO.md: один разовый набор команд, чтобы перейти на рабочую ветку и получить свежий апдейтер.\n• Патчноуты листаются: длинная заметка прокручивается колесом мыши или PgUp/PgDn (стрелки вверх/вниз — по строке, Home/End — начало и конец), справа видна полоса прокрутки.\n• Кнопки и галочка в патчноутах больше не вылезают за панель в маленьком окне: раскладка считается от размеров панели, а не от 1280x720.",
             "• Длинный патчноут уезжал за нижнюю кромку панели, и дочитать его было нельзя. Теперь заметка листается: колесо мыши над текстом, PgUp / PgDn — страницами, стрелки вверх / вниз — по строке, Home / End — начало и конец.\n• Справа в заметке появилась полоса прокрутки, а подсказка снизу меняется: «прокрутка заметки», если текст длиннее окна, и «заметка целиком», если нет.\n• При смене версии прокрутка сбрасывается: новая заметка открывается с начала.\n• Раньше кнопки «ПРЕДЫДУЩАЯ / СЛЕДУЮЩАЯ / В ИГРУ», галочка и подсказка стояли на жёстких координатах для 1280x720 и в маленьком окне вылезали за панель. Теперь вся раскладка считается от размеров панели и проверена на 1920x1080, 1280x720, 1024x600, 900x520 и портретных 720x1280.\n• Обрезка текста живёт в рендерере (setClip / clearClip), поэтому такие же длинные заметки в словаре и других панелях можно листать тем же способом.",
-            "• Развилку можно было обойти: стоя в акте III, нажать «ПОЙТИ СЛЕДОМ А» и зафиксировать след там, где его выбирать нельзя. Теперь след фиксируется только на двери развилки — на первом деле акта II.\n• Пока след не выбран, дерево не листается дальше акта II, а ← и → переключают две двери развилки: А «СВИДЕТЕЛЬ» и Б «КОПИЯ». Раньше клавиатура всегда стояла на полосе А, и след Б с клавиатуры было не выбрать вовсе.\n• До выбора обе полосы выглядят равноправно: раньше обе были перечёркнуты, будто выбор уже сделан и потерян.\n• Дело впереди развилки больше не обещает «выбери след»: на кнопке честно написано «СНАЧАЛА ВЫБЕРИ СЛЕД», а досье объясняет, что след выбирают в акте II.",        };
+            "• Развилку можно было обойти: стоя в акте III, нажать «ПОЙТИ СЛЕДОМ А» и зафиксировать след там, где его выбирать нельзя. Теперь след фиксируется только на двери развилки — на первом деле акта II.\n• Пока след не выбран, дерево не листается дальше акта II, а ← и → переключают две двери развилки: А «СВИДЕТЕЛЬ» и Б «КОПИЯ». Раньше клавиатура всегда стояла на полосе А, и след Б с клавиатуры было не выбрать вовсе.\n• До выбора обе полосы выглядят равноправно: раньше обе были перечёркнуты, будто выбор уже сделан и потерян.\n• Дело впереди развилки больше не обещает «выбери след»: на кнопке честно написано «СНАЧАЛА ВЫБЕРИ СЛЕД», а досье объясняет, что след выбирают в акте II.",
+            "• Кампания больше не список номеров: главы идут картой слева направо — акт I, развилка на два следа в актах II–IV и слияние в акте V. У каждого дела на карте своё имя, а не «05».\n• Развилку видно: дороги расходятся из первого акта и сходятся в последнем. Полоса следа А золотая, следа Б бирюзовая, чужой след гаснет. Для карты у длинных дел есть короткие имена, полные названия остались в досье.\n• Досье переехало под карту и стало шире: иллюстрация, брифинг, цель, а строкой ниже страж, время босса и тир. В низком окне досье ужимается ступенями — сначала теряет картинку, потом брифинг, — а не режет буквы.\n• Кнопка «К РАЗВИЛКЕ [TAB]»: пока след не выбран, из любого закрытого дела видно, где эта развилка.\n• Портретное и узкое окно: карта разворачивается в список по актам, дела идут строками с названиями, кнопки — двумя рядами, чтобы надписи не резались.\n• Проверено на 1920x1080, 1280x720, 1024x600, 900x520 и портретных 720x1280.",        };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
         static_assert(sizeof(notes) / sizeof(notes[0]) == PATCH_NOTES_COUNT,
@@ -10095,6 +10298,14 @@ struct Game {
             else if (key == 39 || key == 'D' || key == 'd') moveCampaignCursor(0, 1);
             else if (key == 38 || key == 'W' || key == 'w') moveCampaignCursor(-1, 0);
             else if (key == 40 || key == 'S' || key == 's') moveCampaignCursor(1, 0);
+            // Tab — сразу к развилке: единственное место, где фиксируется след.
+            else if (key == 9 && !isCampaignTrackChosen() && campaignForkMission(1) >= 0) {
+                const int door = campaignForkMission(1);
+                storyMissionCursor = door;
+                selectedStoryMission = door;
+                campaignActView = campaignActOf(door);
+                sound.play(SFX_CLICK, 0.02f);
+            }
             else if (key == 13 || key == 32) confirmCampaignSelection(storyMissionCursor);
         } else if (state == STATE_MISSION_COMPLETE) {
             if (key == 27) { storyMissionCursor = selectedStoryMission; state = STATE_MISSION_SELECT; }
