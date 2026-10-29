@@ -164,7 +164,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 117;
+static constexpr int PATCH_NOTES_COUNT = 118;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -747,6 +747,10 @@ struct Game {
     GameState cutsceneReturnState = STATE_PLAYING;
     bool patchNotesDoNotShowAgain = false;
     int patchNotesPage = 0;
+    // Прокрутка внутри заметки: заметка 2.10.23 длиннее панели, а раньше текст
+    // просто уезжал за нижнюю кромку и его нельзя было дочитать.
+    float patchNotesScroll = 0.0f;
+    int patchNotesScrollMax = 0;
     int hallPage = 0; // 0=Hall of Fame, 1=Witness Ledger
     int settingsVolumeFocus = 0; // 0=SFX, 1=music volume
     float bossDeferredTimer = 0.0f;
@@ -798,6 +802,7 @@ struct Game {
         loadSave();
         initRun(0, false);
         patchNotesPage = PATCH_NOTES_COUNT - 1;
+        patchNotesScroll = 0.0f;
         state = options.patchNotesHiddenVersion == PATCH_NOTES_VERSION ? STATE_MENU : STATE_PATCH_NOTES;
     }
 
@@ -8534,7 +8539,14 @@ struct Game {
         }
         patchNotesDoNotShowAgain = false;
         patchNotesPage = 0;
+        patchNotesScroll = 0.0f;
         state = STATE_MENU;
+    }
+
+    void patchNotesGoPage(int delta) {
+        patchNotesPage = std::max(0, std::min(PATCH_NOTES_COUNT - 1, patchNotesPage + delta));
+        patchNotesScroll = 0.0f;   // новая заметка читается с начала
+        patchNotesScrollMax = 0;
     }
 
     void renderPatchNotes(Renderer& r) {
@@ -8622,6 +8634,7 @@ struct Game {
             "2.10.21 • КРЫС ВДВОЕ БОЛЬШЕ, ДВОЙНИК БЬЁТ В ГЕРОЯ, МУЗЫКА ПО ДЕЛАМ",
             "2.10.22 • ДЕБАГ-МЕНЮ ПО F9: КРЫСЫ, СТРАЖИ, ВСЕ ПРЕДМЕТЫ",
             "2.10.23 • АПДЕЙТЕР: МЁРТВАЯ ВЕТКА И СТАРЫЙ ФАЙЛ БОЛЬШЕ НЕ ЗАГЛУШКА",
+            "2.10.24 • ПАТЧНОУТЫ ЛИСТАЮТСЯ, КНОПКИ НЕ ВЫЛЕЗАЮТ ЗА ПАНЕЛЬ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -8741,37 +8754,78 @@ struct Game {
             "Апдейтер показывал русский текст крякозябрами, если его файл был сохранён в UTF-8: cmd.exe читает .bat в кодовой странице консоли.\n• Текст апдейтера теперь живёт в tools/update_bat_src.txt обычным UTF-8, а update.bat собирается из него в cp866: python3 tools/build_update_bat.py.\n• Сборщик проверяет, что каждая буква влезает в cp866, что кириллица стоит только в echo и rem, что каждый goto находит метку и что номер апдейтера совпадает с версией игры.\n• Если запущена всё-таки испорченная копия, апдейтер видит это по длине слова-маячка, пишет предупреждение по-английски и пробует вернуть файл из репозитория.\n• Ветка для сборки выбирается сама: main или ветка arena/* с самой свежей версией в src/version.h (руками: update.bat arena/...). Раньше апдейтер тянул ту ветку, где стоял, и честно отвечал «обновлять нечего», пока на GitHub лежала версия новее.\n• Скачанный руками update.bat больше не побеждает версию из ветки автоматически: сравниваются номера, и остаётся свежий.\n• Кодовая страница консоли возвращается к прежней после выхода.",
             "• Крысиная стая выросла вдвое: 16–24 крысы вместо 8–12, кучка стала плотной.\n• Описание дела больше не читается дважды: экран выбора уже озвучил его, и старт забега не повторяет ту же запись. Если запись ещё играет, цель дела читается после её конца.\n• Двойник: обмен местами больше не встаёт вплотную к герою (зеркало держит 190 px, у края арены — 150 px), поэтому телепорт перестал убивать касанием. Крест снайперский: один луч смотрит прямо в героя, у старой точки залп сдвинут на полшага.\n• Музыка дел: audio/ss_case_01.mp3 … ss_case_28.mp3 играет своё дело, нет файла — общий плейлист боя, нет и его — встроенная тема. Смена дела перезапускает трек.\n• Музыка стражей: audio/ss_boss_guardian00.mp3 … 05.mp3 закреплена за типом стража, общий ss_boss_theme остаётся запасным.\n• Эндлес играет весь боевой набор в перемешанном порядке и без повторов, пока не кончится список: в пул входят ss_gameplay_*, ss_case_NN и ss_gameplay_endless_*.\n• Нашлась причина, по которой «своя музыка дела» не работала: сцена искалась по префиксу ss_gameplay_run, и файлы ss_gameplay_caseNN.mp3 не читались вовсе. Теперь читаются оба имени.\n• music_prompts.md: та же схема имён, что читает игра, готовый список файлов и объяснение, как всё это выбирается.\n• Если апдейтер собрал ту же версию, что уже была, значит он работал на старой ветке: с 2.10.20 он сам выбирает ветку с самой свежей версией и печатает её номер до сборки.",
             "• Дебаг-меню было, но открывалось только по секретному коду v404, и со стороны выглядело так, будто отладки в игре нет.\n• Теперь F9 открывает его сразу в любом состоянии; клавиша ` — запасная, для ноутбуков, где F-ряд спрятан за Fn. В меню паузы появилась кнопка ОТЛАДКА [F9].\n• Пока меню открыто, бой замирает: раньше отладка шла поверх живого боя и можно было умереть, пока выбираешь пункт.\n• Строки выбираются стрелками и Enter или цифрами 1…9 и 0; состояние переключателей видно справа.\n• Новые пункты под недавние жалобы: СПАВН СТАИ КРЫС (проверить, что крыс вдвое больше), ПРИЗВАТЬ СТРАЖА (по очереди Моргар, Малакор, Кардинал, Азарот, Протоколист, Двойник — проверить крест), ВСЕ 40 ПРЕДМЕТОВ ПО 3 РАНГА (увидеть все иконки в сборке), ПОЛНЫЙ ЗАРЯД СУПЕРУМЕНИЯ, F3-оверлей.\n• Бессмертие, золото, все дела, все герои, Кузница, убить всех, +5 уровней и новая ночь остались на месте.",
-            "• Обновления не было, потому что локальная ветка удалена на GitHub: апдейтер честно отвечал «Already up to date» для ветки, которой больше нет.\n• Теперь на старте он это видит и прямо пишет: ветки такой нет на GitHub.\n• На мёртвую ветку он больше не возвращается - остаётся на собранной, и следующий запуск идёт уже с неё. Раньше цикл повторялся каждый раз.\n• Скачанный руками update.bat попадал в stash и при возврате ложился поверх свежего из ветки: следующий запуск снова поднимал старый скрипт. Теперь после возврата из stash файлы сравниваются по номеру и остаётся более новый.\n• Кнопка Raw на GitHub отдаёт update.bat из main, а main - 2.10.4 с древним скриптом в UTF-8. Поэтому «перекачал новый» снова давало старый: свежий файл лежит только в рабочей ветке (см. UPDATE_HOWTO.md).\n• UPDATE_HOWTO.md: один разовый набор команд, чтобы перейти на рабочую ветку и получить свежий апдейтер.",
-        };
+            "• Обновления не было, потому что локальная ветка удалена на GitHub: апдейтер честно отвечал «Already up to date» для ветки, которой больше нет.\n• Теперь на старте он это видит и прямо пишет: ветки такой нет на GitHub.\n• На мёртвую ветку он больше не возвращается - остаётся на собранной, и следующий запуск идёт уже с неё. Раньше цикл повторялся каждый раз.\n• Скачанный руками update.bat попадал в stash и при возврате ложился поверх свежего из ветки: следующий запуск снова поднимал старый скрипт. Теперь после возврата из stash файлы сравниваются по номеру и остаётся более новый.\n• Кнопка Raw на GitHub отдаёт update.bat из main, а main - 2.10.4 с древним скриптом в UTF-8. Поэтому «перекачал новый» снова давало старый: свежий файл лежит только в рабочей ветке (см. UPDATE_HOWTO.md).\n• UPDATE_HOWTO.md: один разовый набор команд, чтобы перейти на рабочую ветку и получить свежий апдейтер.\n• Патчноуты листаются: длинная заметка прокручивается колесом мыши или PgUp/PgDn (стрелки вверх/вниз — по строке, Home/End — начало и конец), справа видна полоса прокрутки.\n• Кнопки и галочка в патчноутах больше не вылезают за панель в маленьком окне: раскладка считается от размеров панели, а не от 1280x720.",
+            "• Длинный патчноут уезжал за нижнюю кромку панели, и дочитать его было нельзя. Теперь заметка листается: колесо мыши над текстом, PgUp / PgDn — страницами, стрелки вверх / вниз — по строке, Home / End — начало и конец.\n• Справа в заметке появилась полоса прокрутки, а подсказка снизу меняется: «прокрутка заметки», если текст длиннее окна, и «заметка целиком», если нет.\n• При смене версии прокрутка сбрасывается: новая заметка открывается с начала.\n• Раньше кнопки «ПРЕДЫДУЩАЯ / СЛЕДУЮЩАЯ / В ИГРУ», галочка и подсказка стояли на жёстких координатах для 1280x720 и в маленьком окне вылезали за панель. Теперь вся раскладка считается от размеров панели и проверена на 1920x1080, 1280x720, 1024x600, 900x520 и портретных 720x1280.\n• Обрезка текста живёт в рендерере (setClip / clearClip), поэтому такие же длинные заметки в словаре и других панелях можно листать тем же способом.",        };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
         static_assert(sizeof(notes) / sizeof(notes[0]) == PATCH_NOTES_COUNT,
                       "хроника: у каждой версии должна быть заметка");
-        const int versionY = portraitPatch ? 80 : 108;
+        // Вся геометрия ниже считается от панели, а не от чисел «для 1280x720»:
+        // раньше кнопки стояли на y=555/617, и в маленьком окне они вылезали
+        // за пределы панели вместе с длинной заметкой.
+        const int versionY = panelY + (portraitPatch ? 64 : 80);
+        const int closeH = 46;
+        const int closeW = portraitPatch ? 300 : (compactPatch ? 260 : 275);
+        const int closeY = panelY + panelH - closeH - 12;
+        const int cby = closeY - FONT_SMALL.lineHeight - 12;
+        const int btnH = 42;
+        const int btnY = cby - btnH - 12;
+        const int pageHintY = btnY - FONT_SMALL.lineHeight - 6;
         r.drawTextCentered(FONT_MED, SCREEN_W / 2, versionY, versions[patchNotesPage], 0xFFFFC75A);
-        const int notesX = compactPatch ? panelX + 18 : 190;
-        const int notesY = portraitPatch ? 126 : 148;
-        const int notesW = compactPatch ? panelW - 36 : 900;
-        const int notesH = portraitPatch ? std::min(780, SCREEN_H - 470) : 370;
+        const int notesX = compactPatch ? panelX + 18 : panelX + 60;
+        const int notesY = versionY + FONT_MED.lineHeight + 16;
+        const int notesW = compactPatch ? panelW - 36 : panelW - 120;
+        // Заметка занимает всё место между версией и подсказкой; всё, что не
+        // влезло, листается колесом или PgUp/PgDn.
+        const int notesH = std::max(96, pageHintY - notesY - 12);
         r.fillRoundedRect(notesX, notesY, notesW, notesH, 10, 0xFF120D22, 240);
         r.drawRoundedRect(notesX, notesY, notesW, notesH, 10, 0xFF665187, 2);
         const int notesTextX = notesX + (compactPatch ? 18 : 40);
+        const int notesTextW = notesW - (compactPatch ? 36 : 80);
         const int notesTextY = notesY + 28;
-        r.drawTextWrapped(FONT_MED, notesTextX, notesTextY, notesW - (compactPatch ? 36 : 80), notes[patchNotesPage], 0xFFE5DDF4, false);
-        const int pageHintY = portraitPatch ? notesY + notesH + 10 : 530;
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, pageHintY, "ЛИСТАЙ [← / →] ИЛИ КНОПКАМИ • ЗАПИСКИ СОБРАНЫ ПО ХРОНИКЕ РЕЛИЗОВ", 0xFFB9ADCC);
-        const int btnW = compactPatch ? (SCREEN_W - 64) / 2 : 280, btnH = 42;
-        const int btnY = portraitPatch ? SCREEN_H - 260 : 555;
-        const int prevX = compactPatch ? (SCREEN_W - (2 * btnW + 16)) / 2 : 285;
-        const int nextX = compactPatch ? prevX + btnW + 16 : 715;
+        const int notesInnerTop = notesY + 8;
+        const int notesInnerH = notesH - 16;
+        // Прокрутка: длинная заметка не режется по кромке, а листается.
+        const int notesContentH = r.measureTextWrapped(FONT_MED, notesTextW, notes[patchNotesPage]);
+        patchNotesScrollMax = std::max(0, notesContentH + 20 - notesInnerH);
+        if (mouseWheelDelta != 0 && mouseX >= notesX && mouseX <= notesX + notesW &&
+            mouseY >= notesY && mouseY <= notesY + notesH) {
+            const int notches = std::max(1, std::abs(mouseWheelDelta) / 120);
+            patchNotesScroll += (mouseWheelDelta < 0 ? 1.0f : -1.0f) * 48.0f * (float)notches;
+        }
+        patchNotesScroll = std::max(0.0f, std::min((float)patchNotesScrollMax, patchNotesScroll));
+        const bool pageScrolls = patchNotesScrollMax > 0;
+        if (pageScrolls) {
+            // Текст режется ровно по внутреннему прямоугольнику панели.
+            r.setClip(notesX + 2, notesInnerTop, notesW - 4, notesInnerH);
+        }
+        r.drawTextWrapped(FONT_MED, notesTextX, notesTextY - (int)patchNotesScroll, notesTextW,
+                          notes[patchNotesPage], 0xFFE5DDF4, false);
+        if (pageScrolls) {
+            r.clearClip();
+            const int barX = notesX + notesW - 9, barTop = notesInnerTop, barH = notesInnerH;
+            r.fillRoundedRect(barX, barTop, 4, barH, 2, 0xFF241C38);
+            const int thumbH = std::max(22, barH * notesInnerH / std::max(1, notesContentH));
+            const float t = (float)patchNotesScroll / (float)std::max(1, patchNotesScrollMax);
+            const int thumbY = barTop + (int)((barH - thumbH) * t);
+            r.fillRoundedRect(barX, thumbY, 4, thumbH, 2, 0xFF9E8FD0);
+        }
+        // Подсказка не должна быть шире панели: в узком окне она обрезалась краем.
+        const char* pageHint = compactPatch
+            ? (pageScrolls ? "КОЛЕСО / PGDN — ПРОКРУТКА  •  <-/-> — ЗАМЕТКА" : "ЗАМЕТКА ЦЕЛИКОМ  •  <-/-> — ДРУГАЯ")
+            : (pageScrolls ? "КОЛЕСО МЫШИ ИЛИ PGDN / PGUP — ПРОКРУТКА ЗАМЕТКИ  •  ЛИСТАЙ [<- / ->] ИЛИ КНОПКАМИ"
+                           : "ЗАМЕТКА ЦЕЛИКОМ НА ЭКРАНЕ  •  ЛИСТАЙ [<- / ->] ИЛИ КНОПКАМИ");
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, pageHintY, pageHint, pageScrolls ? 0xFFFFD878 : 0xFFB9ADCC);
+        const int btnW = compactPatch ? (panelW - 60) / 2 : 280;
+        const int prevX = compactPatch ? panelX + 20 : panelX + 155;
+        const int nextX = prevX + btnW + (compactPatch ? 16 : 150);
         r.fillRoundedRect(prevX, btnY, btnW, btnH, 8, 0xFF30234B);
         r.drawRoundedRect(prevX, btnY, btnW, btnH, 8, 0xFF7F69A8, 1);
         r.drawTextCentered(FONT_SMALL, prevX + btnW/2, btnY + 12, "◄ ПРЕДЫДУЩАЯ", 0xFFFFFFFF);
         r.fillRoundedRect(nextX, btnY, btnW, btnH, 8, 0xFF30234B);
         r.drawRoundedRect(nextX, btnY, btnW, btnH, 8, 0xFF7F69A8, 1);
         r.drawTextCentered(FONT_SMALL, nextX + btnW/2, btnY + 12, "СЛЕДУЮЩАЯ ►", 0xFFFFFFFF);
-        const int cbx = portraitPatch ? 24 : (compactPatch ? 24 : 248);
-        const int cby = portraitPatch ? SCREEN_H - 145 : 617;
+        const int cbx = compactPatch ? panelX + 20 : panelX + 118;
         const uint32_t checkboxFill = patchNotesDoNotShowAgain ? 0xFF72E5A0 : 0xFF211A31;
         const uint32_t checkboxBorder = patchNotesDoNotShowAgain ? 0xFFC7FFD8 : 0xFFB6A5D5;
         r.fillRoundedRect(cbx, cby, 24, 24, 4, checkboxFill);
@@ -8782,17 +8836,15 @@ struct Game {
             r.drawLine(cbx + 10, cby + 18, cbx + 20, cby + 5, 0xFF182635, 4, 255, false);
         }
         r.drawText(FONT_SMALL, cbx + 36, cby + 4, "Больше не показывать патчноуты этой версии", 0xFFE1D8F0);
-        const int closeW = portraitPatch ? 300 : (compactPatch ? 260 : 275), closeH = 46;
-        const int closeX = portraitPatch ? (SCREEN_W - closeW) / 2 : (compactPatch ? SCREEN_W - closeW - 24 : 735);
-        const int closeY = portraitPatch ? SCREEN_H - 80 : 606;
+        const int closeX = compactPatch ? SCREEN_W - closeW - panelX - 20 : panelX + 605;
         bool closeHover = mouseX >= closeX && mouseX <= closeX + closeW && mouseY >= closeY && mouseY <= closeY + closeH;
         r.fillRoundedRect(closeX, closeY, closeW, closeH, 8, closeHover ? 0xFF684A9C : 0xFF3B2B5A);
         r.drawRoundedRect(closeX, closeY, closeW, closeH, 8, 0xFFFFD858, 2);
         r.drawTextCentered(FONT_MED, closeX + closeW/2, closeY + 12, "В ИГРУ [ENTER]", 0xFFFFFFFF);
         if (mouseClicked) {
             if (mouseX >= cbx && mouseX <= cbx + 410 && mouseY >= cby - 2 && mouseY <= cby + 28) patchNotesDoNotShowAgain = !patchNotesDoNotShowAgain;
-            else if (mouseX >= prevX && mouseX <= prevX + btnW && mouseY >= btnY && mouseY <= btnY + btnH) patchNotesPage = std::max(0, patchNotesPage - 1);
-            else if (mouseX >= nextX && mouseX <= nextX + btnW && mouseY >= btnY && mouseY <= btnY + btnH) patchNotesPage = std::min(PATCH_NOTES_COUNT - 1, patchNotesPage + 1);
+            else if (mouseX >= prevX && mouseX <= prevX + btnW && mouseY >= btnY && mouseY <= btnY + btnH) patchNotesGoPage(-1);
+            else if (mouseX >= nextX && mouseX <= nextX + btnW && mouseY >= btnY && mouseY <= btnY + btnH) patchNotesGoPage(1);
             else if (mouseX >= closeX && mouseX <= closeX + closeW && mouseY >= closeY && mouseY <= closeY + closeH) closePatchNotes();
         }
     }
@@ -9950,8 +10002,16 @@ struct Game {
         if (key == 'M' || key == 'm') { sound.enabled.store(!sound.enabled.load(std::memory_order_relaxed), std::memory_order_relaxed); saveOptions(); return; }
         if (key == 'N' || key == 'n') { sound.musicEnabled.store(!sound.musicEnabled.load(std::memory_order_relaxed), std::memory_order_relaxed); saveOptions(); return; }
         if (state == STATE_PATCH_NOTES) {
-            if (key == 37 || key == 'A' || key == 'a') patchNotesPage = std::max(0, patchNotesPage - 1);
-            else if (key == 39 || key == 'D' || key == 'd') patchNotesPage = std::min(PATCH_NOTES_COUNT - 1, patchNotesPage + 1);
+            const float pageStep = 6.0f * (float)FONT_MED.lineHeight;
+            if (key == 37 || key == 'A' || key == 'a') patchNotesGoPage(-1);
+            else if (key == 39 || key == 'D' || key == 'd') patchNotesGoPage(1);
+            // Прокрутка заметки: колесо уже обработано в render, здесь клавиши.
+            else if (key == 33) patchNotesScroll = std::max(0.0f, patchNotesScroll - pageStep);        // PageUp
+            else if (key == 34) patchNotesScroll = std::min((float)patchNotesScrollMax, patchNotesScroll + pageStep); // PageDown
+            else if (key == 38 || key == 'W' || key == 'w') patchNotesScroll = std::max(0.0f, patchNotesScroll - (float)FONT_MED.lineHeight);
+            else if (key == 40 || key == 'S' || key == 's') patchNotesScroll = std::min((float)patchNotesScrollMax, patchNotesScroll + (float)FONT_MED.lineHeight);
+            else if (key == 36) patchNotesScroll = 0.0f;                                              // Home
+            else if (key == 35) patchNotesScroll = (float)patchNotesScrollMax;                        // End
             else if (key == 13 || key == 27 || key == 32) closePatchNotes();
             return;
         }

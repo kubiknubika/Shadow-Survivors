@@ -122,6 +122,18 @@ struct Renderer {
         }
     }
 
+    // Обрезка текста по прямоугольнику. Нужна там, где текст длиннее панели:
+    // патчноуты, словарь. Действует только на вывод глифов, поэтому панели и
+    // рамки рисуются как обычно.
+    int clipX0 = 0, clipY0 = 0, clipX1 = SCREEN_W, clipY1 = SCREEN_H;
+    bool clipActive = false;
+    void setClip(int x, int y, int w, int h) {
+        clipActive = true;
+        clipX0 = std::max(0, x); clipY0 = std::max(0, y);
+        clipX1 = std::min(SCREEN_W, x + w); clipY1 = std::min(SCREEN_H, y + h);
+    }
+    void clearClip() { clipActive = false; clipX0 = 0; clipY0 = 0; clipX1 = SCREEN_W; clipY1 = SCREEN_H; }
+
     inline void blendPixel(int x, int y, uint32_t col, int alpha) {
         if ((unsigned)x >= (unsigned)SCREEN_W || (unsigned)y >= (unsigned)SCREEN_H) return;
         if (alpha <= 0) return;
@@ -629,10 +641,14 @@ struct Renderer {
                 for (int row = 0; row < g->height; ++row) {
                     int py = gy + row;
                     if ((unsigned)py >= (unsigned)SCREEN_H) continue;
+                    if (clipActive && (py < clipY0 || py >= clipY1)) continue;
                     const uint8_t* rptr = bmp + row * g->width;
                     for (int colIdx = 0; colIdx < g->width; ++colIdx) {
                         uint8_t cov = rptr[colIdx];
-                        if (cov > 8) blendPixel(gx + colIdx, py, col, (cov * alpha) >> 8);
+                        if (cov <= 8) continue;
+                        const int px = gx + colIdx;
+                        if (clipActive && (px < clipX0 || px >= clipX1)) continue;
+                        blendPixel(px, py, col, (cov * alpha) >> 8);
                     }
                 }
             }
@@ -684,6 +700,37 @@ struct Renderer {
         }
         if (!line.empty()) flushLine(line);
         return curY;
+    }
+
+    // Высота текста, свёрстанного с той же шириной, что и drawTextWrapped:
+    // по ней считается прокрутка.
+    int measureTextWrapped(const BakedFont& font, int maxWidth, const char* text) const {
+        if (!text) return 0;
+        std::string str(text), word, line;
+        int height = 0;
+        auto flushLine = [&](const std::string& l, bool preserveBlank = false) {
+            if (l.empty()) {
+                if (preserveBlank) height += font.lineHeight;
+                return;
+            }
+            height += font.lineHeight;
+        };
+        for (size_t i = 0; i <= str.size(); ++i) {
+            char c = (i < str.size()) ? str[i] : ' ';
+            if (c == ' ' || c == '\n') {
+                if (!word.empty()) {
+                    std::string cand = line.empty() ? word : (line + " " + word);
+                    if (textWidth(font, cand.c_str()) > maxWidth && !line.empty()) {
+                        flushLine(line);
+                        line = word;
+                    } else line = cand;
+                    word.clear();
+                }
+                if (c == '\n') { flushLine(line, true); line.clear(); }
+            } else word.push_back(c);
+        }
+        if (!line.empty()) flushLine(line);
+        return height;
     }
 
     void drawShadow(int cx, int cy, int rx, int ry) {
