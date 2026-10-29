@@ -24,8 +24,8 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 rem Своя версия: по ней видно, свежий файл запущен или закешированный.
-set "SELF=2.10.22"
-set SELF_VER=2.10.22
+set "SELF=2.10.23"
+set SELF_VER=2.10.23
 set "REMOTE=origin"
 set "WANT=%~1"
 set "FORCED="
@@ -105,6 +105,15 @@ goto fail
 :have_repo
 set "BRANCH_FROM=!BRANCH!"
 echo Ветка: !BRANCH!, коммит !HEAD_BEFORE!, версия !VER_BEFORE!
+rem Ветки сессий и старые рабочие ветки часто удалены на GitHub. Тогда "обновлений
+rem нет" - правда для этой ветки и неправда для игры, и это самое частое место,
+rem где человек думает, что апдейтер сломан.
+git rev-parse --verify --quiet !REMOTE!/!BRANCH! >nul 2>&1
+if not errorlevel 1 goto branch_live
+echo ВНИМАНИЕ: ветки !BRANCH! нет на GitHub - скорее всего она давно удалена.
+echo Поэтому обновляться буду с другой ветки, а её потом верну на место.
+>> "%LOG%" echo warn: local branch !BRANCH! has no remote counterpart
+:branch_live
 >> "%LOG%" echo current: branch=!BRANCH! commit=!HEAD_BEFORE! version=!VER_BEFORE!
 echo.
 
@@ -355,10 +364,21 @@ rem Возвращает игрока на его ветку и достаёт �
 rem их прятал. Вызывается и при успехе, и при ошибке.
 :put_back
 if /i "!BRANCH!"=="!BRANCH_FROM!" goto put_back_stash
+rem Возвращаться в ветку, которой больше нет на GitHub, нельзя: следующий запуск
+rem снова соберёт её старую версию, и так по кругу. Остаёмся на собранной ветке.
+git rev-parse --verify --quiet !REMOTE!/!BRANCH_FROM! >nul 2>&1
+if errorlevel 1 goto put_back_gone
 git switch !BRANCH_FROM! > "%STEP%" 2>&1
 if errorlevel 1 goto put_back_manual
 set "BRANCH=!BRANCH_FROM!"
 echo Вернулся на твою ветку !BRANCH_FROM!.
+goto put_back_stash
+:put_back_gone
+echo.
+echo Ветки !BRANCH_FROM! больше нет на GitHub - остаюсь на !TARGET!.
+echo Это и есть рабочая ветка проекта, поэтому следующий запуск будет уже с неё.
+echo Локальная копия старой ветки никуда не делась: git switch !BRANCH_FROM!
+set "BRANCH_FROM=!TARGET!"
 goto put_back_stash
 :put_back_manual
 echo Вернись на свою ветку вручную: git switch !BRANCH_FROM!
@@ -368,12 +388,38 @@ git stash pop > "%STEP%" 2>&1
 if errorlevel 1 goto put_back_conflict
 echo Правки возвращены из stash.
 set "STASHED="
+call :refresh_updater
 goto put_back_done
 :put_back_conflict
 echo Правки остались в stash: git stash list, потом git stash pop.
 echo Ничего не потеряно - файлы лежат в stash.
 set "STASHED="
 :put_back_done
+goto :eof
+
+rem Скачанный руками update.bat уезжал в stash вместе с прочими правками и при
+rem возврате ложился обратно поверх свежего файла из ветки. Следующий запуск
+rem поднимал старый скрипт - с битым текстом и без выбора ветки. Сравниваем
+rem номера и оставляем тот, что новее.
+:refresh_updater
+if not exist "update.bat" goto :eof
+set "DISKV="
+set "HEADV="
+for /f "tokens=2 delims==" %%v in ('findstr /b /c:"set SELF_VER=" "update.bat"') do set "DISKV=%%v"
+git show HEAD:update.bat > "%STEP%.u" 2>nul
+if errorlevel 1 goto refresh_done
+for /f "tokens=2 delims==" %%v in ('findstr /b /c:"set SELF_VER=" "%STEP%.u"') do set "HEADV=%%v"
+del "%STEP%.u" >nul 2>&1
+if not defined HEADV goto refresh_done
+if not defined DISKV goto refresh_use_head
+call :vercmp "!DISKV!" "!HEADV!"
+if not "!VERCMP!"=="-1" goto refresh_done
+:refresh_use_head
+git checkout HEAD -- update.bat > "%STEP%" 2>&1
+if errorlevel 1 goto refresh_done
+echo Старый update.bat заменён свежим из ветки: !HEADV!.
+>> "%LOG%" echo updater: disk !DISKV! replaced by head !HEADV!
+:refresh_done
 goto :eof
 
 rem Вызывается для каждого изменённого пути: блокирует переключение всё,
