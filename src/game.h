@@ -164,7 +164,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 115;
+static constexpr int PATCH_NOTES_COUNT = 116;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -623,11 +623,12 @@ struct Game {
         messages.missingClips = voiceMissing;
     }
     bool debugOverlay = false;     // F3 technical read-out
-    // Дебаг-меню (F9). Открывается только по коду v404, чтобы его нельзя было
-    // включить случайным нажатием и испортить себе прогресс.
-    bool cheatPromptOpen = false;  // ввод кода
-    bool cheatMenuOpen = false;    // само меню
-    std::string cheatCode;
+    // Дебаг-меню (F9 или клавиша `). Раньше оно открывалось только по коду v404,
+    // и со стороны выглядело так, будто отладки в игре нет вообще. Теперь F9
+    // открывает меню сразу, а бой под ним замирает.
+    bool cheatMenuOpen = false;
+    int cheatSelection = 0;        // выбранная строка: стрелки + Enter
+    int cheatBossCycle = 0;        // какой страж будет призван следующим
     bool cheatGodMode = false;
     float fpsSmooth = 60.0f;
     float frameMsSmooth = 16.7f;
@@ -5207,6 +5208,9 @@ struct Game {
         }
         globalTime += dt;
         sound.update(dt);
+        // Отладка замораживает бой: пока выбираешь пункт, тебя не должны убить.
+        // Клик мышью здесь не сбрасываем — его читает render() в этом же кадре.
+        if (cheatMenuOpen) return;
         const bool menuMusicState = state == STATE_MENU || state == STATE_HERO_SELECT || state == STATE_MISSION_SELECT || state == STATE_SHOP || state == STATE_HELP ||
                                     state == STATE_SETTINGS || state == STATE_HALL || state == STATE_PATCH_NOTES;
         // The Soul Forge reuses menu mode; the hint lets audio.h pick ss_forge_shop.mp3 there.
@@ -7062,14 +7066,15 @@ struct Game {
             ++slot;
         }
 
-        UIButton btns[4] = {
+        UIButton btns[5] = {
             {SCREEN_W / 2 - 352, my + mh - 125, 220, 46, "ПРОДОЛЖИТЬ [ESC]", 1},
             {SCREEN_W / 2 - 116, my + mh - 125, 232, 46, sound.enabled ? "ЗВУК: ВКЛ [M]" : "ЗВУК: ВЫКЛ [M]", 2},
             {SCREEN_W / 2 + 132, my + mh - 125, 220, 46, "НАСТРОЙКИ [O]", 4},
-            {SCREEN_W / 2 - 150, my + mh - 64,  300, 46, "ВЫЙТИ В ГЛАВНОЕ МЕНЮ", 3}
+            {SCREEN_W / 2 - 150, my + mh - 64,  300, 46, "ВЫЙТИ В ГЛАВНОЕ МЕНЮ", 3},
+            {mx + mw - 214, my + 14, 200, 34, "ОТЛАДКА [F9]", 5}
         };
 
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < 5; ++i) {
             const auto& b = btns[i];
             bool hov = (mouseX >= b.x && mouseX <= b.x + b.w && mouseY >= b.y && mouseY <= b.y + b.h);
             r.fillRoundedRect(b.x, b.y, b.w, b.h, 8, hov ? 0xFF4A3480 : 0xFF281C48);
@@ -7081,6 +7086,7 @@ struct Game {
                 else if (b.id == 2) { sound.enabled = !sound.enabled; saveOptions(); }
                 else if (b.id == 3) { writeSave(); state = STATE_MENU; }
                 else if (b.id == 4) { settingsReturnState = STATE_PAUSED; state = STATE_SETTINGS; }
+                else if (b.id == 5) openCheatMenu();
             }
         }
     }
@@ -8614,6 +8620,7 @@ struct Game {
             "2.10.19 • СЕРДЦЕ ПЕРЕСТАЛО БЫТЬ ЗЕЛЁНЫМ, СТИЛЬ ИКОНОК СВЕДЕН",
             "2.10.20 • АПДЕЙТЕР: РУССКИЙ ТЕКСТ И САМАЯ СВЕЖАЯ ВЕТКА",
             "2.10.21 • КРЫС ВДВОЕ БОЛЬШЕ, ДВОЙНИК БЬЁТ В ГЕРОЯ, МУЗЫКА ПО ДЕЛАМ",
+            "2.10.22 • ДЕБАГ-МЕНЮ ПО F9: КРЫСЫ, СТРАЖИ, ВСЕ ПРЕДМЕТЫ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -8732,7 +8739,7 @@ struct Game {
             "Сердце титана перерисовано: зелёное стало багровым гравированным сердцем с двумя поясами и вшитыми камнями.\nВ тот же стиль приведены четыре иконки, которые читались как плоская заливка: магнит стал резным камнем с рунами, перо феникса - гравюрным белым пером, вуаль - золотым рваным капюшоном с пустотой вместо лица, разворот - плотной книгой с тиснением.\nФитиль больше не зелёный: это витой багровый шнур с тлеющим угольком и дымом.\nЯркость набора сузилась с 69-165 до 72-147: ни одна иконка не выбивается ни в тёмное, ни в пересвет.",
             "Апдейтер показывал русский текст крякозябрами, если его файл был сохранён в UTF-8: cmd.exe читает .bat в кодовой странице консоли.\n• Текст апдейтера теперь живёт в tools/update_bat_src.txt обычным UTF-8, а update.bat собирается из него в cp866: python3 tools/build_update_bat.py.\n• Сборщик проверяет, что каждая буква влезает в cp866, что кириллица стоит только в echo и rem, что каждый goto находит метку и что номер апдейтера совпадает с версией игры.\n• Если запущена всё-таки испорченная копия, апдейтер видит это по длине слова-маячка, пишет предупреждение по-английски и пробует вернуть файл из репозитория.\n• Ветка для сборки выбирается сама: main или ветка arena/* с самой свежей версией в src/version.h (руками: update.bat arena/...). Раньше апдейтер тянул ту ветку, где стоял, и честно отвечал «обновлять нечего», пока на GitHub лежала версия новее.\n• Скачанный руками update.bat больше не побеждает версию из ветки автоматически: сравниваются номера, и остаётся свежий.\n• Кодовая страница консоли возвращается к прежней после выхода.",
             "• Крысиная стая выросла вдвое: 16–24 крысы вместо 8–12, кучка стала плотной.\n• Описание дела больше не читается дважды: экран выбора уже озвучил его, и старт забега не повторяет ту же запись. Если запись ещё играет, цель дела читается после её конца.\n• Двойник: обмен местами больше не встаёт вплотную к герою (зеркало держит 190 px, у края арены — 150 px), поэтому телепорт перестал убивать касанием. Крест снайперский: один луч смотрит прямо в героя, у старой точки залп сдвинут на полшага.\n• Музыка дел: audio/ss_case_01.mp3 … ss_case_28.mp3 играет своё дело, нет файла — общий плейлист боя, нет и его — встроенная тема. Смена дела перезапускает трек.\n• Музыка стражей: audio/ss_boss_guardian00.mp3 … 05.mp3 закреплена за типом стража, общий ss_boss_theme остаётся запасным.\n• Эндлес играет весь боевой набор в перемешанном порядке и без повторов, пока не кончится список: в пул входят ss_gameplay_*, ss_case_NN и ss_gameplay_endless_*.\n• Нашлась причина, по которой «своя музыка дела» не работала: сцена искалась по префиксу ss_gameplay_run, и файлы ss_gameplay_caseNN.mp3 не читались вовсе. Теперь читаются оба имени.\n• music_prompts.md: та же схема имён, что читает игра, готовый список файлов и объяснение, как всё это выбирается.\n• Если апдейтер собрал ту же версию, что уже была, значит он работал на старой ветке: с 2.10.20 он сам выбирает ветку с самой свежей версией и печатает её номер до сборки.",
-        };
+            "• Дебаг-меню было, но открывалось только по секретному коду v404, и со стороны выглядело так, будто отладки в игре нет.\n• Теперь F9 открывает его сразу в любом состоянии; клавиша ` — запасная, для ноутбуков, где F-ряд спрятан за Fn. В меню паузы появилась кнопка ОТЛАДКА [F9].\n• Пока меню открыто, бой замирает: раньше отладка шла поверх живого боя и можно было умереть, пока выбираешь пункт.\n• Строки выбираются стрелками и Enter или цифрами 1…9 и 0; состояние переключателей видно справа.\n• Новые пункты под недавние жалобы: СПАВН СТАИ КРЫС (проверить, что крыс вдвое больше), ПРИЗВАТЬ СТРАЖА (по очереди Моргар, Малакор, Кардинал, Азарот, Протоколист, Двойник — проверить крест), ВСЕ 40 ПРЕДМЕТОВ ПО 3 РАНГА (увидеть все иконки в сборке), ПОЛНЫЙ ЗАРЯД СУПЕРУМЕНИЯ, F3-оверлей.\n• Бессмертие, золото, все дела, все герои, Кузница, убить всех, +5 уровней и новая ночь остались на месте.",        };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
         static_assert(sizeof(notes) / sizeof(notes[0]) == PATCH_NOTES_COUNT,
@@ -9762,6 +9769,53 @@ struct Game {
         if (mouseClicked && ghov) { sound.play(SFX_CLICK, 0.02f); helpPage = 1; glossaryScroll = 0; }
     }
 
+    static constexpr int CHEAT_ITEM_COUNT = 14;
+
+    static const char* cheatItemLabel(int index) {
+        static const char* const labels[CHEAT_ITEM_COUNT] = {
+            "+5000 ЗОЛОТА",
+            "ВСЕ ДЕЛА ОТКРЫТЫ",
+            "СБРОСИТЬ КАМПАНИЮ",
+            "ВСЕ ГЕРОИ",
+            "МАКС. КУЗНИЦА ДУШ",
+            "БЕССМЕРТИЕ",
+            "УБИТЬ ВСЕХ ВРАГОВ",
+            "+5 УРОВНЕЙ",
+            "ВСЕ 40 ПРЕДМЕТОВ ПО 3 РАНГА",
+            "СПАВН СТАИ КРЫС",
+            "ПРИЗВАТЬ СТРАЖА",
+            "ПОЛНЫЙ ЗАРЯД СУПЕРУМЕНИЯ",
+            "F3-ОВЕРЛЕЙ",
+            "НОВАЯ НОЧЬ (xЗОЛОТО)"
+        };
+        return labels[index < 0 || index >= CHEAT_ITEM_COUNT ? 0 : index];
+    }
+
+    // Что показать справа от пункта: состояние переключателя или подпись.
+    std::string cheatItemState(int index) {
+        switch (index) {
+            case 5: return cheatGodMode ? "ВКЛ" : "ВЫКЛ";
+            case 10: {
+                static const char* const names[6] = {"МОРГАР", "МАЛАКОР", "КАРДИНАЛ",
+                                                     "АЗАРОТ", "ПРОТОКОЛИСТ", "ДВОЙНИК"};
+                return names[cheatBossCycle % 6];
+            }
+            case 12: return debugOverlay ? "ВКЛ" : "ВЫКЛ";
+            default: return "";
+        }
+    }
+
+    void openCheatMenu() {
+        cheatMenuOpen = true;
+        cheatSelection = 0;
+        sound.play(SFX_LEVELUP, 0.05f);
+    }
+
+    void closeCheatMenu() {
+        cheatMenuOpen = false;
+        sound.play(SFX_CLICK, 0.03f);
+    }
+
     void runCheat(int id) {
         switch (id) {
             case 0: save.gold += 5000; break;                       // золото
@@ -9790,7 +9844,30 @@ struct Game {
                 if (state == STATE_PLAYING) generateUpgradeChoices();
                 break;
             }
-            case 8: beginNewCampaignCycle(); break;                              // новая ночь (×золото)
+            case 8:                                               // все предметы: проверка иконок
+                for (int i = 0; i < ITEM_COUNT; ++i)
+                    if (itemLevels[i] < 3 && getItemMaxLevel(i) >= 3) itemLevels[i] = 3;
+                break;
+            case 9:                                               // стая крыс: проверка плотности
+                if (state == STATE_PLAYING) spawnRatSwarm();
+                break;
+            case 10: {                                            // страж по очереди: проверка боссов
+                if (state == STATE_PLAYING) {
+                    const int type = cheatBossCycle % 6;
+                    clearArenaForBoss();
+                    spawnMonster(type, false, true, type);
+                    if (!monsters.empty()) {
+                        static const char* const names[6] = {"МОРГАР", "МАЛАКОР", "КАРДИНАЛ",
+                                                             "АЗАРОТ", "ПРОТОКОЛИСТ", "ДВОЙНИК"};
+                        announce(GMSG_BOSS_ABILITY, std::string("ОТЛАДКА: ") + names[type], 2.4f);
+                    }
+                    cheatBossCycle = (cheatBossCycle + 1) % 6;
+                }
+                break;
+            }
+            case 11: superCharge = 100.0f; break;                 // полный заряд
+            case 12: debugOverlay = !debugOverlay; break;         // F3-оверлей
+            case 13: beginNewCampaignCycle(); break;              // новая ночь (xзолото)
             default: break;
         }
         writeSave();
@@ -9799,64 +9876,61 @@ struct Game {
 
     void renderCheatMenu(Renderer& r) {
         r.fillRect(0, 0, SCREEN_W, SCREEN_H, 0xFF05040A, 214);
-        const int w = std::min(560, SCREEN_W - 40), h = 420;
+        const int w = std::min(660, SCREEN_W - 40);
+        const int rowStep = 32;
+        const int h = std::min(SCREEN_H - 32, 118 + CHEAT_ITEM_COUNT * rowStep);
         const int x = (SCREEN_W - w) / 2, y = (SCREEN_H - h) / 2;
         r.fillRoundedRect(x, y, w, h, 12, 0xFF14101F, 250);
         r.drawRoundedRect(x, y, w, h, 12, 0xFFFF7A83, 2);
-        if (cheatPromptOpen) {
-            r.drawTextCentered(FONT_MED, x + w / 2, y + 40, "ДЕБАГ-МЕНЮ ЗАКРЫТО НА КОД", 0xFFFFB6C0);
-            r.drawTextCentered(FONT_SMALL, x + w / 2, y + 74, "введи код и нажми Enter (Esc — отмена)", 0xFFC6BBD8, false);
-            const int fw = w - 120, fh = 46, fx = x + 60, fy = y + 120;
-            r.fillRoundedRect(fx, fy, fw, fh, 8, 0xFF0C0A14);
-            r.drawRoundedRect(fx, fy, fw, fh, 8, 0xFFFFD858, 2);
-            std::string shown = cheatCode;
-            shown.push_back('_');
-            r.drawText(FONT_MED, fx + 16, fy + 14, shown.c_str(), 0xFFFFE9BC, false);
-            r.drawTextCentered(FONT_SMALL, x + w / 2, y + 200, "F9 — открыть окно кода в любой момент", 0xFF9C93AD, false);
-            return;
-        }
-        r.drawTextCentered(FONT_MED, x + w / 2, y + 22, "ДЕБАГ-МЕНЮ [F9]", 0xFFFFD858);
-        static const char* items[9] = {
-            "+5000 ЗОЛОТА",
-            "ОТКРЫТЬ ВСЕ ДЕЛА",
-            "СБРОСИТЬ КАМПАНИЮ",
-            "ВСЕ ГЕРОИ",
-            "МАКС. КУЗНИЦА ДУШ",
-            "БЕССМЕРТИЕ (ВКЛ/ВЫКЛ)",
-            "УБИТЬ ВСЕХ ВРАГОВ",
-            "+5 УРОВНЕЙ",
-            "НОВАЯ НОЧЬ (×ЗОЛОТО)"
-        };
-        for (int i = 0; i < 9; ++i) {
-            const int iy = y + 58 + i * 34;
-            const bool hov = mouseX >= x + 24 && mouseX <= x + w - 24 && mouseY >= iy && mouseY <= iy + 28;
-            r.fillRoundedRect(x + 24, iy, w - 48, 28, 6, hov ? 0xFF3A2A56 : 0xFF1D1729);
-            r.drawRoundedRect(x + 24, iy, w - 48, 28, 6, hov ? 0xFFFFD858 : 0xFF4A3F63, 1);
-            char label[96];
-            snprintf(label, sizeof(label), "%d  %s", i + 1, items[i]);
-            r.drawText(FONT_SMALL, x + 36, iy + 7, label, 0xFFE8E1F0, false);
-            if (i == 5) r.drawTextRight(FONT_SMALL, x + w - 36, iy + 7, cheatGodMode ? "ВКЛ" : "ВЫКЛ", cheatGodMode ? 0xFF8AF0AE : 0xFF9C93AD, false);
-            if (mouseClicked && hov) runCheat(i);
+        r.drawTextCentered(FONT_MED, x + w / 2, y + 16, "ДЕБАГ-МЕНЮ", 0xFFFFD858);
+        r.drawTextCentered(FONT_SMALL, x + w / 2, y + 48,
+                           "↑ / ↓ — СТРОКА  •  ENTER — ВЫПОЛНИТЬ  •  1…9, 0 — БЫСТРО  •  ESC — ЗАКРЫТЬ  (БОЙ ЗАМЕР)",
+                           0xFFC6BBD8, false);
+        for (int i = 0; i < CHEAT_ITEM_COUNT; ++i) {
+            const int iy = y + 76 + i * rowStep;
+            if (iy + 28 > y + h - 12) break;
+            const bool hov = mouseX >= x + 20 && mouseX <= x + w - 20 && mouseY >= iy && mouseY <= iy + 26;
+            const bool sel = (i == cheatSelection);
+            r.fillRoundedRect(x + 20, iy, w - 40, 26, 6,
+                              sel ? 0xFF3F2C60 : (hov ? 0xFF32254C : 0xFF1D1729));
+            r.drawRoundedRect(x + 20, iy, w - 40, 26, 6,
+                              sel ? 0xFFFFD858 : (hov ? 0xFFFFE068 : 0xFF4A3F63), sel ? 2 : 1);
+            char label[128];
+            if (i < 10) snprintf(label, sizeof(label), "%d  %s", i + 1, cheatItemLabel(i));
+            else snprintf(label, sizeof(label), "    %s", cheatItemLabel(i));
+            r.drawText(FONT_SMALL, x + 34, iy + 6, label, sel ? 0xFFFFF2C8 : 0xFFE8E1F0, false);
+            const std::string state = cheatItemState(i);
+            if (!state.empty())
+                r.drawTextRight(FONT_SMALL, x + w - 34, iy + 6, state.c_str(),
+                                (i == 5 && cheatGodMode) || (i == 12 && debugOverlay) ? 0xFF8AF0AE : 0xFFB9ADCC, false);
+            // Клик срабатывает только по своей строке: раньше условие захватывало
+            // и подсвеченную клавиатурой строку, поэтому клик мимо пункта запускал её.
+            if (mouseClicked && hov) { cheatSelection = i; runCheat(i); }
         }
     }
 
     void onKeyPress(int key) {
-        if (cheatPromptOpen) {
-            if (key == 27) { cheatPromptOpen = false; cheatCode.clear(); }
-            else if (key == 13) {
-                if (cheatCode == "v404") { cheatMenuOpen = true; cheatPromptOpen = false; sound.play(SFX_LEVELUP, 0.05f); }
-                else { cheatCode.clear(); sound.play(SFX_HIT, 0.05f); }
-            } else if (key == 8) { if (!cheatCode.empty()) cheatCode.pop_back(); }
-            else if (key >= 'A' && key <= 'Z') cheatCode.push_back((char)(key - 'A' + 'a'));
-            else if ((key >= '0' && key <= '9') || (key >= 'a' && key <= 'z')) cheatCode.push_back((char)key);
-            return;
-        }
         if (cheatMenuOpen) {
-            if (key == 27) { cheatMenuOpen = false; return; }
-            if (key >= '1' && key <= '9') { runCheat(key - '1'); return; }
+            if (key == 27) { closeCheatMenu(); return; }
+            if (key == 38 || key == 'W' || key == 'w') {
+                cheatSelection = (cheatSelection + CHEAT_ITEM_COUNT - 1) % CHEAT_ITEM_COUNT;
+                sound.play(SFX_CLICK, 0.02f);
+                return;
+            }
+            if (key == 40 || key == 'S' || key == 's') {
+                cheatSelection = (cheatSelection + 1) % CHEAT_ITEM_COUNT;
+                sound.play(SFX_CLICK, 0.02f);
+                return;
+            }
+            if (key == 13 || key == 32) { runCheat(cheatSelection); return; }
+            // Первые девять строк — цифрами 1…9, десятая — нулём. Дальше стрелки.
+            if (key >= '1' && key <= '9') { cheatSelection = key - '1'; runCheat(cheatSelection); return; }
+            if (key == '0') { cheatSelection = 9; runCheat(9); return; }
             return;
         }
-        if (key == 0x78) { cheatPromptOpen = true; cheatCode.clear(); return; } // VK_F9
+        // F9 открывает отладку в любом состоянии; клавиша ` — для ноутбуков,
+        // где F-ряд спрятан за Fn.
+        if (key == 0x78 || key == 0xC0) { openCheatMenu(); return; } // VK_F9 / VK_OEM_3
         if (state == STATE_MENU && exitConfirmationOpen) {
             if (key == 27) { exitConfirmationOpen = false; exitDialogFocus = 1; }
             else if (key == 37 || key == 39 || key == 38 || key == 40 || key == 'A' || key == 'a' || key == 'D' || key == 'd' || key == 'W' || key == 'w' || key == 'S' || key == 's') {
@@ -10119,7 +10193,7 @@ struct Game {
             else if (state == STATE_GAMEOVER) renderGameOverModal(r);
         }
 
-        if (cheatPromptOpen || cheatMenuOpen) renderCheatMenu(r);
+        if (cheatMenuOpen) renderCheatMenu(r);
         if (debugOverlay) drawDebugOverlay(r);
 
         // Custom glowing arcane cursor
