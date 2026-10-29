@@ -987,38 +987,63 @@ struct Renderer {
 
         if (id == 0) {
             // МОРГАР — воротный страж: приземистый, широкий, щит-башня и алебарда с ключом.
+            //
+            // Раньше он только «дышал» на 2 px: копьё, щит и ноги стояли мёртво, и
+            // страж читался как картинка. Теперь переступает, качает алебарду, щит
+            // ходит вместе с дыханием, а на замах приседает и поднимает древко.
             const uint32_t steel = tint(0xFF7A6A48), steelLit = tint(0xFFB49B62), steelDark = tint(0xFF3E3423);
             const uint32_t ember = tint(enraged ? 0xFFFF6A2A : 0xFFFFAE3C);
-            // halberd shaft behind the body
-            DL(cx + 30, cy - 62, cx + 22, cy + 46, steelDark, 5, alpha);
-            DL(cx + 30, cy - 62, cx + 22, cy + 46, steel, 3, alpha);
+            const float cp = std::max(0.0f, std::min(1.0f, castPose));
+            const float cb = std::max(0.0f, std::min(1.0f, castBurst));
+            // Приседает на замахе и выпрямляется на ударе.
+            const int bodyY = (int)(cp * 5.0f) - (int)(cb * 3.0f);
+            const int step = (int)(sinf(animTime * 3.4f) * 2.0f);
+            // Вес: корпус переносит тяжесть с ноги на ногу, медленнее шага. Без
+            // этого многотонная фигура «скользила» ровно, будто её несут.
+            const int weight = (int)(sinf(animTime * 1.7f) * 2.0f);
+            // Древко: в покое качается, на замахе уходит вверх и назад.
+            const int shaftX = cx + 30 + (int)(sinf(animTime * 1.7f) * 2.0f) - (int)(cp * 8.0f) + (int)(cb * 16.0f);
+            const int shaftTopY = cy - 62 - (int)(cp * 16.0f) + (int)(cb * 20.0f);
+            DL(shaftX, shaftTopY, cx + 22, cy + 46, steelDark, 5, alpha);
+            DL(shaftX, shaftTopY, cx + 22, cy + 46, steel, 3, alpha);
             // key-head of the halberd
-            FR(cx + 20, cy - 74, 20, 7, 3, steel, alpha);
-            FR(cx + 30, cy - 78, 7, 14, 3, steelLit, alpha);
-            FR(cx + 26, cy - 64, 6, 6, 2, steel, alpha);
-            // legs
-            FR(cx - 26, cy + 18, 18, 34, 5, steelDark, alpha);
-            FR(cx + 6, cy + 18, 18, 34, 5, steelDark, alpha);
-            FR(cx - 28, cy + 46, 22, 8, 3, steel, alpha);
-            FR(cx + 4, cy + 46, 22, 8, 3, steel, alpha);
+            FR(shaftX - 10, shaftTopY - 12, 20, 7, 3, steel, alpha);
+            FR(shaftX, shaftTopY - 16, 7, 14, 3, steelLit, alpha);
+            FR(shaftX - 4, shaftTopY - 2, 6, 6, 2, steel, alpha);
+            // legs: переступает, стопы расходятся
+            FR(cx - 26 + step, cy + 18, 18, 34, 5, steelDark, alpha);
+            FR(cx + 6 - step, cy + 18, 18, 34, 5, steelDark, alpha);
+            FR(cx - 28 + step, cy + 46, 22, 8, 3, steel, alpha);
+            FR(cx + 4 - step, cy + 46, 22, 8, 3, steel, alpha);
             // torso
-            FR(cx - 24, cy - 24 - lift, 48, 50, 12, steel, alpha);
-            FR(cx - 18, cy - 18 - lift, 36, 22, 8, steelLit, alpha);
-            // chest ember slit
-            FR(cx - 9, cy - 6 - lift, 18, 7, 3, ember, alpha);
+            FR(cx - 24 + weight, cy - 24 - lift + bodyY, 48, 50, 12, steel, alpha);
+            FR(cx - 18 + weight, cy - 18 - lift + bodyY, 36, 22, 8, steelLit, alpha);
+            // chest ember slit: разгорается на замахе, в покое пульсирует
+            const float emberPulse = 0.72f + 0.16f * sinf(animTime * 2.9f) + 0.12f * cp;
+            FR(cx - 9 + weight, cy - 6 - lift + bodyY, 18, 7, 3, ember, (int)(alpha * emberPulse));
             // pauldrons
-            FR(cx - 36, cy - 30 - lift, 18, 20, 8, steelLit, alpha);
-            FR(cx + 18, cy - 30 - lift, 18, 20, 8, steelLit, alpha);
+            FR(cx - 36 + weight, cy - 30 - lift + bodyY, 18, 20, 8, steelLit, alpha);
+            FR(cx + 18 + weight, cy - 30 - lift + bodyY, 18, 20, 8, steelLit, alpha);
             // helmet with slit
-            FR(cx - 13, cy - 46 - lift, 26, 24, 8, steel, alpha);
-            FR(cx - 9, cy - 38 - lift, 18, 4, 2, ember, alpha);
-            // tower shield in front, slightly turned
-            FR(cx - 44, cy - 22 - lift, 30, 58, 8, steelDark, alpha);
-            FR(cx - 40, cy - 18 - lift, 22, 50, 6, steel, alpha);
-            FR(cx - 36, cy - 12 - lift, 14, 38, 5, steelLit, alpha);
-            FR(cx - 33, cy + 2 - lift, 8, 10, 3, ember, alpha);
+            FR(cx - 13 + weight, cy - 46 - lift + bodyY, 26, 24, 8, steel, alpha);
+            FR(cx - 9 + weight, cy - 38 - lift + bodyY, 18, 4, 2, ember, alpha);
+            // Искры из щели в груди: поднимаются и гаснут. Раньше страж был
+            // единственным, у кого не было ни одной живой частицы.
+            for (int i = 0; i < 5; ++i) {
+                const float t = fmodf(animTime * 0.7f + i * 0.2f, 1.0f);
+                const int ex = cx + weight + (int)(sinf(t * 6.0f + i) * 7.0f);
+                const int ey = cy - 2 - lift + bodyY - (int)(t * 40.0f);
+                FC(ex, ey, 1 + (i % 2), ember, (int)(170 * (1.0f - t)));
+            }
+            // tower shield: в покое чуть качается, на замахе поднимается к груди
+            const int shieldX = cx - 44 + weight + (int)(sinf(animTime * 1.5f) * 1.0f) + (int)(cp * 6.0f);
+            const int shieldY = cy - 22 - lift + bodyY - (int)(cp * 10.0f) + (int)(sinf(animTime * 2.2f) * 1.0f);
+            FR(shieldX, shieldY, 30, 58, 8, steelDark, alpha);
+            FR(shieldX + 4, shieldY + 4, 22, 50, 6, steel, alpha);
+            FR(shieldX + 8, shieldY + 10, 14, 38, 5, steelLit, alpha);
+            FR(shieldX + 11, shieldY + 24, 8, 10, 3, ember, alpha);
             // rivets
-            for (int i = 0; i < 3; ++i) FC(cx - 37, cy - 12 + i * 16 - lift, 2, steelDark, alpha);
+            for (int i = 0; i < 3; ++i) FC(shieldX + 7, shieldY + 10 + i * 16, 2, steelDark, alpha);
         } else if (id == 1) {
             // МАЛАКОР — чумной алхимик. Читается по трём вещам: клюв-респиратор,
             // горб над плечами и колба в вытянутой руке. Сгорбленный силуэт шире
@@ -1152,35 +1177,53 @@ struct Renderer {
             // КАРДИНАЛ — счётчик имён: высокий, в широкой шляпе, с книгой и пером.
             const uint32_t cloth = tint(0xFF3C1A28), clothLit = tint(0xFF6E2E44), clothDark = tint(0xFF1E0C14);
             const uint32_t paper = tint(0xFFE8DCC8), ink = tint(0xFFFF4E74);
+            // Замах: он откидывается назад и поднимает перо, на выбросе — бросает
+            // руку вперёд. Раньше фигура на замах не реагировала вовсе.
+            const float cp = std::max(0.0f, std::min(1.0f, castPose));
+            const float cb = std::max(0.0f, std::min(1.0f, castBurst));
+            const int lean = -(int)(cp * 7.0f) + (int)(cb * 5.0f);
+            const int bodyY = -(int)(cp * 4.0f) + (int)(cb * 2.0f);
             // long robe, narrow silhouette
-            FR(cx - 20, cy - 16 - lift, 40, 62, 14, cloth, alpha);
-            FR(cx - 14, cy - 4 - lift, 28, 48, 12, clothDark, alpha);
+            FR(cx - 20 + lean, cy - 16 - lift + bodyY, 40, 62, 14, cloth, alpha);
+            FR(cx - 14 + lean, cy - 4 - lift + bodyY, 28, 48, 12, clothDark, alpha);
             for (int i = -1; i <= 1; ++i)
-                DL(cx + i * 8, cy + 8 - lift, cx + i * 8 + (int)(sinf(animTime * 2.0f + i) * 3), cy + 46, clothLit, 3, alpha);
+                DL(cx + i * 8 + lean, cy + 8 - lift, cx + i * 8 + lean + (int)(sinf(animTime * 2.0f + i) * 3), cy + 46, clothLit, 3, alpha);
             // shoulders and collar
-            FR(cx - 24, cy - 22 - lift, 48, 16, 8, clothLit, alpha);
-            FR(cx - 12, cy - 20 - lift, 24, 10, 5, paper, alpha);
-            // porcelain mask
-            FR(cx - 11, cy - 44 - lift, 22, 26, 10, paper, alpha);
-            FR(cx - 7, cy - 36 - lift, 5, 3, 1, ink, alpha);
-            FR(cx + 2, cy - 36 - lift, 5, 3, 1, ink, alpha);
-            FR(cx - 4, cy - 27 - lift, 8, 2, 1, ink, alpha);
+            FR(cx - 24 + lean, cy - 22 - lift + bodyY, 48, 16, 8, clothLit, alpha);
+            FR(cx - 12 + lean, cy - 20 - lift + bodyY, 24, 10, 5, paper, alpha);
+            // porcelain mask: на замахе чуть опускает голову, будто читает строку
+            const int maskY = cy - 44 - lift + bodyY + (int)(cp * 3.0f);
+            FR(cx - 11 + lean, maskY, 22, 26, 10, paper, alpha);
+            FR(cx - 7 + lean, maskY + 8, 5, 3, 1, ink, alpha);
+            FR(cx + 2 + lean, maskY + 8, 5, 3, 1, ink, alpha);
+            FR(cx - 4 + lean, maskY + 17, 8, 2, 1, ink, alpha);
             // a crack across the mask
-            DL(cx + 2, cy - 44 - lift, cx - 1, cy - 30 - lift, clothDark, 1, alpha);
-            // wide cardinal hat
-            FR(cx - 30, cy - 52 - lift, 60, 6, 3, clothLit, alpha);
-            FR(cx - 16, cy - 66 - lift, 32, 16, 6, cloth, alpha);
-            FR(cx - 16, cy - 66 - lift, 32, 4, 2, clothLit, alpha);
-            // open ledger
-            FR(cx - 40, cy - 6 - lift, 22, 16, 3, paper, alpha);
-            DL(cx - 29, cy - 4 - lift, cx - 29, cy + 8 - lift, clothDark, 1, alpha);
-            for (int i = 0; i < 3; ++i) DL(cx - 37, cy - 2 + i * 4 - lift, cx - 33, cy - 2 + i * 4 - lift, ink, 1, 170);
-            // quill
-            DL(cx + 24, cy + 6 - lift, cx + 36, cy - 30 - lift, paper, 2, alpha);
-            DL(cx + 33, cy - 24 - lift, cx + 40, cy - 34 - lift, paper, 1, alpha);
-            FC(cx + 26, cy + 4 - lift, 2, ink, alpha);
-            // seal chain hanging from the belt
-            for (int i = 0; i < 3; ++i) CR(cx + 12, cy + 16 + i * 8 - lift, 3, 1, ink, 190, true);
+            DL(cx + 2 + lean, maskY, cx - 1 + lean, maskY + 14, clothDark, 1, alpha);
+            // wide cardinal hat: покачивается, иначе фигура стоит как истукан
+            const int hatSway = (int)(sinf(animTime * 1.4f) * 2.0f) + lean;
+            FR(cx - 30 + hatSway, cy - 52 - lift + bodyY, 60, 6, 3, clothLit, alpha);
+            FR(cx - 16 + hatSway, cy - 66 - lift + bodyY - (int)(cp * 2.0f), 32, 16, 6, cloth, alpha);
+            FR(cx - 16 + hatSway, cy - 66 - lift + bodyY - (int)(cp * 2.0f), 32, 4, 2, clothLit, alpha);
+            // open ledger: на замахе книга поднимается к груди
+            const int bookY = cy - 6 - lift - (int)(cp * 20.0f) + (int)(cb * 6.0f);
+            FR(cx - 40 + lean, bookY, 22, 16, 3, paper, alpha);
+            DL(cx - 29 + lean, bookY + 2, cx - 29 + lean, bookY + 14, clothDark, 1, alpha);
+            // строки бегут: раз в 0,9 с заново — книга «пишется»
+            const int lineDrift = (int)(fmodf(animTime * 6.0f, 4.0f));
+            for (int i = 0; i < 3; ++i)
+                DL(cx - 37 + lean, bookY + 4 + i * 4 - lineDrift / 2, cx - 33 + lean, bookY + 4 + i * 4 - lineDrift / 2, ink, 1, 170);
+            // перо: в покое пишет мелким движением, на замахе вскинуто, на выбросе
+            // уходит вперёд — видно момент удара.
+            const float write = sinf(animTime * 5.5f) * 2.0f;
+            const int quillBaseX = cx + 24 + lean, quillBaseY = cy + 6 - lift + (int)(write);
+            const int quillTipX = cx + 36 + (int)(-cp * 16.0f + cb * 26.0f);
+            const int quillTipY = cy - 30 - lift - (int)(cp * 26.0f) + (int)(cb * 22.0f);
+            DL(quillBaseX, quillBaseY, quillTipX, quillTipY, paper, 2, alpha);
+            DL(quillTipX - 3, quillTipY + 6, quillTipX + 4, quillTipY - 4, paper, 1, alpha);
+            FC(quillBaseX + 2, quillBaseY - 2, 2, ink, alpha);
+            // seal chain hanging from the belt: подрагивает на ходу
+            for (int i = 0; i < 3; ++i)
+                CR(cx + 12 + (int)(sinf(animTime * 2.4f + i) * 1.5f), cy + 16 + i * 8 - lift, 3, 1, ink, 190, true);
         } else if (id == 3) {
             // АЗАРОТ — пепельный архивариус. Раньше это было маленькое парящее ядро с
             // кольцами: в бою оно читалось как подбираемый предмет, а не как страж.
@@ -1189,8 +1232,13 @@ struct Renderer {
             const uint32_t robe = tint(0xFF3A2B58), robeLit = tint(0xFF6A5495), robeDark = tint(0xFF1B142B);
             const uint32_t ash = tint(0xFF6E6076), ashLit = tint(0xFFB4A6C0);
             const uint32_t core = tint(enraged ? 0xFFFF5A2A : 0xFFFFB45C);
-            const float pulse = 0.5f + 0.5f * sinf(animTime * 3.1f);
-            const int bob = (int)(sinf(animTime * 1.4f) * 4.0f);
+            // На замахе сердце разгорается, руки разводятся шире и фигура
+            // приподнимается; на выбросе — резко проседает. Раньше на замах
+            // не реагировал только он один из всей линейки.
+            const float cp = std::max(0.0f, std::min(1.0f, castPose));
+            const float cb = std::max(0.0f, std::min(1.0f, castBurst));
+            const float pulse = 0.5f + 0.5f * sinf(animTime * 3.1f * (1.0f + cp * 1.2f));
+            const int bob = (int)(sinf(animTime * 1.4f) * 4.0f) - (int)(cp * 5.0f) + (int)(cb * 4.0f);
             const int oy = cy + bob;
             const int sway = (int)(sinf(animTime * 0.9f) * 3.0f);
             // тень под парящей фигурой
@@ -1213,17 +1261,19 @@ struct Renderer {
             FR(cx + 24 + sway, oy - 12, 22, 8, 4, ashLit, alpha);
             // руки-угли, тянутся вниз и в стороны
             for (int side = -1; side <= 1; side += 2) {
-                const int hx = cx + side * (40 + sway) + (int)(sinf(animTime * 1.1f + side) * 3.0f);
-                const int hy = oy + 26 + (int)(cosf(animTime * 1.1f + side) * 3.0f);
+                // Руки разводятся на замахе и вскидываются на выбросе.
+                const int spread = (int)(cp * 12.0f) - (int)(cb * 6.0f);
+                const int hx = cx + side * (40 + sway + spread) + (int)(sinf(animTime * 1.1f + side) * 3.0f);
+                const int hy = oy + 26 - (int)(cp * 14.0f) + (int)(cosf(animTime * 1.1f + side) * 3.0f);
                 DL(cx + side * 26 + sway, oy - 12, hx, hy, robeDark, 6, alpha);
                 DL(cx + side * 26 + sway, oy - 12, hx, hy, robe, 4, alpha);
                 FC(hx, hy, 6, ash, alpha);
                 FC(hx, hy, 3, core, 220);
             }
             // горящее сердце в груди
-            FC(cx + sway, oy + 14, 17, robeDark, alpha);
-            FC(cx + sway, oy + 14, 13, core, (int)(150 + 90 * pulse));
-            FC(cx + sway, oy + 14, 7, 0xFFFFF0C8, 235);
+            FC(cx + sway, oy + 14, 17 + (int)(cp * 4.0f), robeDark, alpha);
+            FC(cx + sway, oy + 14, 13 + (int)(cp * 4.0f), core, (int)(150 + 90 * pulse));
+            FC(cx + sway, oy + 14, 7 + (int)(cp * 3.0f), 0xFFFFF0C8, 235);
             FX(cx + sway - 20, oy + 30, 40, 3, core, (int)(60 + 60 * pulse));
             // Каждый удар сердца выходит кольцом — силуэт «живёт», а не просто стоит.
             // Кольцо рождается в такт 2,2 с и расходится за 0,7 с.
@@ -1273,8 +1323,10 @@ struct Renderer {
             // томом перед ней: строки на страницах ползут вверх, как в живой записи.
             const uint32_t stone = tint(0xFF4A5566), stoneLit = tint(0xFF8798AD), stoneDark = tint(0xFF232B36);
             const uint32_t ink = tint(enraged ? 0xFF6AF0FF : 0xFF49C8E8);
+            const float cp = std::max(0.0f, std::min(1.0f, castPose));
+            const float cb = std::max(0.0f, std::min(1.0f, castBurst));
             const int sway = (int)(sinf(animTime * 0.8f) * 3.0f);
-            const int bob = (int)(sinf(animTime * 1.5f) * 3.0f);
+            const int bob = (int)(sinf(animTime * 1.5f) * 3.0f) - (int)(cp * 3.0f);
             const int oy = cy + bob;
             // тень
             FX(cx - 38, cy + 58, 76, 9, 0xFF08060E, 90);
@@ -1318,13 +1370,16 @@ struct Renderer {
             // большой том перед фигурой: страницы дышат, строки ползут вверх
             // Том держим ниже и уже: на арене (s≈1.1) прежний размер закрывал
             // мантию целиком, и страж читался как «скрижаль над книгой».
-            const int bookY = oy + 42;
+            // Том на замахе поднимается к груди и раскрывается шире, на выбросе
+            // захлопывается и проседает — момент удара видно по книге.
+            const int bookY = oy + 42 - (int)(cp * 26.0f) + (int)(cb * 8.0f);
+            const int bookSpread = (int)(cp * 5.0f) - (int)(cb * 4.0f);
             const int flutter = (int)(sinf(animTime * 5.0f) * 2.0f);
             FR(cx - 29, bookY - 15, 58, 32, 6, 0xFF2B2119, alpha);      // переплёт
             FR(cx - 27, bookY - 13, 54, 27, 4, 0xFF4A382A, alpha);
             for (int side = -1; side <= 1; side += 2) {
                 const int pw = 23;
-                const int px3 = side < 0 ? cx - 25 : cx + 2;
+                const int px3 = side < 0 ? cx - 25 - bookSpread : cx + 2 + bookSpread;
                 const int ph = 23 + (side > 0 ? flutter : -flutter);
                 FR(px3, bookY - ph / 2, pw, ph, 3, 0xFFDCD2BC, alpha);
                 FR(px3 + 2, bookY - ph / 2 + 2, pw - 4, ph - 4, 2, 0xFFF6EFDD, alpha);
@@ -1376,10 +1431,15 @@ struct Renderer {
             // «просвечивает», поэтому сразу видно, кто настоящий.
             const uint32_t glass = tint(0xFF4E7C8A), glassLit = tint(0xFFB4E8F4), glassDark = tint(0xFF16242A);
             const uint32_t core = tint(enraged ? 0xFFFF5A7A : 0xFF8FF0FF);
+            const float cp = std::max(0.0f, std::min(1.0f, castPose));
+            const float cb = std::max(0.0f, std::min(1.0f, castBurst));
             const float pulse = 0.5f + 0.5f * sinf(animTime * 3.4f);
             const int sway = (int)(sinf(animTime * 1.6f) * 3.0f);
             const int bob = (int)(sinf(animTime * 2.1f) * 3.0f);
             const int oy = cy + bob;
+            // Обмен местами виден по фигуре: перед броском слепок отходит дальше,
+            // после — оба сходятся. Раньше телепорт был мгновенным и без позы.
+            const int separation = (int)(cp * 34.0f) - (int)(cb * 26.0f);
             // тень у настоящего тела
             FX(cx - 34, cy + 56, 68, 9, 0xFF08060E, 80);
             auto glassBody = [&](int bx, int by, int a, bool mirror, float phase) {
@@ -1421,11 +1481,11 @@ struct Renderer {
             // шлейф: два запоздавших слепка, каждый бледнее предыдущего —
             // движение читается как «стекло», а не как две статичные фигурки
             for (int ghost = 2; ghost >= 1; --ghost) {
-                const int lagX = cx + 40 + sway - (int)(sinf(animTime * 2.6f - ghost * 0.5f) * 5.0f) - ghost * 6;
+                const int lagX = cx + 40 + sway + separation - (int)(sinf(animTime * 2.6f - ghost * 0.5f) * 5.0f) - ghost * 6;
                 glassBody(lagX, oy - 4 + ghost, 36 - ghost * 8, true, 1.1f + ghost * 0.4f);
             }
             // двойник: та же фигура, отстаёт по фазе и просвечивает сквозь
-            const int tx = cx + 46 + sway;
+            const int tx = cx + 46 + sway + separation;
             glassBody(tx, oy - 4, 120, true, 1.1f);
             // трос между двумя телами
             for (int i = 0; i < 6; ++i)
