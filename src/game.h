@@ -164,7 +164,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 118;
+static constexpr int PATCH_NOTES_COUNT = 119;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -1158,6 +1158,20 @@ struct Game {
         return track != 0 && save.campaignTrack != track;
     }
     bool isCampaignTrackChosen() const { return save.campaignTrack == 1 || save.campaignTrack == 2; }
+    // Развилка одна и стоит на входе в акт II: первое дело полосы. Только здесь
+    // след фиксируется. Всё остальное — уже дела выбранного следа.
+    int campaignForkMission(int track) const {
+        if (track != 1 && track != 2) return -1;
+        const int actOneLast = campaignActLaneMission(1, 0, campaignActLaneCount(1, 0) - 1);
+        if (actOneLast < 0 || !isCampaignMissionCompleted(actOneLast)) return -1;
+        return campaignActLaneMission(2, track, 0);
+    }
+    // Дальше развилки дерево не листается, пока след не выбран: иначе можно
+    // стоять в акте III и «пройти следом А» там, где надо выбирать ветку.
+    int campaignReachableAct() const {
+        if (isCampaignTrackChosen()) return CAMPAIGN_ACT_COUNT;
+        return campaignForkMission(1) >= 0 ? 2 : 1;
+    }
     int campaignTrackCompletedCount() const {
         if (!isCampaignTrackChosen()) return 0;
         int n = 0;
@@ -1168,6 +1182,8 @@ struct Game {
     void chooseCampaignTrack(int track) {
         if (track != 1 && track != 2) return;
         if (isCampaignTrackChosen()) return;
+        // След фиксируется только на развилке акта II — не в акте III и не раньше.
+        if (campaignForkMission(track) < 0) return;
         save.campaignTrack = track;
         writeSave();
         sound.play(SFX_LEVELUP, 0.05f);
@@ -1195,16 +1211,21 @@ struct Game {
         if (isCampaignMissionCompleted(mission)) return "ПРОЙДЕНА";
         if (isCampaignMissionLockedByChoice(mission)) return "ДРУГОЙ ВЫБОР СДЕЛАН";
         if (isCampaignMissionLockedByTrack(mission)) {
-            const bool pickNow = !isCampaignTrackChosen();
-            if (pickNow) return campaignTrackOf(mission) == 1 ? "СЛЕД А • ВЫБЕРИ" : "СЛЕД Б • ВЫБЕРИ";
-            return "ЗАКРЫТО ДО НОВОЙ НОЧИ";
+            if (isCampaignTrackChosen()) return "ЗАКРЫТО ДО НОВОЙ НОЧИ";
+            if (campaignCanChooseTrackHere(mission))
+                return campaignTrackOf(mission) == 1 ? "СЛЕД А • ВЫБЕРИ" : "СЛЕД Б • ВЫБЕРИ";
+            // Дело впереди развилки: след здесь не выбирают, его выбирают в акте II.
+            return "СНАЧАЛА ВЫБЕРИ СЛЕД";
         }
         if (isCampaignMissionUnlocked(mission)) return "ДОСТУПНА";
         return "ЗАКРЫТА";
     }
     // Здесь кнопка не только запускает дело, но и фиксирует выбор следа.
     bool campaignCanChooseTrackHere(int mission) const {
-        return !isCampaignTrackChosen() && campaignTrackOf(mission) != 0;
+        if (isCampaignTrackChosen()) return false;
+        const int track = campaignTrackOf(mission);
+        if (track == 0) return false;
+        return campaignForkMission(track) == mission;
     }
     void confirmCampaignSelection(int mission) {
         // «Пойти следом» = выбрать след и сразу начать дело: одно нажатие, а не два.
@@ -1234,7 +1255,9 @@ struct Game {
         const CampaignMissionDef& def = CAMPAIGN_MISSIONS[mission];
         if (isCampaignMissionLockedByTrack(mission)) return false; // второй след — в новую ночь
         if (isCampaignMissionLockedByChoice(mission)) return false; // финальный выбор уже сделан
-        if (def.prereqA < 0) return true; // the case that opens an act is always reachable
+        // Дело-открыватель акта достижимо само по себе, но только если оно общее:
+        // дело следа без пререквизита открывало бы акт в обход развилки.
+        if (def.prereqA < 0) return def.track == 0;
         // Два пререквизита — слияние следов: достаточно ЛЮБОГО из них, потому что
         // до акта V игрок доходит только одним следом из двух.
         if (isCampaignMissionCompleted(def.prereqA)) return true;
@@ -7480,12 +7503,22 @@ struct Game {
         return -1;
     }
     // Ходьба по дереву: влево-вправо — дела одной полосы, вверх-вниз — акты.
+    // Пока след не выбран, дерево кончается развилкой: ↕ не уводит дальше акта II,
+    // а ←/→ переключают две двери развилки (А и Б), а не дела одной полосы.
     void moveCampaignCursor(int actDelta, int slotDelta) {
         const int act = std::max(1, std::min(CAMPAIGN_ACT_COUNT, campaignActOf(storyMissionCursor)));
         const int lane = campaignLaneTrack();
         int slot = campaignActSlotOf(act, lane, storyMissionCursor);
         if (slot < 0) slot = 0;
         if (slotDelta != 0) {
+            if (!isCampaignTrackChosen()) {
+                const int doorA = campaignForkMission(1), doorB = campaignForkMission(2);
+                if (doorA < 0 || doorB < 0) return;
+                storyMissionCursor = (storyMissionCursor == doorA) ? doorB : doorA;
+                selectedStoryMission = storyMissionCursor;
+                campaignActView = 2;
+                return;
+            }
             const int count = campaignActLaneCount(act, lane);
             if (count > 0) {
                 slot = (slot + slotDelta + count) % count;
@@ -7495,9 +7528,10 @@ struct Game {
             }
             return;
         }
-        int next = act;
+        const int reach = campaignReachableAct();
+        int next = std::max(1, std::min(reach, act));
         for (int step = 0; step < CAMPAIGN_ACT_COUNT; ++step) {
-            next = std::max(1, std::min(CAMPAIGN_ACT_COUNT, next + actDelta));
+            next = std::max(1, std::min(reach, next + actDelta));
             if (campaignActLaneCount(next, lane) > 0) break;
         }
         const int count = campaignActLaneCount(next, lane);
@@ -7507,7 +7541,7 @@ struct Game {
         campaignActView = next;
     }
     void setCampaignActView(int act) {
-        campaignActView = std::max(1, std::min(CAMPAIGN_ACT_COUNT, act));
+        campaignActView = std::max(1, std::min(campaignReachableAct(), act));
         const int lane = campaignLaneTrack();
         const int first = campaignActLaneCount(campaignActView, lane) > 0
                         ? campaignActLaneMission(campaignActView, lane, 0)
@@ -7618,13 +7652,13 @@ struct Game {
                 // Подпись полосы слева от чипов.
                 if (lanes > 1) {
                     const int tagX = x + 2, tagW = 20;
-                    r.fillRoundedRect(tagX, chipY, tagW, chipH, 5,
-                                      laneTrack == save.campaignTrack ? 0xFF3A2A56 : 0xFF221E2A);
-                    r.drawRoundedRect(tagX, chipY, tagW, chipH, 5,
-                                      laneTrack == save.campaignTrack ? 0xFFFFD858 : 0xFF4E4658, 1, 220);
+                    const bool tagLit = save.campaignTrack != 0 ? laneTrack == save.campaignTrack
+                                                                : laneTrack == campaignTrackOf(storyMissionCursor);
+                    r.fillRoundedRect(tagX, chipY, tagW, chipH, 5, tagLit ? 0xFF3A2A56 : 0xFF221E2A);
+                    r.drawRoundedRect(tagX, chipY, tagW, chipH, 5, tagLit ? 0xFFFFD858 : 0xFF4E4658, 1, 220);
                     r.drawTextCentered(FONT_SMALL, tagX + tagW / 2, chipY + (chipH - 14) / 2,
                                        campaignTrackLetter(laneTrack),
-                                       laneTrack == save.campaignTrack ? 0xFFFFE9A8 : 0xFF9C93AC, false);
+                                       tagLit ? 0xFFFFE9A8 : 0xFF9C93AC, false);
                 }
                 for (int slot = 0; slot < count; ++slot) {
                     const int i = lanes > 1 ? campaignActLaneMission(a, laneTrack, slot)
@@ -7641,7 +7675,10 @@ struct Game {
                     // Финальный выбор тоже показываем как «одна из двух дверей»:
                     // дверь, которую уже не открыть, гаснет.
                     const bool choiceLocked = isCampaignMissionLockedByChoice(i);
-                    const bool dim = otherTrack || (unchosen && laneTrack != 0) || choiceLocked;
+                    // До выбора обе полосы равноправны: зачёркивать их обе — значит
+                    // показывать игроку, что он уже что-то потерял. Гасим только чужой
+                    // след (после выбора) и проигранную дверь финала.
+                    const bool dim = otherTrack || choiceLocked;
                     const uint32_t edge = focused ? 0xFFFFD858
                                         : dim ? 0xFF3E3949
                                         : completed ? 0xFF69E0A0 : (unlocked ? chipAccent : 0xFF554E60);
@@ -7677,7 +7714,7 @@ struct Game {
                     }
                 }
                 // Перечёркнутая полоса: крест по чипам и подпись.
-                if (otherTrack || unchosen) {
+                if (otherTrack) {
                     const int laneW = count * (chipW + chipGap) - chipGap;
                     const int laneRight = laneX + laneW;
                     for (int slot = 0; slot < count; ++slot) {
@@ -7685,7 +7722,7 @@ struct Game {
                         r.drawLine(chipX + 3, chipY + chipH - 3, chipX + chipW - 3, chipY + 3, 0xFF6A5A78, 1, 200, false);
                         r.drawLine(chipX + 3, chipY + 3, chipX + chipW - 3, chipY + chipH - 3, 0xFF6A5A78, 1, 200, false);
                     }
-                    const char* note = unchosen ? "ВЫБЕРИ СЛЕД" : "ЗАКРЫТ ДО НОВОЙ НОЧИ";
+                    const char* note = "ЗАКРЫТ ДО НОВОЙ НОЧИ";
                     const int noteW = r.textWidth(FONT_SMALL, note) + 16;
                     if (noteW < laneW - 8) {
                         const int nx = laneX + (laneW - noteW) / 2;
@@ -7757,6 +7794,8 @@ struct Game {
         char startLabel[64];
         if (campaignCanChooseTrackHere(selected))
             snprintf(startLabel, sizeof(startLabel), "ПОЙТИ СЛЕДОМ %s [ENTER]", campaignTrackLetter(campaignTrackOf(selected)));
+        else if (!unlocked && !isCampaignTrackChosen() && campaignTrackOf(selected) != 0)
+            snprintf(startLabel, sizeof(startLabel), "СНАЧАЛА ВЫБЕРИ СЛЕД");
         else if (!unlocked) snprintf(startLabel, sizeof(startLabel), "ДЕЛО ЕЩЁ ЗАКРЫТО");
         else if (completed) snprintf(startLabel, sizeof(startLabel), "ПЕРЕИГРАТЬ [ENTER]");
         else snprintf(startLabel, sizeof(startLabel), "НАЧАТЬ ДЕЛО [ENTER]");
@@ -7837,6 +7876,10 @@ struct Game {
                      campaignTrackLetter(campaignTrackOf(selected)));
         else if (isCampaignMissionLockedByChoice(selected))
             snprintf(statusBuf, sizeof(statusBuf), "ДРУГОЙ ВЫБОР СДЕЛАН • ЭТА ДВЕРЬ ЗАКРЫТА");
+        // Чужой след — это про сделанный выбор. Пока след не выбран, честнее
+        // сказать «выбери след», а не «закрыто до новой ночи».
+        else if (!isCampaignTrackChosen() && campaignTrackOf(selected) != 0)
+            snprintf(statusBuf, sizeof(statusBuf), "СНАЧАЛА ВЫБЕРИ СЛЕД В АКТЕ II");
         else if (isCampaignMissionLockedByTrack(selected))
             snprintf(statusBuf, sizeof(statusBuf), "ЧУЖОЙ СЛЕД • ЗАКРЫТО ДО НОВОЙ НОЧИ");
         else snprintf(statusBuf, sizeof(statusBuf), "ЗАКРЫТА • НУЖНО ДЕЛО %02d", campaignMissingPrereq(selected) + 1);
@@ -7886,6 +7929,8 @@ struct Game {
         if (campaignCanChooseTrackHere(selected))
             snprintf(startLabel, sizeof(startLabel), "ПОЙТИ СЛЕДОМ %s [ENTER]",
                      campaignTrackLetter(campaignTrackOf(selected)));
+        else if (!unlocked && !isCampaignTrackChosen() && campaignTrackOf(selected) != 0)
+            snprintf(startLabel, sizeof(startLabel), "СНАЧАЛА ВЫБЕРИ СЛЕД");
         else if (!unlocked) snprintf(startLabel, sizeof(startLabel), "ДЕЛО ЕЩЁ ЗАКРЫТО");
         else if (completed) snprintf(startLabel, sizeof(startLabel), "ПЕРЕИГРАТЬ [ENTER]");
         else snprintf(startLabel, sizeof(startLabel), "НАЧАТЬ ДЕЛО [ENTER]");
@@ -8635,6 +8680,7 @@ struct Game {
             "2.10.22 • ДЕБАГ-МЕНЮ ПО F9: КРЫСЫ, СТРАЖИ, ВСЕ ПРЕДМЕТЫ",
             "2.10.23 • АПДЕЙТЕР: МЁРТВАЯ ВЕТКА И СТАРЫЙ ФАЙЛ БОЛЬШЕ НЕ ЗАГЛУШКА",
             "2.10.24 • ПАТЧНОУТЫ ЛИСТАЮТСЯ, КНОПКИ НЕ ВЫЛЕЗАЮТ ЗА ПАНЕЛЬ",
+            "2.10.25 • РАЗВИЛКА ТОЛЬКО В АКТЕ II: ДВЕРИ А И Б ПЕРЕКЛЮЧАЮТСЯ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -8755,7 +8801,8 @@ struct Game {
             "• Крысиная стая выросла вдвое: 16–24 крысы вместо 8–12, кучка стала плотной.\n• Описание дела больше не читается дважды: экран выбора уже озвучил его, и старт забега не повторяет ту же запись. Если запись ещё играет, цель дела читается после её конца.\n• Двойник: обмен местами больше не встаёт вплотную к герою (зеркало держит 190 px, у края арены — 150 px), поэтому телепорт перестал убивать касанием. Крест снайперский: один луч смотрит прямо в героя, у старой точки залп сдвинут на полшага.\n• Музыка дел: audio/ss_case_01.mp3 … ss_case_28.mp3 играет своё дело, нет файла — общий плейлист боя, нет и его — встроенная тема. Смена дела перезапускает трек.\n• Музыка стражей: audio/ss_boss_guardian00.mp3 … 05.mp3 закреплена за типом стража, общий ss_boss_theme остаётся запасным.\n• Эндлес играет весь боевой набор в перемешанном порядке и без повторов, пока не кончится список: в пул входят ss_gameplay_*, ss_case_NN и ss_gameplay_endless_*.\n• Нашлась причина, по которой «своя музыка дела» не работала: сцена искалась по префиксу ss_gameplay_run, и файлы ss_gameplay_caseNN.mp3 не читались вовсе. Теперь читаются оба имени.\n• music_prompts.md: та же схема имён, что читает игра, готовый список файлов и объяснение, как всё это выбирается.\n• Если апдейтер собрал ту же версию, что уже была, значит он работал на старой ветке: с 2.10.20 он сам выбирает ветку с самой свежей версией и печатает её номер до сборки.",
             "• Дебаг-меню было, но открывалось только по секретному коду v404, и со стороны выглядело так, будто отладки в игре нет.\n• Теперь F9 открывает его сразу в любом состоянии; клавиша ` — запасная, для ноутбуков, где F-ряд спрятан за Fn. В меню паузы появилась кнопка ОТЛАДКА [F9].\n• Пока меню открыто, бой замирает: раньше отладка шла поверх живого боя и можно было умереть, пока выбираешь пункт.\n• Строки выбираются стрелками и Enter или цифрами 1…9 и 0; состояние переключателей видно справа.\n• Новые пункты под недавние жалобы: СПАВН СТАИ КРЫС (проверить, что крыс вдвое больше), ПРИЗВАТЬ СТРАЖА (по очереди Моргар, Малакор, Кардинал, Азарот, Протоколист, Двойник — проверить крест), ВСЕ 40 ПРЕДМЕТОВ ПО 3 РАНГА (увидеть все иконки в сборке), ПОЛНЫЙ ЗАРЯД СУПЕРУМЕНИЯ, F3-оверлей.\n• Бессмертие, золото, все дела, все герои, Кузница, убить всех, +5 уровней и новая ночь остались на месте.",
             "• Обновления не было, потому что локальная ветка удалена на GitHub: апдейтер честно отвечал «Already up to date» для ветки, которой больше нет.\n• Теперь на старте он это видит и прямо пишет: ветки такой нет на GitHub.\n• На мёртвую ветку он больше не возвращается - остаётся на собранной, и следующий запуск идёт уже с неё. Раньше цикл повторялся каждый раз.\n• Скачанный руками update.bat попадал в stash и при возврате ложился поверх свежего из ветки: следующий запуск снова поднимал старый скрипт. Теперь после возврата из stash файлы сравниваются по номеру и остаётся более новый.\n• Кнопка Raw на GitHub отдаёт update.bat из main, а main - 2.10.4 с древним скриптом в UTF-8. Поэтому «перекачал новый» снова давало старый: свежий файл лежит только в рабочей ветке (см. UPDATE_HOWTO.md).\n• UPDATE_HOWTO.md: один разовый набор команд, чтобы перейти на рабочую ветку и получить свежий апдейтер.\n• Патчноуты листаются: длинная заметка прокручивается колесом мыши или PgUp/PgDn (стрелки вверх/вниз — по строке, Home/End — начало и конец), справа видна полоса прокрутки.\n• Кнопки и галочка в патчноутах больше не вылезают за панель в маленьком окне: раскладка считается от размеров панели, а не от 1280x720.",
-            "• Длинный патчноут уезжал за нижнюю кромку панели, и дочитать его было нельзя. Теперь заметка листается: колесо мыши над текстом, PgUp / PgDn — страницами, стрелки вверх / вниз — по строке, Home / End — начало и конец.\n• Справа в заметке появилась полоса прокрутки, а подсказка снизу меняется: «прокрутка заметки», если текст длиннее окна, и «заметка целиком», если нет.\n• При смене версии прокрутка сбрасывается: новая заметка открывается с начала.\n• Раньше кнопки «ПРЕДЫДУЩАЯ / СЛЕДУЮЩАЯ / В ИГРУ», галочка и подсказка стояли на жёстких координатах для 1280x720 и в маленьком окне вылезали за панель. Теперь вся раскладка считается от размеров панели и проверена на 1920x1080, 1280x720, 1024x600, 900x520 и портретных 720x1280.\n• Обрезка текста живёт в рендерере (setClip / clearClip), поэтому такие же длинные заметки в словаре и других панелях можно листать тем же способом.",        };
+            "• Длинный патчноут уезжал за нижнюю кромку панели, и дочитать его было нельзя. Теперь заметка листается: колесо мыши над текстом, PgUp / PgDn — страницами, стрелки вверх / вниз — по строке, Home / End — начало и конец.\n• Справа в заметке появилась полоса прокрутки, а подсказка снизу меняется: «прокрутка заметки», если текст длиннее окна, и «заметка целиком», если нет.\n• При смене версии прокрутка сбрасывается: новая заметка открывается с начала.\n• Раньше кнопки «ПРЕДЫДУЩАЯ / СЛЕДУЮЩАЯ / В ИГРУ», галочка и подсказка стояли на жёстких координатах для 1280x720 и в маленьком окне вылезали за панель. Теперь вся раскладка считается от размеров панели и проверена на 1920x1080, 1280x720, 1024x600, 900x520 и портретных 720x1280.\n• Обрезка текста живёт в рендерере (setClip / clearClip), поэтому такие же длинные заметки в словаре и других панелях можно листать тем же способом.",
+            "• Развилку можно было обойти: стоя в акте III, нажать «ПОЙТИ СЛЕДОМ А» и зафиксировать след там, где его выбирать нельзя. Теперь след фиксируется только на двери развилки — на первом деле акта II.\n• Пока след не выбран, дерево не листается дальше акта II, а ← и → переключают две двери развилки: А «СВИДЕТЕЛЬ» и Б «КОПИЯ». Раньше клавиатура всегда стояла на полосе А, и след Б с клавиатуры было не выбрать вовсе.\n• До выбора обе полосы выглядят равноправно: раньше обе были перечёркнуты, будто выбор уже сделан и потерян.\n• Дело впереди развилки больше не обещает «выбери след»: на кнопке честно написано «СНАЧАЛА ВЫБЕРИ СЛЕД», а досье объясняет, что след выбирают в акте II.",        };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
         static_assert(sizeof(notes) / sizeof(notes[0]) == PATCH_NOTES_COUNT,
