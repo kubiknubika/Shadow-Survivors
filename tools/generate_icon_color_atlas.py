@@ -26,7 +26,8 @@ SIZE = 64
 ASSIGN = [
     ("blue", "bright"), ("orange", "pure"), ("violet", "bright"), ("lime", "pure"), ("red", "pure"),
     ("orange", "deep"), ("cyan", "pure"), ("amber", "dark"), ("green", "pure"), ("magenta", "pure"),
-    ("magenta", "dark"), ("orange", "bright"), ("amber", "bright"), ("lime", "deep"), ("amber", "deep"),
+    ("red", "pure"),        # 10 сердце титана — багровое
+    ("orange", "bright"), ("amber", "bright"), ("lime", "deep"), ("amber", "deep"),
     ("violet", "dark"), ("cyan", "dark"), ("violet", "deep"), ("cyan", "bright"), ("red", "bright"),
     ("green", "dark"), ("teal", "pure"), ("teal", "deep"), ("magenta", "bright"), ("blue", "pure"),
     ("green", "bright"), ("blue", "dark"), ("lime", "dark"), ("cyan", "deep"), ("lime", "bright"),
@@ -36,7 +37,7 @@ ASSIGN = [
     ("blue", "pure"),      # 31 осколок последнего удара — сталь
     ("violet", "deep"),    # 32 ключ пепельного ритма
     ("lime", "pure"),      # 33 призма перекрёстного огня — янтарь
-    ("lime", "bright"),    # 34 угольный фитиль — зелёное пламя
+    ("red", "bright"),     # 34 угольный фитиль — тлеющий багровый уголь
     ("cyan", "bright"),     # 35 осколок оттепели — бледная бирюза
     ("magenta", "deep"),   # 36 печать обратного тока
     ("red", "bright"),     # 37 знак палача — багровый
