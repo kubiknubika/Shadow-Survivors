@@ -199,10 +199,29 @@ struct ExternalMusicCue {
 };
 
 struct ExternalMusic {
+    // Своя музыка дела: audio/ss_case_01.mp3 … ss_case_28.mp3 (можно с любым
+    // хвостом: ss_case_05_crypt.mp3). Нет файла под дело — играет общий плейлист
+    // сцены gameplay, поэтому папка может быть заполнена наполовину.
+    static constexpr int CASE_SLOTS = 64;
+    std::vector<MusicPath> caseFiles[CASE_SLOTS];
+    // Своя музыка стража: audio/ss_boss_guardian00.mp3 … 05. Нет файла — играет
+    // общий плейлист сцены boss (ss_boss_theme*), как и раньше.
+    static constexpr int GUARDIAN_SLOTS = 8;
+    std::vector<MusicPath> guardianFiles[GUARDIAN_SLOTS];
+    int guardianIndex = -1;
+    bool guardianChanged = false;
+
     std::vector<MusicPath> files[MUSIC_SCENE_COUNT];
     std::vector<MusicPath> searchDirs;
     bool scanned = false;
     int outputRate = 44100;
+    int caseIndex = -1;        // текущее дело кампании, -1 = эндлес/меню
+    bool caseChanged = false;  // дело сменилось: трек нужно перезапустить
+    // Очередь шаффла для эндлеса: каждый боевой трек играет один раз, пока не
+    // кончится набор, и только потом набор тасуется заново.
+    std::vector<int> shuffleQueue;
+    size_t shufflePos = 0;
+    int shuffleScene = -1;
 
     ExternalMusicTrack track;
     int requestedScene = -1;
@@ -308,6 +327,23 @@ struct ExternalMusic {
         for (size_t d = 0; d < searchDirs.size(); ++d) collectVariants(searchDirs[d], base, out);
     }
 
+    // ss_case_07.mp3 и ss_gameplay_case07.mp3 -> 7. Ведущий ноль обязателен:
+    // без него «case_1» и «case_10» разбирались бы одинаково.
+    static int numberedIndexOf(const MusicPath& path, const MusicPath& prefix) {
+        const MusicPath name = fileName(path);
+        const size_t prefixLen = prefix.size();
+        if (name.size() <= prefixLen) return -1;
+        if (name.compare(0, prefixLen, prefix) != 0) return -1;
+        int value = 0, digits = 0;
+        for (size_t i = prefixLen; i < name.size() && digits < 3; ++i) {
+            const MusicPath::value_type ch = name[i];
+            if (ch < '0' || ch > '9') break;
+            value = value * 10 + (int)(ch - '0');
+            ++digits;
+        }
+        return digits >= 2 ? value : -1;
+    }
+
     void scan() {
         if (scanned) return;
         scanned = true;
@@ -326,21 +362,137 @@ struct ExternalMusic {
             std::sort(files[s].begin(), files[s].end());
             files[s].erase(std::unique(files[s].begin(), files[s].end()), files[s].end());
         }
+        // Отдельные треки дел. Поддерживаются оба имени: короткое ss_case_07.mp3
+        // и прежнее ss_gameplay_case07.mp3 — раньше второе не читалось вообще,
+        // потому что сцена искалась по префиксу ss_gameplay_run.
+        const MusicPath shortPrefix =
+#ifdef _WIN32
+            L"ss_case_";
+#else
+            "ss_case_";
+#endif
+        const MusicPath legacyPrefix =
+#ifdef _WIN32
+            L"ss_gameplay_case";
+#else
+            "ss_gameplay_case";
+#endif
+        std::vector<MusicPath> caseList;
+        for (size_t d = 0; d < searchDirs.size(); ++d) {
+            collectVariants(searchDirs[d], "ss_case_", caseList);
+            collectVariants(searchDirs[d], "ss_gameplay_case", caseList);
+        }
+        std::sort(caseList.begin(), caseList.end());
+        caseList.erase(std::unique(caseList.begin(), caseList.end()), caseList.end());
+        for (size_t i = 0; i < caseList.size(); ++i) {
+            int index = numberedIndexOf(caseList[i], shortPrefix);
+            if (index < 0) index = numberedIndexOf(caseList[i], legacyPrefix);
+            if (index >= 0 && index < CASE_SLOTS) caseFiles[index].push_back(caseList[i]);
+        }
+        // Эндлес играет весь боевой набор: ss_gameplay_* (run, endless, case…) плюс
+        // все отдельные треки дел. Так плейлист не зависит от того, как назвали файл.
+        std::vector<MusicPath> battle;
+        for (size_t d = 0; d < searchDirs.size(); ++d) collectVariants(searchDirs[d], "ss_gameplay_", battle);
+        for (size_t i = 0; i < battle.size(); ++i)
+            if (!alreadyListed(files[MUSIC_SCENE_GAMEPLAY], battle[i]))
+                files[MUSIC_SCENE_GAMEPLAY].push_back(battle[i]);
+        for (size_t i = 0; i < caseList.size(); ++i)
+            if (!alreadyListed(files[MUSIC_SCENE_GAMEPLAY], caseList[i]))
+                files[MUSIC_SCENE_GAMEPLAY].push_back(caseList[i]);
+        std::sort(files[MUSIC_SCENE_GAMEPLAY].begin(), files[MUSIC_SCENE_GAMEPLAY].end());
+        files[MUSIC_SCENE_GAMEPLAY].erase(
+            std::unique(files[MUSIC_SCENE_GAMEPLAY].begin(), files[MUSIC_SCENE_GAMEPLAY].end()),
+            files[MUSIC_SCENE_GAMEPLAY].end());
+        // Своя музыка стражей: ss_boss_guardianNN.mp3. Возвращения (ss_boss_br_NN)
+        // остаются в общем плейлисте сцены boss.
+        const MusicPath guardianPrefix =
+#ifdef _WIN32
+            L"ss_boss_guardian";
+#else
+            "ss_boss_guardian";
+#endif
+        std::vector<MusicPath> guardians;
+        for (size_t d = 0; d < searchDirs.size(); ++d) collectVariants(searchDirs[d], "ss_boss_guardian", guardians);
+        std::sort(guardians.begin(), guardians.end());
+        guardians.erase(std::unique(guardians.begin(), guardians.end()), guardians.end());
+        for (size_t i = 0; i < guardians.size(); ++i) {
+            const int index = numberedIndexOf(guardians[i], guardianPrefix);
+            if (index >= 0 && index < GUARDIAN_SLOTS) guardianFiles[index].push_back(guardians[i]);
+        }
+        std::vector<MusicPath> bossPool;
+        for (size_t d = 0; d < searchDirs.size(); ++d) collectVariants(searchDirs[d], "ss_boss_", bossPool);
+        for (size_t i = 0; i < bossPool.size(); ++i)
+            if (!alreadyListed(files[MUSIC_SCENE_BOSS], bossPool[i])) files[MUSIC_SCENE_BOSS].push_back(bossPool[i]);
+        std::sort(files[MUSIC_SCENE_BOSS].begin(), files[MUSIC_SCENE_BOSS].end());
+        files[MUSIC_SCENE_BOSS].erase(std::unique(files[MUSIC_SCENE_BOSS].begin(), files[MUSIC_SCENE_BOSS].end()),
+                                      files[MUSIC_SCENE_BOSS].end());
+    }
+
+    // Какое дело кампании звучит сейчас. Эндлес и меню передают -1.
+    // Смена дела перезапускает трек: иначе переход к следующему делу тянул бы
+    // прежнюю музыку, потому что сцена не меняется.
+    void setCase(int index) {
+        if (index == caseIndex) return;
+        caseIndex = index;
+        caseChanged = true;
+    }
+
+    // Какой страж звучит сейчас (0…5). Меню и эндлес передают -1.
+    void setGuardian(int index) {
+        if (index == guardianIndex) return;
+        guardianIndex = index;
+        guardianChanged = true;
+    }
+
+    // Откуда берётся трек: своя музыка дела или стража важнее общего плейлиста сцены.
+    const std::vector<MusicPath>& sourceFor(int scene) const {
+        if (scene == MUSIC_SCENE_GAMEPLAY && !shuffle && caseIndex >= 0 && caseIndex < CASE_SLOTS &&
+            !caseFiles[caseIndex].empty())
+            return caseFiles[caseIndex];
+        if (scene == MUSIC_SCENE_BOSS && guardianIndex >= 0 && guardianIndex < GUARDIAN_SLOTS &&
+            !guardianFiles[guardianIndex].empty())
+            return guardianFiles[guardianIndex];
+        return files[scene];
+    }
+
+    // Перемешивает индексы сцены: весь набор играет по одному разу, потом
+    // тасуется заново. Только что отыгранная запись не встаёт первой.
+    void refillShuffle(int scene, int avoid) {
+        const std::vector<MusicPath>& list = files[scene];
+        shuffleQueue.resize(list.size());
+        for (size_t i = 0; i < list.size(); ++i) shuffleQueue[i] = (int)i;
+        for (size_t i = shuffleQueue.size(); i > 1; --i) {
+            const size_t j = (size_t)(random() % i);
+            const int tmp = shuffleQueue[i - 1];
+            shuffleQueue[i - 1] = shuffleQueue[j];
+            shuffleQueue[j] = tmp;
+        }
+        if (shuffleQueue.size() > 1 && shuffleQueue[0] == avoid)
+            std::swap(shuffleQueue[0], shuffleQueue[shuffleQueue.size() - 1]);
+        shufflePos = 0;
+        shuffleScene = scene;
     }
 
     // Called once per output sample by the audio thread.
     void requestScene(int scene) {
         if (!hasTrack(scene)) scene = -1;
-        if (scene == requestedScene) return;
+        if (scene == requestedScene && !caseChanged && !guardianChanged) return;
+        caseChanged = false;
+        guardianChanged = false;
         requestedScene = scene;
         if (phase != 1) phase = 1; // fade out first, so scene changes never click
     }
 
     bool startScene(int scene) {
         if (!hasTrack(scene)) return false;
-        std::vector<MusicPath>& list = files[scene];
+        const std::vector<MusicPath>& list = sourceFor(scene);
+        if (list.empty()) return false;
         size_t pick = 0;
-        if (!shuffle && variantSeed >= 0) {
+        if (scene == MUSIC_SCENE_GAMEPLAY && shuffle && list.size() > 1) {
+            // Эндлес: очередь без повторов, а не случайность на каждом треке.
+            if (shuffleScene != scene || shufflePos >= shuffleQueue.size()) refillShuffle(scene, lastVariant);
+            pick = (size_t)shuffleQueue[shufflePos++];
+        } else if (!shuffle && variantSeed >= 0) {
             // Детерминированный выбор: каждое дело кампании звучит своей записью.
             pick = (size_t)(variantSeed % (int)list.size());
         } else if (list.size() > 1) {
@@ -354,16 +506,21 @@ struct ExternalMusic {
         return true;
     }
 
-    // Следующий трек той же сцены — для эндлеса: плейлист не повторяет только что
-    // отыгранную запись и не зацикливается на одной.
+    // Следующий трек той же сцены — для эндлеса: набор проходится целиком в
+    // случайном порядке, поэтому все боевые темы успевают отыграть.
     bool startNextOfScene() {
         if (!hasTrack(currentScene)) return false;
-        std::vector<MusicPath>& list = files[currentScene];
+        const std::vector<MusicPath>& list = files[currentScene];
         if (list.empty()) return false;
-        size_t pick = (size_t)(random() % list.size());
-        if (list.size() > 1 && (int)pick == lastVariant) pick = (pick + 1) % list.size();
-        lastVariant = (int)pick;
-        return track.openFile(list[pick], outputRate);
+        if (list.size() > 1) {
+            if (shuffleScene != currentScene || shufflePos >= shuffleQueue.size())
+                refillShuffle(currentScene, lastVariant);
+            const int pick = shuffleQueue[shufflePos++];
+            lastVariant = pick;
+            return track.openFile(list[pick], outputRate);
+        }
+        lastVariant = 0;
+        return track.openFile(list[0], outputRate);
     }
 
     void advanceEnvelope() {
@@ -405,5 +562,8 @@ struct ExternalMusic {
         currentScene = requestedScene = -1;
         phase = 0;
         env = 0.0f;
+        shuffleQueue.clear();
+        shufflePos = 0;
+        shuffleScene = -1;
     }
 };

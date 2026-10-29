@@ -674,6 +674,11 @@ struct SoundEngine {
         const int sceneMode = std::max(0, std::min(7, musicMode.load(std::memory_order_relaxed)));
         externalMusic.variantSeed = musicVariantSeed.load(std::memory_order_relaxed);
         externalMusic.shuffle = musicShuffle.load(std::memory_order_relaxed);
+        // В кампании номер дела выбирает и трек, и момент перезапуска музыки:
+        // у каждого дела может быть своя запись (audio/ss_case_NN.mp3).
+        externalMusic.setCase(externalMusic.shuffle ? -1 : externalMusic.variantSeed);
+        // Страж тоже выбирает себе запись: audio/ss_boss_guardian00…05.mp3.
+        externalMusic.setGuardian(sceneMode == 2 ? musicBossType.load(std::memory_order_relaxed) : -1);
         externalMusic.requestScene(externalSceneForMode(sceneMode, musicSceneHint.load(std::memory_order_relaxed)));
         float music = externalMusic.render();
         const bool trackOwnsBus = externalMusic.ownsMusicSlot();

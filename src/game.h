@@ -164,7 +164,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 114;
+static constexpr int PATCH_NOTES_COUNT = 115;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -603,6 +603,10 @@ struct Game {
     float storyDuration = 0.0f;    // full lifetime, used for the fade envelope
     std::string announceLastText;  // de-duplicates the speaker on repeated boss lines
     float announceLastAt = -100.0f;
+    // Описание дела читается в экране выбора, а затем ещё раз при старте забега.
+    // Запоминаем, какое дело и когда было озвучено, чтобы не читать его дважды.
+    int briefSpokenMission = -1;
+    float briefSpokenAt = -1000.0f;
     MessageRegistry messages;      // every shown message is accounted for here
     int voiceClips = 0;            // how many registry rows have a recorded phrase
     int voiceMissing = 0;
@@ -2199,13 +2203,24 @@ struct Game {
         } else if (gameMode == MODE_STORY) {
             // When this case has its own recording, the generic "миссия начинается" line
             // stays silent so it cannot clip the narration by a fraction of a second.
-            const bool ownNarration = sound.voice.hasClip(missionBriefKey(selectedStoryMission));
+            const std::string briefKey = missionBriefKey(selectedStoryMission);
+            const bool ownNarration = sound.voice.hasClip(briefKey);
             if (ownNarration) announceVisual(GMSG_MISSION_BRIEFING, selectedCampaignMission().briefing, 8.0f);
             else announce(GMSG_MISSION_BRIEFING, selectedCampaignMission().briefing, 8.0f);
-            const bool narrated = speakCaseBriefing(selectedStoryMission, true);
+            const float clipLength = ownNarration ? sound.voice.clipSeconds(briefKey) : 0.0f;
+            // В экране выбора дело уже прочитано вслух: старт забега не повторяет
+            // ту же запись. Если она ещё играет, цель читается после её конца.
+            const float sinceBrief = globalTime - briefSpokenAt;
+            const bool heardRecently = briefSpokenMission == selectedStoryMission &&
+                                       sinceBrief >= 0.0f &&
+                                       sinceBrief < std::max(clipLength + 2.0f, 45.0f);
+            const bool stillPlaying = heardRecently && sinceBrief < clipLength;
+            if (!heardRecently) speakCaseBriefing(selectedStoryMission, true);
             difficultyBanner = selectedCampaignMission().objective;
             difficultyBannerTimer = 7.0f;
-            const float narrationLength = narrated ? sound.voice.clipSeconds(missionBriefKey(selectedStoryMission)) : 0.0f;
+            float narrationLength = 0.0f;
+            if (stillPlaying) narrationLength = std::max(0.0f, clipLength - sinceBrief);
+            else if (clipLength > 0.0f) narrationLength = clipLength;
             pendingObjectiveVoiceTimer = narrationLength > 0.6f ? narrationLength + 0.25f : 0.0f;
             if (pendingObjectiveVoiceTimer <= 0.0f) speakOnly(GMSG_MISSION_OBJECTIVE, difficultyBanner);
         } else {
@@ -2634,7 +2649,9 @@ struct Game {
         else                { startY = playerY + outerY; startX = playerX + ((rand() % 201) - 100) / 100.0f * outerX * 0.7f; dirX = skew; dirY = -1.0f; }
         const float len = std::max(0.001f, sqrtf(dirX * dirX + dirY * dirY));
         dirX /= len; dirY /= len;
-        const int count = 8 + rand() % 5;
+        // Крыс вдвое больше: стая должна быть плотной массой, которую видно и
+        // слышно, а не редкой цепочкой из восьми штук.
+        const int count = 16 + rand() % 9;
         // Стая — это кучка, а не шеренга: раньше крысы вставали на перпендикулярную
         // линию с шагом 34 px и читались как строй. Теперь точки берутся в круге
         // радиусом ~54 px вокруг точки входа, с плотным ядром и редкими отставшими.
@@ -4621,12 +4638,30 @@ struct Game {
                             addShockwave(m.x, m.y, 96.0f, 0xFF49C8E8, 0.40f);
                             spawnParticles(m.x, m.y, 30, 0xFF49C8E8, 180.0f, 4, true);
                         } else if (m.bossType == 5) {
-                            // Двойник меняется местами со своим отражением: тело уходит
-                            // сквозь игрока и появляется зеркально, сразу стреляя крестом
-                            // из двух точек. Правило «не стой на оси симметрии».
+                            // Двойник меняется местами со своим отражением вокруг героя.
+                            // Раньше он вставал ровно в зеркальную точку: если он подходил
+                            // вплотную, зеркало тоже ложилось на героя, и сам обмен местами
+                            // убивал касанием. Теперь зеркало держит дистанцию, а крест
+                            // разворачивается так, чтобы один луч шёл прямо в героя, а не мимо.
                             const float oldX = m.x, oldY = m.y;
-                            m.x = playerX * 2.0f - oldX;
-                            m.y = playerY * 2.0f - oldY;
+                            float awayX = m.x - playerX, awayY = m.y - playerY;
+                            float awayLen = sqrtf(awayX * awayX + awayY * awayY);
+                            if (awayLen < 1.0f) { awayX = 1.0f; awayY = 0.0f; awayLen = 1.0f; }
+                            const float keepDist = 190.0f + 26.0f * (float)(m.bossPhase - 1);
+                            float targetX = playerX - (awayX / awayLen) * keepDist;
+                            float targetY = playerY - (awayY / awayLen) * keepDist;
+                            targetX = std::max(80.0f, std::min((float)SCREEN_W - 80.0f, targetX));
+                            targetY = std::max(90.0f, std::min((float)SCREEN_H - 90.0f, targetY));
+                            // У края арены зеркало может подойти слишком близко: отодвигаем.
+                            float fx = targetX - playerX, fy = targetY - playerY;
+                            float flen = sqrtf(fx * fx + fy * fy);
+                            if (flen < 150.0f) {
+                                if (flen < 1.0f) { fx = -awayX / awayLen; fy = -awayY / awayLen; flen = 1.0f; }
+                                targetX = playerX + (fx / flen) * 150.0f;
+                                targetY = playerY + (fy / flen) * 150.0f;
+                            }
+                            m.x = targetX;
+                            m.y = targetY;
                             spawnParticles(oldX, oldY, 34, 0xFF9EDBE8, 200.0f, 4, true);
                             addShockwave(oldX, oldY, 84.0f, 0xFF9EDBE8, 0.45f);
                             spawnParticles(m.x, m.y, 34, 0xFFB6E8F4, 200.0f, 4, true);
@@ -4636,8 +4671,12 @@ struct Game {
                             for (int side = 0; side < 2; ++side) {
                                 const float bx = side == 0 ? m.x : oldX;
                                 const float by = side == 0 ? m.y : oldY;
+                                // Ось креста смотрит в героя: залп больше не уходит в сторону.
+                                // У старой точки он сдвинут на полшага — это эхо, а не выстрел в упор.
+                                const float aim = atan2f(playerY - by, playerX - bx) +
+                                                  (side == 0 ? 0.0f : 3.1415927f / (float)cross);
                                 for (int shot = 0; shot < cross; ++shot) {
-                                    const float a = shot * 6.2831853f / cross + (side == 0 ? 0.0f : 0.3141f);
+                                    const float a = aim + shot * 6.2831853f / (float)cross;
                                     Projectile ep;
                                     ep.x = bx; ep.y = by;
                                     ep.vx = cosf(a) * crossSpeed; ep.vy = sinf(a) * crossSpeed;
@@ -6024,8 +6063,11 @@ struct Game {
     bool speakCaseBriefing(int mission, bool allowDuplicate = false) {
         const CampaignMissionDef& def = CAMPAIGN_MISSIONS[std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, mission))];
         if (options.messageSpeechEnabled == 0) { ++messages.voicedSuppressed; return false; }
-        if (speakKey(missionBriefKey(mission), def.briefing, allowDuplicate)) return true;
-        return speakMessage(GMSG_MISSION_BRIEFING, def.briefing), true;
+        const bool own = speakKey(missionBriefKey(mission), def.briefing, allowDuplicate);
+        if (!own) speakMessage(GMSG_MISSION_BRIEFING, def.briefing);
+        briefSpokenMission = mission;
+        briefSpokenAt = globalTime;
+        return true;
     }
 
     // Called from the select screen: reading the case you just highlighted is the whole
@@ -8571,6 +8613,7 @@ struct Game {
             "2.10.18 • ЛИСТ ВСЕХ СОРОКА ИКОНОК ЛЕЖИТ В РЕПОЗИТОРИИ",
             "2.10.19 • СЕРДЦЕ ПЕРЕСТАЛО БЫТЬ ЗЕЛЁНЫМ, СТИЛЬ ИКОНОК СВЕДЕН",
             "2.10.20 • АПДЕЙТЕР: РУССКИЙ ТЕКСТ И САМАЯ СВЕЖАЯ ВЕТКА",
+            "2.10.21 • КРЫС ВДВОЕ БОЛЬШЕ, ДВОЙНИК БЬЁТ В ГЕРОЯ, МУЗЫКА ПО ДЕЛАМ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -8687,7 +8730,9 @@ struct Game {
             "Пять иконок перерисованы с нуля: знак палача больше не похож на \"стоп\", фитиль не выглядит загогулиной, осколок оттепели стал гранёным, печать обратного тока читается как стрелка, призма не упирается в края.\nВсе новые иконки в одном стиле: крупные пиксели, толстый контур, блоки света без мягкого свечения.\nПодложка теперь берётся из самой картинки, а не из старой таблицы цветов: перо, луна, рунный разворот и звезда пепла больше не стоят на серой плите.\nЯркость выровнена по всему набору: самые тёмные иконки подняты, пересвеченные приглушены, чтобы ни одна не выпадала в списке.",
             "Все сорок иконок собраны в один лист design/icon_sheet_40.png: видно, как предметы выглядят рядом и как они различаются цветом.\nЛист собирается из тех же исходников, что запекаются в атлас, поэтому показывает игру, а не отдельный эскиз.",
             "Сердце титана перерисовано: зелёное стало багровым гравированным сердцем с двумя поясами и вшитыми камнями.\nВ тот же стиль приведены четыре иконки, которые читались как плоская заливка: магнит стал резным камнем с рунами, перо феникса - гравюрным белым пером, вуаль - золотым рваным капюшоном с пустотой вместо лица, разворот - плотной книгой с тиснением.\nФитиль больше не зелёный: это витой багровый шнур с тлеющим угольком и дымом.\nЯркость набора сузилась с 69-165 до 72-147: ни одна иконка не выбивается ни в тёмное, ни в пересвет.",
-            "Апдейтер показывал русский текст крякозябрами, если его файл был сохранён в UTF-8: cmd.exe читает .bat в кодовой странице консоли.\n• Текст апдейтера теперь живёт в tools/update_bat_src.txt обычным UTF-8, а update.bat собирается из него в cp866: python3 tools/build_update_bat.py.\n• Сборщик проверяет, что каждая буква влезает в cp866, что кириллица стоит только в echo и rem, что каждый goto находит метку и что номер апдейтера совпадает с версией игры.\n• Если запущена всё-таки испорченная копия, апдейтер видит это по длине слова-маячка, пишет предупреждение по-английски и пробует вернуть файл из репозитория.\n• Ветка для сборки выбирается сама: main или ветка arena/* с самой свежей версией в src/version.h (руками: update.bat arena/...). Раньше апдейтер тянул ту ветку, где стоял, и честно отвечал «обновлять нечего», пока на GitHub лежала версия новее.\n• Скачанный руками update.bat больше не побеждает версию из ветки автоматически: сравниваются номера, и остаётся свежий.\n• Кодовая страница консоли возвращается к прежней после выхода.",        };
+            "Апдейтер показывал русский текст крякозябрами, если его файл был сохранён в UTF-8: cmd.exe читает .bat в кодовой странице консоли.\n• Текст апдейтера теперь живёт в tools/update_bat_src.txt обычным UTF-8, а update.bat собирается из него в cp866: python3 tools/build_update_bat.py.\n• Сборщик проверяет, что каждая буква влезает в cp866, что кириллица стоит только в echo и rem, что каждый goto находит метку и что номер апдейтера совпадает с версией игры.\n• Если запущена всё-таки испорченная копия, апдейтер видит это по длине слова-маячка, пишет предупреждение по-английски и пробует вернуть файл из репозитория.\n• Ветка для сборки выбирается сама: main или ветка arena/* с самой свежей версией в src/version.h (руками: update.bat arena/...). Раньше апдейтер тянул ту ветку, где стоял, и честно отвечал «обновлять нечего», пока на GitHub лежала версия новее.\n• Скачанный руками update.bat больше не побеждает версию из ветки автоматически: сравниваются номера, и остаётся свежий.\n• Кодовая страница консоли возвращается к прежней после выхода.",
+            "• Крысиная стая выросла вдвое: 16–24 крысы вместо 8–12, кучка стала плотной.\n• Описание дела больше не читается дважды: экран выбора уже озвучил его, и старт забега не повторяет ту же запись. Если запись ещё играет, цель дела читается после её конца.\n• Двойник: обмен местами больше не встаёт вплотную к герою (зеркало держит 190 px, у края арены — 150 px), поэтому телепорт перестал убивать касанием. Крест снайперский: один луч смотрит прямо в героя, у старой точки залп сдвинут на полшага.\n• Музыка дел: audio/ss_case_01.mp3 … ss_case_28.mp3 играет своё дело, нет файла — общий плейлист боя, нет и его — встроенная тема. Смена дела перезапускает трек.\n• Музыка стражей: audio/ss_boss_guardian00.mp3 … 05.mp3 закреплена за типом стража, общий ss_boss_theme остаётся запасным.\n• Эндлес играет весь боевой набор в перемешанном порядке и без повторов, пока не кончится список: в пул входят ss_gameplay_*, ss_case_NN и ss_gameplay_endless_*.\n• Нашлась причина, по которой «своя музыка дела» не работала: сцена искалась по префиксу ss_gameplay_run, и файлы ss_gameplay_caseNN.mp3 не читались вовсе. Теперь читаются оба имени.\n• music_prompts.md: та же схема имён, что читает игра, готовый список файлов и объяснение, как всё это выбирается.\n• Если апдейтер собрал ту же версию, что уже была, значит он работал на старой ветке: с 2.10.20 он сам выбирает ветку с самой свежей версией и печатает её номер до сборки.",
+        };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
         static_assert(sizeof(notes) / sizeof(notes[0]) == PATCH_NOTES_COUNT,
