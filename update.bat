@@ -16,7 +16,7 @@ cd /d "%~dp0"
 
 rem Bump this with the version: it is the fastest way to tell a freshly
 rem downloaded updater from a cached old one in the console and in the log.
-set "SELF=2.10.10"
+set "SELF=2.10.11"
 set "TARGET=main"
 set "REMOTE=origin"
 set "SRC=%cd%\src"
@@ -103,7 +103,7 @@ echo Switch refused. What git says:
 type "%STEP%"
 del "%STEP%.c" >nul 2>&1
 set "BLOCKERS="
-for /f "tokens=2*" %%a in ('git status --porcelain 2^>nul') do if /i not "%%b"=="update.bat" set "BLOCKERS=1"
+for /f "tokens=1,*" %%a in ('git status --porcelain 2^>nul') do call :note_change "%%b"
 if defined BLOCKERS goto switch_blocked
 rem Only update.bat is dirty. Keep the downloaded copy, clean the branch copy,
 rem switch, and put the downloaded one back after the pull.
@@ -131,9 +131,11 @@ echo.
 echo ERROR: cannot switch to !TARGET!. Uncommitted changes in these files:
 git status --short
 echo.
-echo Commit them or set them aside, then run update.bat again:
-echo   git stash -u        hides them until you run: git stash pop
-echo If a file is a local edit you want to keep, copy it somewhere first.
+echo Save them, then run update.bat again:
+echo   git stash -u       put the changes aside
+echo   update.bat         run this file again
+echo   git stash pop      bring the changes back
+echo Nothing has been deleted or overwritten by this updater.
 echo On git older than 2.23 write checkout instead of switch.
 goto fail
 
@@ -158,7 +160,7 @@ rem update touches update.bat, a local copy would block the pull, so put it
 rem aside the same way and copy it back before the build.
 if exist "!KEEP!" goto pull_now
 set "BLOCKERS="
-for /f "tokens=2*" %%a in ('git status --porcelain 2^>nul') do if /i not "%%b"=="update.bat" set "BLOCKERS=1"
+for /f "tokens=1,*" %%a in ('git status --porcelain 2^>nul') do call :note_change "%%b"
 if defined BLOCKERS goto pull_now
 for /f "tokens=2" %%a in ('git status --porcelain -- update.bat 2^>nul') do if /i "%%a"=="update.bat" copy /y "update.bat" "!KEEP!" >nul 2>&1
 if not exist "!KEEP!" goto pull_now
@@ -225,6 +227,18 @@ echo Done. Version !VER_AFTER!, branch !BRANCH!, commit !HEAD_AFTER!.
 if /i not "!BRANCH_FROM!"=="!TARGET!" echo Back to your work branch with: git switch !BRANCH_FROM!
 >> "%LOG%" echo done: version=!VER_AFTER! branch=!BRANCH! commit=!HEAD_AFTER!
 goto done
+
+rem Called for every changed path: anything except this updater counts as a
+rem blocker. cmd puts token 1 into the first variable whatever tokens= says, so
+rem the path here is the second variable - the previous version compared the
+rem empty remainder with "update.bat" and always found a blocker, even when the
+rem only change was this very file.
+:note_change
+if "%~1"=="" goto :eof
+if /i "%~1"=="update.bat" goto :eof
+if /i "%~1"=="\"update.bat\"" goto :eof
+set "BLOCKERS=1"
+goto :eof
 
 :fail_step
 type "%STEP%"
