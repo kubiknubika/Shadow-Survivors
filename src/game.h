@@ -167,7 +167,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 120;
+static constexpr int PATCH_NOTES_COUNT = 121;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -2766,11 +2766,15 @@ struct Game {
         float timeScale = getLongTermEnemyTier();
         float phaseHpScale = getSublevelEnemyHpMultiplier();
         if (isBoss) {
-            static const float bossHp[6] = {1800.0f, 3300.0f, 6100.0f, 10500.0f, 4300.0f, 8200.0f};
+            static const float bossHp[6] = {1800.0f, 4000.0f, 6100.0f, 10500.0f, 4300.0f, 8200.0f};
             m.maxHp = bossHp[bossType % 6] * (1.0f + std::min(1.0f, runTime / 480.0f) * 0.32f) * timeScale * balance.enemyHpMultiplier * phaseHpScale;
             m.maxHp *= getEnemyOathHpMultiplier();
             m.hp = m.maxHp;
             m.speed = 70.0f + bossType * 7.0f;
+            // Малакор — единственный страж, который дерётся на дистанции: он держится
+            // в стороне и закидывает арену склянками. При общей скорости 77 он просто
+            // стоял мишенью, поэтому у него своя.
+            if (bossType % 6 == 1) m.speed = 104.0f;
             m.speed *= getEnemyOathSpeedMultiplier();
             m.damage = (22.0f + bossType * 9.0f) * balance.enemyDamageMultiplier;
             m.damage *= getEnemyOathDamageMultiplier();
@@ -4506,6 +4510,15 @@ struct Game {
                 p.projectileKind = 4;
                 continue;
             }
+            // Склянка Малакора: разбивается там, куда долетела, и оставляет лужу.
+            if (p.isEnemy && p.projectileKind == 6 && p.life <= 0.0f) {
+                if (bossHazards.size() >= 8) bossHazards.erase(bossHazards.begin());
+                bossHazards.push_back({p.x, p.y, 96.0f, 0.0f, 4.2f, 0.2f, p.damage * 0.75f, 1, 0});
+                addShockwave(p.x, p.y, 104.0f, 0xFF68D85E, 0.5f);
+                spawnParticles(p.x, p.y, 22, 0xFF72D969, 130.0f, 4, true);
+                p.projectileKind = 4;
+                continue;
+            }
 
             if (p.isEnemy) {
                 // A well-timed dash through an enemy projectile counts as one precise evade.
@@ -4517,6 +4530,12 @@ struct Game {
                         if (tryReflectEnemyProjectile(p)) continue;
                         if (p.projectileKind == 3) {
                             spawnEnemyHazard(p.x, p.y, p.damage * 0.70f, 1);
+                            p.projectileKind = 4; p.life = 0.0f;
+                            continue;
+                        }
+                        if (p.projectileKind == 6) {
+                            if (bossHazards.size() >= 8) bossHazards.erase(bossHazards.begin());
+                            bossHazards.push_back({p.x, p.y, 96.0f, 0.0f, 4.2f, 0.2f, p.damage * 0.75f, 1, 0});
                             p.projectileKind = 4; p.life = 0.0f;
                             continue;
                         }
@@ -4632,10 +4651,37 @@ struct Game {
                     m.abilityWindup = std::max(0.0f, m.abilityWindup - dt);
                     if (m.abilityWindup <= 0.0f) {
                         if (m.bossType == 1) {
-                            if (bossHazards.size() >= 8) bossHazards.erase(bossHazards.begin());
-                            bossHazards.push_back({m.abilityTargetX, m.abilityTargetY, 112.0f, 0.0f, 4.2f, 0.15f, 10.0f + m.bossType * 2.0f, m.bossType});
-                            addShockwave(m.abilityTargetX, m.abilityTargetY, 118.0f, 0xFF68D85E, 0.55f);
-                            spawnParticles(m.abilityTargetX, m.abilityTargetY, 24, 0xFF72D969, 120.0f, 4, true);
+                            // Малакор кидает ТРИ склянки веером: ближнюю, среднюю и дальнюю.
+                            // Одна лужа под ногами героя лечилась шагом в сторону — три
+                            // пятна с разной задержкой заставляют двигаться и выбирать,
+                            // куда именно встать. Колбы летят настоящими снарядами,
+                            // поэтому видно, откуда придёт отрава.
+                            float aimX = m.abilityTargetX - m.x, aimY = m.abilityTargetY - m.y;
+                            float aimLen = sqrtf(aimX * aimX + aimY * aimY);
+                            if (aimLen < 1.0f) { aimX = 1.0f; aimY = 0.0f; aimLen = 1.0f; }
+                            const float baseA = atan2f(aimY, aimX);
+                            const float reach = std::min(300.0f, std::max(120.0f, aimLen));
+                            for (int flask = 0; flask < 3; ++flask) {
+                                const float spreadA = (flask - 1) * 0.26f;
+                                const float flyDist = reach * (flask == 0 ? 0.55f : (flask == 1 ? 0.8f : 1.0f));
+                                Projectile fp;
+                                fp.x = m.x;
+                                fp.y = m.y;
+                                // Склянка летит по дуге: скорость вдоль направления плюс
+                                // поперечный снос, чтобы точка падения не была линейной.
+                                const float flySpeed = 240.0f;
+                                fp.vx = cosf(baseA + spreadA) * flySpeed;
+                                fp.vy = sinf(baseA + spreadA) * flySpeed;
+                                fp.weaponId = 99; fp.projectileKind = 6; fp.isBossProjectile = true;
+                                fp.damage = m.damage * 0.62f;
+                                fp.radius = 5.0f;
+                                fp.life = flyDist / flySpeed;
+                                fp.pierce = 1; fp.isEnemy = true; fp.isCrit = false;
+                                projectiles.push_back(fp);
+                            }
+                            m.abilityActive = 0.42f; // поза выброса для фигуры
+                            addShockwave(m.x, m.y, 74.0f, 0xFF68D85E, 0.36f);
+                            spawnParticles(m.x, m.y, 18, 0xFF72D969, 130.0f, 4, true);
                         } else if (m.bossType == 2) {
                             float tx = m.abilityTargetX - m.x, ty = m.abilityTargetY - m.y;
                             float len = sqrtf(tx * tx + ty * ty);
@@ -4763,7 +4809,7 @@ struct Game {
                         m.abilityTargetY = playerY;
                         static const char* abilityLines[6] = {
                             "МОРГАР: ЗАМАХ — УДАРНАЯ ВОЛНА! УЙДИ ИЗ КРУГА!",
-                            "МАЛАКОР: МЕТКА ЧУМЫ! ВЫЙДИ ИЗ ЗЕЛЁНОЙ ЗОНЫ!",
+                            "МАЛАКОР: ТРИ СКЛЯНКИ! НЕ СТОЙ В ЛУЖАХ!",
                             "КАРДИНАЛ: РЫВОК ПО ЛИНИИ! СМЕНИ ПОЗИЦИЮ!",
                             "АЗАРОТ: КОЛЬЦО ИСКР! НАЙДИ РАЗРЫВ!",
                             "ПРОТОКОЛИСТ: СТРОКА ПРОТОКОЛА! ВСТАНЬ В ПРОБЕЛ!",
@@ -5735,8 +5781,13 @@ struct Game {
                     r.addGlow(sx, sy, 46 + phasePulse, phaseColor, m.bossPhase == 3 ? 145 : 95);
                     r.drawCircleRing(sx, sy, 38 + phasePulse, m.bossPhase == 3 ? 3 : 2, phaseColor, m.bossPhase == 3 ? 235 : 175, true);
                 }
+                // Замах и выброс видны по фигуре: Малакор поднимает колбу и швыряет её.
+                const float castPose = (m.bossType % 6 == 1 && m.abilityWindup > 0.0f)
+                                     ? std::min(1.0f, (0.95f - m.abilityWindup) / 0.6f) : 0.0f;
+                const float castBurst = (m.bossType % 6 == 1 && m.abilityActive > 0.0f)
+                                     ? std::min(1.0f, m.abilityActive / 0.42f) : 0.0f;
                 r.drawBossSprite(sx, sy, m.bossType, globalTime + m.animOffset, m.hitFlashTimer > 0.0f, m.bossPhase >= 3,
-                                 m.bossReinforced);
+                                 m.bossReinforced, castPose, castBurst);
             } else {
                 r.drawMonsterSprite(sx, sy, m.type, globalTime + m.animOffset, m.hitFlashTimer > 0.0f, m.isElite, m.freezeTimer > 0.0f, m.facing < 0,
                                     m.isRat ? m.ratHeading : 0.0f);
@@ -5946,6 +5997,16 @@ struct Game {
                 r.drawCircleRing(sx, sy, 7, 2, 0xFFFFA0B5, 235, true);
                 r.drawLine(sx - nx, sy - ny, sx + nx, sy + ny, 0xFFFFD4DF, 3, 240, true);
                 r.fillCircle(sx, sy, 3, 0xFFFFFFFF);
+            } else if (p.isEnemy && p.projectileKind == 6) {
+                // Колба Малакора: стекло, зелёное содержимое и капли позади.
+                r.addGlow(sx, sy, 20, 0xFF68D85E, 175);
+                r.fillCircle(sx, sy, 7, 0xFFA8F07C);
+                r.fillCircle(sx + 1, sy + 2, 4, 0xFF4FD86A);
+                r.drawCircleRing(sx, sy, 8, 2, 0xFFD6FFB0, 210, true);
+                const float plen = std::max(1.0f, sqrtf(p.vx * p.vx + p.vy * p.vy));
+                const int tdx = (int)(p.vx / plen * 13.0f), tdy = (int)(p.vy / plen * 13.0f);
+                r.fillCircle(sx - tdx, sy - tdy, 2, 0xFF7CE04E, 150);
+                r.fillCircle(sx - tdx * 2, sy - tdy * 2, 1, 0xFF7CE04E, 90);
             } else if (p.isEnemy && p.projectileKind == 3) {
                 r.addGlow(sx, sy, 22, 0xFFFF7438, 185);
                 r.fillCircle(sx, sy, 8, 0xFFB84EFF);
@@ -8883,6 +8944,7 @@ struct Game {
             "2.10.24 • ПАТЧНОУТЫ ЛИСТАЮТСЯ, КНОПКИ НЕ ВЫЛЕЗАЮТ ЗА ПАНЕЛЬ",
             "2.10.25 • РАЗВИЛКА ТОЛЬКО В АКТЕ II: ДВЕРИ А И Б ПЕРЕКЛЮЧАЮТСЯ",
             "2.10.26 • КАМПАНИЯ — КАРТА ГЛАВ С ИМЕНАМИ ДЕЛ И РАЗВИЛКОЙ",
+            "2.10.27 • МАЛАКОР: ТРИ СКЛЯНКИ И ЖИВАЯ АНИМАЦИЯ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -9005,7 +9067,8 @@ struct Game {
             "• Обновления не было, потому что локальная ветка удалена на GitHub: апдейтер честно отвечал «Already up to date» для ветки, которой больше нет.\n• Теперь на старте он это видит и прямо пишет: ветки такой нет на GitHub.\n• На мёртвую ветку он больше не возвращается - остаётся на собранной, и следующий запуск идёт уже с неё. Раньше цикл повторялся каждый раз.\n• Скачанный руками update.bat попадал в stash и при возврате ложился поверх свежего из ветки: следующий запуск снова поднимал старый скрипт. Теперь после возврата из stash файлы сравниваются по номеру и остаётся более новый.\n• Кнопка Raw на GitHub отдаёт update.bat из main, а main - 2.10.4 с древним скриптом в UTF-8. Поэтому «перекачал новый» снова давало старый: свежий файл лежит только в рабочей ветке (см. UPDATE_HOWTO.md).\n• UPDATE_HOWTO.md: один разовый набор команд, чтобы перейти на рабочую ветку и получить свежий апдейтер.\n• Патчноуты листаются: длинная заметка прокручивается колесом мыши или PgUp/PgDn (стрелки вверх/вниз — по строке, Home/End — начало и конец), справа видна полоса прокрутки.\n• Кнопки и галочка в патчноутах больше не вылезают за панель в маленьком окне: раскладка считается от размеров панели, а не от 1280x720.",
             "• Длинный патчноут уезжал за нижнюю кромку панели, и дочитать его было нельзя. Теперь заметка листается: колесо мыши над текстом, PgUp / PgDn — страницами, стрелки вверх / вниз — по строке, Home / End — начало и конец.\n• Справа в заметке появилась полоса прокрутки, а подсказка снизу меняется: «прокрутка заметки», если текст длиннее окна, и «заметка целиком», если нет.\n• При смене версии прокрутка сбрасывается: новая заметка открывается с начала.\n• Раньше кнопки «ПРЕДЫДУЩАЯ / СЛЕДУЮЩАЯ / В ИГРУ», галочка и подсказка стояли на жёстких координатах для 1280x720 и в маленьком окне вылезали за панель. Теперь вся раскладка считается от размеров панели и проверена на 1920x1080, 1280x720, 1024x600, 900x520 и портретных 720x1280.\n• Обрезка текста живёт в рендерере (setClip / clearClip), поэтому такие же длинные заметки в словаре и других панелях можно листать тем же способом.",
             "• Развилку можно было обойти: стоя в акте III, нажать «ПОЙТИ СЛЕДОМ А» и зафиксировать след там, где его выбирать нельзя. Теперь след фиксируется только на двери развилки — на первом деле акта II.\n• Пока след не выбран, дерево не листается дальше акта II, а ← и → переключают две двери развилки: А «СВИДЕТЕЛЬ» и Б «КОПИЯ». Раньше клавиатура всегда стояла на полосе А, и след Б с клавиатуры было не выбрать вовсе.\n• До выбора обе полосы выглядят равноправно: раньше обе были перечёркнуты, будто выбор уже сделан и потерян.\n• Дело впереди развилки больше не обещает «выбери след»: на кнопке честно написано «СНАЧАЛА ВЫБЕРИ СЛЕД», а досье объясняет, что след выбирают в акте II.",
-            "• Кампания больше не список номеров: главы идут картой слева направо — акт I, развилка на два следа в актах II–IV и слияние в акте V. У каждого дела на карте своё имя, а не «05».\n• Развилку видно: дороги расходятся из первого акта и сходятся в последнем. Полоса следа А золотая, следа Б бирюзовая, чужой след гаснет. Для карты у длинных дел есть короткие имена, полные названия остались в досье.\n• Досье переехало под карту и стало шире: иллюстрация, брифинг, цель, а строкой ниже страж, время босса и тир. В низком окне досье ужимается ступенями — сначала теряет картинку, потом брифинг, — а не режет буквы.\n• Кнопка «К РАЗВИЛКЕ [TAB]»: пока след не выбран, из любого закрытого дела видно, где эта развилка.\n• Портретное и узкое окно: карта разворачивается в список по актам, дела идут строками с названиями, кнопки — двумя рядами, чтобы надписи не резались.\n• Проверено на 1920x1080, 1280x720, 1024x600, 900x520 и портретных 720x1280.",        };
+            "• Кампания больше не список номеров: главы идут картой слева направо — акт I, развилка на два следа в актах II–IV и слияние в акте V. У каждого дела на карте своё имя, а не «05».\n• Развилку видно: дороги расходятся из первого акта и сходятся в последнем. Полоса следа А золотая, следа Б бирюзовая, чужой след гаснет. Для карты у длинных дел есть короткие имена, полные названия остались в досье.\n• Досье переехало под карту и стало шире: иллюстрация, брифинг, цель, а строкой ниже страж, время босса и тир. В низком окне досье ужимается ступенями — сначала теряет картинку, потом брифинг, — а не режет буквы.\n• Кнопка «К РАЗВИЛКЕ [TAB]»: пока след не выбран, из любого закрытого дела видно, где эта развилка.\n• Портретное и узкое окно: карта разворачивается в список по актам, дела идут строками с названиями, кнопки — двумя рядами, чтобы надписи не резались.\n• Проверено на 1920x1080, 1280x720, 1024x600, 900x520 и портретных 720x1280.",
+            "• Малакор перестал быть мешком для битья. Он один дерётся на дистанции, поэтому скорость у него своя: раньше он плёлся со всеми и просто стоял мишенью. Запас здоровья 3300 → 4000.\n• Атака больше не одна лужа под ногами: он швыряет три склянки веером — ближнюю, среднюю и дальнюю. Колбы летят снарядами, разбиваются сами и оставляют три чумных пятна с разной задержкой, так что шагом в сторону не отделаться.\n• У Малакора появилась анимация: переступает с ноги на ногу, капюшон качается, подол хлещет, респиратор-клюв читается в силуэте, в колбе кипят пузыри и поднимаются пары, глаза горят неровно.\n• На замах он поднимает колбу над головой, а на выбросе швыряет её вперёд — сам замах видно по фигуре, как у остальных стражей.\n• Знак на полу у него теперь лужа, а не кольцо: прежнее кольцо проходило через туловище и читалось как обруч на фигуре.\n• Пример кадров — design/malakor_animation.png (покой, замах, выброс).",        };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
         static_assert(sizeof(notes) / sizeof(notes[0]) == PATCH_NOTES_COUNT,

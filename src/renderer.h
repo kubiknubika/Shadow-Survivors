@@ -956,7 +956,10 @@ struct Renderer {
     // Four guardians, four silhouettes. They are drawn from primitives instead of sharing
     // one baked sprite family, because "same shape, different tint" reads as a placeholder.
     // echo == true renders the trio copy: same shape, spectral and translucent.
-    void drawBossFigure(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged, bool echo, float s = 1.0f) {
+    // castPose: 0..1 — насколько замах уже сделан (колба поднята над головой),
+    // castBurst: 0..1 — удар/выброс уже случился (колба выброшена вперёд).
+    void drawBossFigure(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged, bool echo,
+                        float s = 1.0f, float castPose = 0.0f, float castBurst = 0.0f) {
         const int id = bossType % 6;
         const uint32_t flash = 0xFFFFF0C8;
         const float breath = 0.5f + 0.5f * sinf(animTime * 2.2f);
@@ -1017,46 +1020,133 @@ struct Renderer {
             // rivets
             for (int i = 0; i < 3; ++i) FC(cx - 37, cy - 12 + i * 16 - lift, 2, steelDark, alpha);
         } else if (id == 1) {
-            // МАЛАКОР — алхимик чумы: сгорбленная фигура в капюшоне, респиратор, колба
-            // в вытянутой руке. Тёмный балахон с яркой каймой, чтобы силуэт не тонул
-            // в собственной зелёной дымке.
+            // МАЛАКОР — чумной алхимик. Читается по трём вещам: клюв-респиратор,
+            // горб над плечами и колба в вытянутой руке. Сгорбленный силуэт шире
+            // книзу, поэтому фигура не выглядит мешком.
+            //
+            // Живость даёт цикл: переступает с ноги на ногу, капюшон качается,
+            // подол хлещет тонкими прядями, в колбе кипит и поднимаются пары,
+            // глаза горят неровно. На замах он поднимает колбу над головой,
+            // при выбросе — швыряет её вперёд.
             const uint32_t robe = tint(0xFF35502A), robeLit = tint(0xFF6FA04A), robeDark = tint(0xFF141F0F);
             const uint32_t glass = tint(0xFFA8F07C), plague = tint(enraged ? 0xFFC6FF52 : 0xFF7CE04E);
-            const int sway = (int)(sinf(animTime * 2.6f) * 3.0f);
-            // hunched robe: dark core, bright hem line
-            FR(cx - 26, cy - 10 - lift, 52, 56, 20, robeDark, alpha);
-            FR(cx - 22, cy - 6 - lift, 44, 48, 18, robe, alpha);
-            FR(cx - 22, cy + 30 - lift, 44, 6, 3, robeLit, alpha);
-            // ragged hem strips, clearly separated
-            for (int i = -2; i <= 2; ++i) {
-                const int hx = cx + i * 10 + sway;
-                DL(hx, cy + 32 - lift, hx + (int)(sinf(animTime * 3.1f + i) * 4), cy + 48 - lift, robeLit, 4, alpha);
+            const float poseCast = std::max(0.0f, std::min(1.0f, castPose));
+            const float poseBurst = std::max(0.0f, std::min(1.0f, castBurst));
+            const float breathe = 0.5f + 0.5f * sinf(animTime * 2.3f);
+            const int pace = (int)(sinf(animTime * 3.3f) * 3.0f);
+            const int crouch = (int)(breathe * 2.0f) + (int)(poseCast * 4.0f) - (int)(poseBurst * 3.0f);
+            const int torsoY = -lift - crouch;
+            const int sway = pace;
+            const int lean = (int)(poseCast * 4.0f);
+            // Стопы выглядывают из-под подола и переступают: видно, что он идёт,
+            // а не скользит.
+            const int stepL = (int)(sinf(animTime * 3.3f) * 3.0f);
+            FR(cx - 16 + stepL, cy + 34 + torsoY, 12, 12, 4, robeDark, alpha);
+            FR(cx + 4 - stepL, cy + 34 + torsoY, 12, 12, 4, robeDark, alpha);
+            FR(cx - 18 + stepL, cy + 43 + torsoY, 15, 4, 2, robe, alpha);
+            FR(cx + 3 - stepL, cy + 43 + torsoY, 15, 4, 2, robe, alpha);
+            // Мантия тремя поясами: узкая грудь, пояс, широкий подол.
+            FR(cx - 18 + sway, cy - 24 + torsoY, 36, 28, 10, robe, alpha);
+            FR(cx - 23 + sway, cy - 2 + torsoY, 46, 24, 10, robe, alpha);
+            FR(cx - 26 + sway, cy + 14 + torsoY, 52, 18, 9, robe, alpha);
+            // Рваный край подола — плотные пряди, а не тонкие штрихи: раньше две
+            // линии на тёмном фоне читались как царапины.
+            for (int i = -3; i <= 3; ++i) {
+                const int hemWave = (int)(sinf(animTime * 3.6f + i * 0.9f) * 2.0f);
+                const int strandH = 4 + ((i + 3) % 3) * 3;
+                FR(cx + i * 7 + sway + hemWave, cy + 30 + torsoY, 6, strandH, 2, robe, alpha);
             }
-            // shoulders + hood, hood lined with the bright edge
-            FR(cx - 20, cy - 30 - lift, 40, 22, 10, robe, alpha);
-            FR(cx - 16, cy - 46 - lift, 32, 26, 12, robe, alpha);
-            FR(cx - 16, cy - 46 - lift, 32, 4, 2, robeLit, alpha);
-            // face cavity + respirator mask sitting inside the hood
-            FR(cx - 12, cy - 40 - lift, 24, 20, 9, 0xFF0B1206, alpha);
-            FR(cx - 10, cy - 34 - lift, 20, 12, 5, robeLit, alpha);
-            FC(cx - 13, cy - 28 - lift, 5, glass, alpha);
-            FC(cx + 13, cy - 28 - lift, 5, glass, alpha);
-            FC(cx - 13, cy - 28 - lift, 2, plague, alpha);
-            FC(cx + 13, cy - 28 - lift, 2, plague, alpha);
-            FC(cx - 5, cy - 37 - lift, 2, plague, alpha);
-            FC(cx + 5, cy - 37 - lift, 2, plague, alpha);
-            // arm out to the flask
-            DL(cx + 16, cy - 12 - lift, cx + 30 + sway, cy + 4 - lift, robeLit, 5, alpha);
-            // the flask he guards: glass ball, bright rim, glowing contents
-            FC(cx + 34 + sway, cy + 8 - lift, 13, robeLit, alpha);
-            FC(cx + 34 + sway, cy + 8 - lift, 11, glass, alpha);
-            FC(cx + 34 + sway, cy + 11 - lift, 7, plague, alpha);
-            FR(cx + 30 + sway, cy - 12 - lift, 8, 10, 3, glass, alpha);
-            FR(cx + 25 + sway, cy - 18 - lift, 18, 5, 2, robeLit, alpha);
-            // drips that fall away from the flask
-            for (int i = 0; i < 3; ++i) {
-                const int dy = (int)(fmodf(animTime * 30.0f + i * 22.0f, 26.0f));
-                FC(cx + 30 + i * 5, cy + 24 + dy - lift, 2, plague, 180);
+            FX(cx - 26 + sway, cy + 30 + torsoY, 52, 2, robeLit, 150);
+            // Пояс и пара склянок на нём: видно, что перед нами алхимик.
+            FR(cx - 21 + sway, cy + 12 + torsoY, 42, 4, 2, robeLit, alpha);
+            for (int v = -1; v <= 1; v += 2) {
+                FR(cx + v * 12 + sway, cy + 16 + torsoY, 5, 8, 2, robe, alpha);
+                FR(cx + v * 12 + sway, cy + 16 + torsoY, 5, 2, 1, glass, alpha);
+            }
+            // Плечи, горб и капюшон. На замахе капюшон наклоняется вперёд.
+            const int headX = cx + lean + sway;
+            FR(cx - 19 + sway, cy - 32 + torsoY, 38, 14, 7, robeLit, alpha);   // воротник
+            FR(cx - 16 + sway, cy - 38 + torsoY, 34, 14, 8, robe, alpha);      // горб
+            FR(headX - 17, cy - 56 + torsoY, 34, 24, 11, robe, alpha);
+            FR(headX - 17, cy - 56 + torsoY, 34, 4, 2, robeLit, alpha);
+            // Остроконечный верх капюшона: залитый конус из сужающихся полос.
+            // Две тонкие линии читались как отдельный треугольник над головой.
+            for (int k = 0; k < 10; ++k) {
+                const int tipW = std::max(2, 22 - k * 2);
+                const int tipX = headX - tipW / 2 + (k * 9) / 10;
+                FR(tipX, cy - 58 - k + torsoY, tipW, 2, 1, k < 2 ? robeLit : robe, alpha);
+            }
+            // Тёмное лицо и клюв-респиратор.
+            FR(headX - 12, cy - 50 + torsoY, 24, 16, 6, 0xFF0B1206, alpha);
+            FR(headX - 8, cy - 40 + torsoY, 16, 9, 3, robeLit, alpha);      // пластина маски
+            DL(headX + 4, cy - 37 + torsoY, headX + 24, cy - 33 + torsoY, robeLit, 8, alpha);
+            DL(headX + 5, cy - 37 + torsoY, headX + 22, cy - 34 + torsoY, glass, 4, alpha);
+            FC(headX + 24, cy - 33 + torsoY, 3, plague, 190);
+            // Линзы: обе смотрят вперёд, зрачки горят неровно.
+            const int eyeGlow = (int)(170.0f + 60.0f * sinf(animTime * 4.1f)) - (int)(poseCast * 60.0f);
+            FR(headX - 10, cy - 48 + torsoY, 8, 4, 1, glass, alpha);
+            FR(headX + 2, cy - 48 + torsoY, 7, 4, 1, glass, alpha);
+            FR(headX - 9, cy - 47 + torsoY, 4, 2, 1, plague, eyeGlow);
+            FR(headX + 4, cy - 47 + torsoY, 4, 2, 1, plague, eyeGlow);
+            // ── Колба ────────────────────────────────────────────────────────
+            // В покое колба висит ниже и правее лица, чтобы ореол не резал глаза.
+            const int idleX = cx + 40 + sway, idleY = cy + 14 - lift;
+            // На замахе колба уходит над головой и чуть в сторону: ровно над лицом
+            // она закрывала ему глаза.
+            const int castX = headX + 19, castY = cy - 78 + (int)(poseCast * 3.0f) - lift;
+            const int burstX = cx + 56, burstY = cy - 2 - lift;
+            int flaskX = idleX, flaskY = idleY;
+            if (poseCast > 0.0f) {
+                flaskX = idleX + (int)((castX - idleX) * poseCast);
+                flaskY = idleY + (int)((castY - idleY) * poseCast);
+            }
+            if (poseBurst > 0.0f) {
+                flaskX = castX + (int)((burstX - castX) * poseBurst);
+                flaskY = castY + (int)((burstY - castY) * poseBurst);
+            }
+            // Рука от плеча к колбе, всегда живая (чуть дрожит).
+            const int shoulderX = cx + 16 + sway, shoulderY = cy - 14 + torsoY;
+            const int handJitter = (int)(sinf(animTime * 7.0f) * 1.0f);
+            DL(shoulderX, shoulderY, flaskX - 5 + handJitter, flaskY - 2, robeLit, 5, alpha);
+            DL(shoulderX, shoulderY, flaskX - 5 + handJitter, flaskY - 2, robe, 3, alpha);
+            // Ореол колбы: на замахе разгорается, после удара вспыхивает.
+            const float halo = std::max(poseCast * 0.8f, poseBurst);
+            if (halo > 0.01f) {
+                CR(flaskX, flaskY, 13 + (int)(halo * 12.0f), 2, plague, (int)(90 + 120 * halo), true);
+                CR(flaskX, flaskY, 19 + (int)(halo * 18.0f), 1, glass, (int)(60 + 80 * halo), true);
+            }
+            // Колба: стекло, ободок, светящееся содержимое с уровнем жидкости.
+            // Стекло приглушённое: раньше оно было почти белым и колба читалась
+            // как светящийся шар, а не как сосуд с отравой.
+            FC(flaskX, flaskY, 10, robeLit, alpha);
+            FC(flaskX, flaskY, 9, 0xFF5F9440, alpha);
+            const int liquidTop = flaskY + 8 - (int)(5.0f + 2.0f * breathe);
+            FC(flaskX, flaskY + 8, 6, plague, alpha);
+            FX(flaskX - 5, liquidTop, 10, 2, plague, (int)(180 + 60 * breathe));
+            FR(flaskX - 3, flaskY - 9, 6, 8, 3, 0xFF6FA04A, alpha);
+            FR(flaskX - 8, flaskY - 15, 16, 4, 2, robeLit, alpha);
+            // Кипение: пузыри идут вверх по колбе и лопаются у поверхности.
+            for (int b = 0; b < 4; ++b) {
+                const float rise = fmodf(animTime * 0.9f + b * 0.27f, 1.0f);
+                const int by = flaskY + 10 - (int)(rise * 16.0f);
+                const int bx = flaskX + (int)(sinf(animTime * 3.0f + b * 2.0f) * 5.0f);
+                const int br = rise > 0.85f ? 0 : 1 + (b % 2);
+                if (br > 0) FC(bx, by, br, plague, (int)(120 + 100 * (1.0f - rise)));
+            }
+            // Пары над колбой.
+            for (int w = 0; w < 3; ++w) {
+                const float up = fmodf(animTime * 0.6f + w * 0.33f, 1.0f);
+                const int wx = flaskX + (int)(sinf(animTime * 2.2f + w) * 6.0f);
+                const int wy = flaskY - 20 - (int)(up * 20.0f);
+                FC(wx, wy, 2 + (w % 2), plague, (int)(80 * (1.0f - up)));
+            }
+            // Капли: в покое редкие, на замахе чаще, при выбросе — веером.
+            const int drops = 3 + (int)(poseCast * 5.0f) + (int)(poseBurst * 6.0f);
+            for (int i = 0; i < drops; ++i) {
+                const float phase = fmodf(animTime * (1.1f + poseBurst * 1.6f) + i * 0.19f, 1.0f);
+                const int dxSpr = (int)((sinf(i * 2.7f) * 8.0f) * (1.0f + poseBurst * 2.2f));
+                const int dySpr = (int)(phase * (26.0f + poseBurst * 22.0f));
+                FC(flaskX + 4 + dxSpr, flaskY + 12 + dySpr, 2, plague, (int)(190 * (1.0f - phase * 0.7f)));
             }
         } else if (id == 2) {
             // КАРДИНАЛ — счётчик имён: высокий, в широкой шляпе, с книгой и пером.
@@ -1354,12 +1444,23 @@ struct Renderer {
     }
 
     void drawBossSprite(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged = false,
-                        bool reinforced = false) {
+                        bool reinforced = false, float castPose = 0.0f, float castBurst = 0.0f) {
         int auraRad = 40 + (int)(sinf(animTime * 7.0f) * 5.0f);
         static const uint32_t auraPalette[6] = {0xFFFFB028, 0xFF80FF40, 0xFFFF3068, 0xFFFF6818, 0xFF49C8E8, 0xFF9EDBE8};
         const int bossId = bossType % 6;
         uint32_t auraCol = enraged ? 0xFFFF2040 : auraPalette[bossId];
-        drawCircleRing(cx, cy + 24, auraRad, 3, auraCol, 210, true);
+        if (bossId == 1) {
+            // У Малакора знак — пролитая лужа на полу. Кольцо вокруг туловища
+            // читалось как обруч на фигуре, поэтому здесь эллипс у ног.
+            for (int seg = 0; seg < 34; ++seg) {
+                const float a0 = seg * 6.2831853f / 34.0f, a1 = (seg + 1) * 6.2831853f / 34.0f;
+                drawLine(cx + (int)(cosf(a0) * auraRad), cy + 52 + (int)(sinf(a0) * auraRad * 0.28f),
+                         cx + (int)(cosf(a1) * auraRad), cy + 52 + (int)(sinf(a1) * auraRad * 0.28f),
+                         auraCol, 3, 205, false);
+            }
+        } else {
+            drawCircleRing(cx, cy + 24, auraRad, 3, auraCol, 210, true);
+        }
         // Every guardian brands the floor with its own sigil: gate bars, a broken vial,
         // ledger rules, an archive wheel, marching protocol lines and mirrored shards.
         static const int tickTable[6] = {4, 5, 6, 8, 3, 6};
@@ -1378,12 +1479,28 @@ struct Renderer {
             for (int bar = -1; bar <= 1; ++bar)
                 drawLine(cx + bar * 13, cy + 40, cx + bar * 13, cy + 8, auraCol, 2, 70);
         } else if (bossId == 1) {
-            // Малакор: a broken vial, its contents pooling outward.
-            drawCircleRing(cx, cy + 34, auraRad / 2, 1, auraCol, 85, true);
-            for (int bubble = 0; bubble < 3; ++bubble) {
-                const int bx = cx + (int)(cosf(animTime * 1.7f + bubble * 2.1f) * 22.0f);
-                const int by = cy + 30 + (int)(sinf(animTime * 2.3f + bubble) * 6.0f);
-                fillCircle(bx, by, 2, auraCol, 120);
+            // Малакор: пролитая лужа у ног и поднимающиеся споры. Раньше здесь было
+            // кольцо поперёк живота — оно читалось как обруч на фигуре, а не как
+            // разлитая отрава. Лужа лежит на полу, поэтому сплющена по вертикали.
+            const int poolR = auraRad + 6;
+            // Сначала заливка лужи, потом край: без аддитивного режима цвет остаётся
+            // зелёным, а не выгорает в белый от наложения сегментов.
+            for (int y = -8; y <= 8; ++y) {
+                const float t = (float)y / 8.0f;
+                const int halfW = (int)(poolR * sqrtf(std::max(0.05f, 1.0f - t * t)));
+                drawLine(cx - halfW, cy + 52 + y / 3, cx + halfW, cy + 52 + y / 3, auraCol, 1, y == 0 ? 70 : 34, false);
+            }
+            for (int seg = 0; seg < 26; ++seg) {
+                const float a0 = seg * 6.2831853f / 26.0f, a1 = (seg + 1) * 6.2831853f / 26.0f;
+                drawLine(cx + (int)(cosf(a0) * poolR), cy + 52 + (int)(sinf(a0) * poolR * 0.26f),
+                         cx + (int)(cosf(a1) * poolR), cy + 52 + (int)(sinf(a1) * poolR * 0.26f),
+                         auraCol, 2, 165, false);
+            }
+            for (int bubble = 0; bubble < 5; ++bubble) {
+                const float rise = fmodf(animTime * 0.8f + bubble * 0.2f, 1.0f);
+                const int bx = cx + (int)(sinf(animTime * 1.7f + bubble * 2.1f) * (18.0f + poolR * 0.3f));
+                const int by = cy + 50 - (int)(rise * 34.0f);
+                fillCircle(bx, by, 1 + (bubble % 2), auraCol, (int)(130 * (1.0f - rise * 0.6f)));
             }
         } else if (bossId == 2) {
             // Кардинал: ruled ledger lines crossing the sigil.
@@ -1426,7 +1543,7 @@ struct Renderer {
         }
         addGlow(cx, cy, 62, auraCol, enraged ? 190 : 140);
         drawShadow(cx, cy + 50, 36, 12);
-        drawBossFigure(cx, cy, bossType, animTime, hitFlash, enraged, false, 1.12f);
+        drawBossFigure(cx, cy, bossType, animTime, hitFlash, enraged, false, 1.12f, castPose, castBurst);
     }
 
     // Эхо-двойники из третьей фазы: та же фигура, но призрачная и полупрозрачная.

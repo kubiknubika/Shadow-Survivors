@@ -24,8 +24,8 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 rem Своя версия: по ней видно, свежий файл запущен или закешированный.
-set "SELF=2.10.26"
-set SELF_VER=2.10.26
+set "SELF=2.10.27"
+set SELF_VER=2.10.27
 set "REMOTE=origin"
 set "WANT=%~1"
 set "FORCED="
