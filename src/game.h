@@ -183,7 +183,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 128;
+static constexpr int PATCH_NOTES_COUNT = 129;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -8110,6 +8110,20 @@ struct Game {
         const int textX = detailX + 16 + (withArt && !artOnTop ? artW + 14 : 0);
         const int textW = detailX + detailW - 16 - textX;
         r.fillRoundedRect(detailX, detailY, detailW, detailH, 10, 0xFF15111F, 250);
+        // Печать главы бледным знаком на фоне: пустая середина карточки
+        // выглядела как недогруженный экран.
+        {
+            const int wx = detailX + detailW - 74, wy = detailY + detailH / 2 + 18;
+            for (int k = 0; k < 2; ++k) {
+                const int rr2 = k == 0 ? 44 : 30;
+                // Залитый ромб на низкой прозрачности читался как пятно, поэтому
+                // печать нарисована контуром — как оттиск на обороте листа.
+                r.drawLine(wx, wy - rr2, wx + rr2, wy, accent, 1, 34, false);
+                r.drawLine(wx + rr2, wy, wx, wy + rr2, accent, 1, 34, false);
+                r.drawLine(wx, wy + rr2, wx - rr2, wy, accent, 1, 34, false);
+                r.drawLine(wx - rr2, wy, wx, wy - rr2, accent, 1, 34, false);
+            }
+        }
         r.drawRoundedRect(detailX, detailY, detailW, detailH, 10, accent, 2, 235);
         int contentTop = detailY;
         if (withArt) {
@@ -8148,33 +8162,58 @@ struct Game {
             r.drawText(FONT_MED, textX, titleY, fitText(r, FONT_MED, mission.title, textW).c_str(),
                        0xFFFFE4A8, false);
 
-        // Строка-сводка снизу. Части добавляем по одной, пока влезают: в узком
-        // окне лучше потерять «ТИР», чем обрезать имя стража на середине.
-        char info[240];
-        auto putInfo = [&](const char* add) {
-            char next[240];
-            if (info[0]) snprintf(next, sizeof(next), "%s • %s", info, add);
-            else snprintf(next, sizeof(next), "%s", add);
-            if (r.textWidth(FONT_SMALL, next) <= textW) snprintf(info, sizeof(info), "%s", next);
-        };
-        info[0] = 0;
-        char part[96];
-        putInfo("ДЕЛО");
-        snprintf(part, sizeof(part), "%02d", selected + 1); putInfo(part);
-        snprintf(part, sizeof(part), "АКТ %s", romanAct(campaignActOf(selected))); putInfo(part);
-        if (campaignTrackOf(selected) != 0) {
-            snprintf(part, sizeof(part), "СЛЕД %s", campaignTrackLetter(campaignTrackOf(selected)));
-            putInfo(part);
-        }
-        snprintf(part, sizeof(part), "СТРАЖ: %s", mission.finalBoss); putInfo(part);
-        snprintf(part, sizeof(part), "БОСС ~%d МИН", campaignBossMinutes(selected)); putInfo(part);
-        snprintf(part, sizeof(part), "ТИР %s • +%d%%", romanAct(campaignStartingTier(selected)),
-                 campaignDifficultyPercent(selected)); putInfo(part);
-        if (mission.bossReinforced && !withArt) putInfo("СТРАЖ ВЕРНУЛСЯ ЗЛЕЕ");
+        // Сводка дела снизу: часы, ступени тира и ромб следа. Прежняя строка
+        // «ДЕЛО 30 • АКТ V • ТИР VI • +45% • БОСС ~3 МИН» читалась как ведомость.
+        // Части добавляем по одной, пока влезают: в узком окне лучше потерять
+        // ступени, чем обрезать имя стража на середине.
         const int infoY = detailY + detailH - (tightDossier ? 20 : 24);
         const bool showInfo = infoY >= titleY + titleH;
-        if (showInfo)
-            r.drawText(FONT_SMALL, textX, infoY, info, 0xFFD8B8FF, false);
+        if (showInfo) {
+            int cx2 = textX;
+            const int right = textX + textW;
+            const int cy2 = infoY + 7;
+            char act[24];
+            snprintf(act, sizeof(act), "АКТ %s", romanAct(campaignActOf(selected)));
+            if (cx2 + r.textWidth(FONT_SMALL, act) + 14 <= right) {
+                r.drawText(FONT_SMALL, cx2, infoY, act, accent, false);
+                cx2 += r.textWidth(FONT_SMALL, act) + 14;
+            }
+            // часы: сколько идёт дело
+            char mins[24];
+            snprintf(mins, sizeof(mins), "%d МИН", campaignBossMinutes(selected));
+            const int clockW = 15 + r.textWidth(FONT_SMALL, mins);
+            if (cx2 + clockW + 12 <= right) {
+                drawCampaignClock(r, cx2 + 6, cy2, 6, 0xFFCFC2A6);
+                r.drawText(FONT_SMALL, cx2 + 16, infoY, mins, 0xFFCFC2A6, false);
+                cx2 += clockW + 12;
+            }
+            // ступени тира и процент сверх обычной сложности
+            char pct[24];
+            snprintf(pct, sizeof(pct), "+%d%%", campaignDifficultyPercent(selected));
+            const int meterW = 30 + 6 + r.textWidth(FONT_SMALL, pct);
+            if (cx2 + meterW + 12 <= right) {
+                drawCampaignTierMeter(r, cx2, cy2, campaignStartingTier(selected), accent);
+                r.drawText(FONT_SMALL, cx2 + 36, infoY, pct, 0xFFE2A8FF, false);
+                cx2 += meterW + 12;
+            }
+            // ромб следа: золото — А, бирюза — Б
+            if (campaignTrackOf(selected) != 0) {
+                char track[24];
+                snprintf(track, sizeof(track), "СЛЕД %s", campaignTrackLetter(campaignTrackOf(selected)));
+                const int trackW = 15 + r.textWidth(FONT_SMALL, track);
+                if (cx2 + trackW + 12 <= right) {
+                    drawCampaignDiamond(r, cx2 + 6, cy2, 5,
+                                        campaignTrackOf(selected) == 2 ? 0xFF5FE0C8 : 0xFFFFC860, 240);
+                    r.drawText(FONT_SMALL, cx2 + 16, infoY, track, 0xFFD8B8FF, false);
+                    cx2 += trackW + 12;
+                }
+            }
+            // страж остаётся словом: имя не рисуется знаком
+            char boss[128];
+            snprintf(boss, sizeof(boss), "СТРАЖ: %s", mission.finalBoss);
+            if (cx2 + r.textWidth(FONT_SMALL, boss) <= right)
+                r.drawText(FONT_SMALL, cx2, infoY, boss, 0xFFE4D7B5, false);
+        }
 
         const int objH = 48;
         const int objY = detailY + detailH - objH - 32;
@@ -8355,13 +8394,116 @@ struct Game {
         const bool fork = campaignForkOfMission(mission) >= 0;
         return (fork ? (compact ? 13 : 16) : (compact ? 9 : 11));
     }
+    // Ромб — общий знак книги: им помечены печати, развилки и «здесь можно идти».
+    void drawCampaignDiamond(Renderer& r, int cx, int cy, int rad, uint32_t col, int alpha = 235) {
+        r.fillCircle(cx, cy, std::max(2, rad - 2), col, alpha);
+        for (int k = -1; k <= 1; k += 2) {
+            r.drawLine(cx, cy - rad, cx + k * rad, cy, col, 1, alpha, false);
+            r.drawLine(cx + k * rad, cy, cx, cy + rad, col, 1, alpha, false);
+        }
+    }
+    // Часы: сколько тянется дело. Рядом с ними стоит число минут — без знака
+    // «~3 МИН» читалось как формула.
+    void drawCampaignClock(Renderer& r, int cx, int cy, int rad, uint32_t col, int alpha = 235) {
+        r.drawCircleRing(cx, cy, rad, 1, col, alpha);
+        r.drawLine(cx, cy, cx, cy - rad + 2, col, 1, alpha, false);
+        r.drawLine(cx, cy, cx + rad - 3, cy + 1, col, 1, alpha, false);
+    }
+    // Ступени тира: шесть делений, зажжённые — это и есть «ТИР VI».
+    void drawCampaignTierMeter(Renderer& r, int x, int cy, int tier, uint32_t col) {
+        const int n = std::max(1, std::min(6, tier));
+        for (int i = 0; i < 6; ++i) {
+            const int h = 4 + i * 2;
+            const int bx = x + i * 5;
+            const uint32_t c = i < n ? col : 0xFF3A3348;
+            r.fillRoundedRect(bx, cy + 6 - h / 2, 3, h, 1, c, i < n ? 240 : 200);
+        }
+    }
+    // Тело змеи. Раньше маршрут был ломаной из прямых — он читался как схема из
+    // учебника. Тело всегда чуть выгнуто, толще к середине и тоньше у узлов,
+    // с бликом по верхней кромке и редкими «чешуйками». Пройденное светится,
+    // отмершее рвётся на штрихи.
+    void drawCampaignSnakeBody(Renderer& r, int x0, int y0, int x1, int y1, bool passed, bool dead) {
+        const int dx = x1 - x0, dy = y1 - y0;
+        const int mx = (x0 + x1) / 2 + dy / 7;
+        const int my = (y0 + y1) / 2 - dx / 7;
+        const int span = std::abs(dx) + std::abs(dy);
+        // Шаг точек мельче радиуса: на редком шаге верхняя кромка тела идёт
+        // зубцами, и блик превращается в полосы.
+        const int steps = std::max(12, std::min(36, span / 6));
+        const uint32_t rim = dead ? 0xFF241F2E : (passed ? 0xFF0F1714 : 0xFF1B1526);
+        const uint32_t body = dead ? 0xFF2A2434 : (passed ? 0xFF2C6B4C : 0xFF2A2340);
+        const uint32_t lit = dead ? 0xFF332D3A : (passed ? 0xFF35795A : 0xFF342B4E);
+        const int cap = dead ? 3 : 6;
+        int px[64], py[64], pr[64];
+        int n = 0;
+        for (int i = 0; i <= steps && n < 64; ++i) {
+            const float t = (float)i / (float)steps;
+            const float u = 1.0f - t;
+            px[n] = (int)(u * u * x0 + 2.0f * u * t * mx + t * t * x1);
+            py[n] = (int)(u * u * y0 + 2.0f * u * t * my + t * t * y1);
+            // Тело толще в середине и тоньше у узлов — змея, а не труба.
+            pr[n] = std::max(3, (int)(cap * (1.0f - 0.3f * std::fabs(t - 0.5f) * 2.0f)));
+            ++n;
+        }
+        // Четыре прохода по всем точкам: свечение, обводка, тело, свет сверху.
+        // Поштучно обводка следующей точки ложилась на тело предыдущей и
+        // оставляла тёмный серп — тело распадалось на бусины.
+        for (int pass = 0; pass < 4; ++pass) {
+            for (int i = 0; i < n; ++i) {
+                if (dead && (i % 3) == 1) continue;   // отмершее рвётся на штрихи
+                const int rr = pr[i];
+                if (pass == 0) {
+                    // Свечение — через точку: оно мягкое, разницы не видно,
+                    // а кадр это экономит заметно.
+                    if (!dead && passed && (i % 2) == 0) r.fillCircle(px[i], py[i], rr + 5, 0xFF57E39A, 26);
+                } else if (pass == 1) {
+                    r.fillCircle(px[i], py[i], rr + 1, rim, 255);
+                } else if (pass == 2) {
+                    r.fillCircle(px[i], py[i], rr, body, 255);
+                } else if (rr > 3) {
+                    r.fillCircle(px[i], py[i] - 1, rr - 2, lit, 255);
+                }
+            }
+        }
+    }
+    // Узел дела без номера: цифры превращали маршрут в схему. Состояние читается
+    // галочкой, ромбом, точкой или крестом.
+    void drawCampaignSnakeNode(Renderer& r, int x, int y, int rad, int state, bool hovered, bool focused,
+                               uint32_t accent, float pulse) {
+        const bool done = state == 2, open = state == 1, dead = state == 3;
+        const uint32_t fill = dead ? 0xFF17131F
+                            : done ? 0xFF14402C
+                            : open ? (hovered ? 0xFF3A2C58 : 0xFF241B38) : 0xFF161222;
+        const uint32_t edge = dead ? 0xFF3A3448
+                            : done ? 0xFF7CF0B0
+                            : open ? (hovered ? 0xFFFFE9A8 : accent) : 0xFF423A54;
+        r.fillCircle(x, y, rad, fill, 255);
+        r.drawCircleRing(x, y, rad, done || open ? 2 : 1, edge, 235);
+        if (done) {
+            r.drawLine(x - rad / 2 - 1, y, x - 1, y + rad / 2 - 1, 0xFFD8FFE8, 2, 240, false);
+            r.drawLine(x - 1, y + rad / 2 - 1, x + rad / 2 + 2, y - rad / 2 + 1, 0xFFD8FFE8, 2, 240, false);
+        } else if (open) {
+            drawCampaignDiamond(r, x, y, std::max(3, rad / 2), 0xFFFFE9A8, 230);
+            r.drawCircleRing(x, y, rad + 3 + (int)(2.0f * pulse), 1, 0xFFFFD858, (int)(35 + 55 * pulse));
+        } else if (dead) {
+            const int q = std::max(3, rad / 2);
+            r.drawLine(x - q, y + q, x + q, y - q, 0xFF7C7488, 1, 210, false);
+            r.drawLine(x + q, y + q, x - q, y - q, 0xFF7C7488, 1, 210, false);
+        } else {
+            r.fillCircle(x, y, std::max(2, rad / 3), 0xFF4A4360, 200);
+        }
+        if (focused) r.drawCircleRing(x, y, rad + 5, 1, 0xFFFFFFFF, 200);
+    }
     // Голова змеи: две точки-глаза и язык. Так развилка читается как развилка,
     // а не как два кружка с цифрами. У отмершей головы глаза перечёркнуты.
-    void drawCampaignSnakeHead(Renderer& r, int x, int y, int rad, int dir, bool alive, bool chosen, bool hovered, uint32_t accent) {
+    void drawCampaignSnakeHead(Renderer& r, int x, int y, int rad, int dir, bool alive, bool chosen, bool hovered,
+                               uint32_t accent, uint32_t eyeGlow) {
         // Голова — не кружок с цифрой: два круга (череп и челюсть), глаза с
         // зрачками и раздвоенный язык. На 32 px это единственный способ, чтобы
         // развилка читалась как развилка, а не как две монеты.
         const int snoutX = x + dir * (rad - 3);
+        if (alive) r.addGlow(x, y, rad + (chosen ? 20 : 12), eyeGlow, chosen ? 70 : 34);
         const uint32_t body = !alive ? 0xFF241F2B : chosen ? 0xFF2F6B4E : 0xFF24443A;
         const uint32_t edge = !alive ? 0xFF453E50 : chosen ? 0xFF8EF0B4 : (hovered ? 0xFFFFF0B8 : 0xFF7CE8B4);
         r.fillCircle(x - dir * 2, y, rad, body, 255);
@@ -8381,6 +8523,7 @@ struct Game {
         } else {
             for (int k = -1; k <= 1; k += 2) {
                 const int ex = eyeX + k * eyeDx;
+                r.fillCircle(ex, eyeY, eyeR + 1, eyeGlow, 70);
                 r.fillCircle(ex, eyeY, eyeR, 0xFFF7F0CE, 255);
                 r.fillCircle(ex + dir, eyeY, std::max(1, eyeR - 2), 0xFF161320, 255);
             }
@@ -8438,16 +8581,42 @@ struct Game {
             r.fillRoundedRect(sx, 90, 14, 11, 4, i < seals ? 0xFF65D89A : 0xFF3B3345);
             r.drawRoundedRect(sx, 90, 14, 11, 4, i < seals ? 0xFFB6FFD0 : 0xFF6C6177, 1);
         }
-        char progress[128];
-        int chosenForks = 0;
-        for (int f = 0; f < CAMPAIGN_FORK_COUNT; ++f) if (campaignForkChosen(f)) ++chosenForks;
-        if (save.campaignCycle > 0)
-            snprintf(progress, sizeof(progress), "ДЕЛА %d / %d • ВЕТОК ВЫБРАНО %d ИЗ %d • НОЧЬ %d",
-                     campaignCompletedCount(), CAMPAIGN_MISSION_COUNT, chosenForks, CAMPAIGN_FORK_COUNT, save.campaignCycle);
-        else
-            snprintf(progress, sizeof(progress), "ДЕЛА %d / %d • ВЕТОК ВЫБРАНО %d ИЗ %d",
-                     campaignCompletedCount(), CAMPAIGN_MISSION_COUNT, chosenForks, CAMPAIGN_FORK_COUNT);
-        r.drawText(FONT_SMALL, 292, 89, progress, 0xFFE4D7B5, false);
+        // ── Полоса пути вместо строки «ДЕЛА 17 / 30 • ВЕТОК 3 ИЗ 4» ─────────
+        // Числа тут ничего не добавляли: глаз ищет картинку. Одна клетка — одно
+        // дело этой ночи, четыре ромба справа — развилки: выбранная светится,
+        // пустая ждёт своей очереди.
+        const int barX = 292, barY = 88, barH = 14;
+        int cells = 0;
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i)
+            if (!isCampaignMissionLockedByTrack(i)) ++cells;
+        const int barW = std::min(SCREEN_W - barX - 220, 330);
+        r.fillRoundedRect(barX - 5, barY - 5, barW + 10, barH + 10, 8, 0xFF171226, 235);
+        r.drawRoundedRect(barX - 5, barY - 5, barW + 10, barH + 10, 8, 0xFF3A3350, 1, 170);
+        if (cells > 0) {
+            const int cellW = std::max(3, (barW - (cells - 1) * 2) / cells);
+            int ci = 0;
+            for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+                if (isCampaignMissionLockedByTrack(i)) continue;
+                const uint32_t c = isCampaignMissionCompleted(i) ? 0xFF57D392
+                                 : isCampaignMissionUnlocked(i) ? 0xFFFFD878 : 0xFF322C44;
+                const int cx2 = barX + ci * (cellW + 2);
+                if (isCampaignMissionUnlocked(i) && !isCampaignMissionCompleted(i))
+                    r.addGlow(cx2 + cellW / 2, barY + barH / 2, cellW + 8, 0xFFFFD878, 46);
+                r.fillRoundedRect(cx2, barY, cellW, barH, 2, c, 235);
+                ++ci;
+            }
+        }
+        for (int f = 0; f < CAMPAIGN_FORK_COUNT; ++f) {
+            const int fx = barX + barW + 30 + f * 22;
+            const bool picked = campaignForkChosen(f);
+            const uint32_t col = picked ? (campaignForkPick(f) == 1 ? 0xFFFFC860 : 0xFF5FE0C8) : 0xFF463E5A;
+            drawCampaignDiamond(r, fx, barY + barH / 2, 7, col, picked ? 245 : 190);
+        }
+        if (save.campaignCycle > 0) {
+            char night[32];
+            snprintf(night, sizeof(night), "НОЧЬ %d", save.campaignCycle);
+            r.drawText(FONT_SMALL, barX + barW + 30 + CAMPAIGN_FORK_COUNT * 22 + 14, barY - 1, night, 0xFFCFC2A6, false);
+        }
 
         // ── Камера ───────────────────────────────────────────────────────────
         const int rows = campaignSnakeRows();
@@ -8489,8 +8658,9 @@ struct Game {
         campaignSnakeScroll = std::max(0, std::min(maxScroll, campaignSnakeScroll));
 
         // ── Фон карты и рамки актов ──────────────────────────────────────────
-        r.fillRoundedRect(mapX, mapTop, mapW, viewH, 12, 0xFF0E0B16, 240);
-        r.drawRoundedRect(mapX, mapTop, mapW, viewH, 12, 0xFF3A3350, 1, 180);
+        r.fillRoundedRect(mapX, mapTop, mapW, viewH, 14, 0xFF0C0913, 245);
+        r.fillGradientV(mapX + 3, mapTop + 3, mapW - 6, viewH - 6, 0xFF1A1330, 0xFF080610, 120);
+        r.drawRoundedRect(mapX, mapTop, mapW, viewH, 14, 0xFF413A5C, 1, 190);
 
         // ── Тело маршрута: рёбра из пререквизитов ────────────────────────────
         r.setClip(mapX + 1, mapTop + 1, mapW - 2, viewH - 2);
@@ -8505,23 +8675,36 @@ struct Game {
             if (hi < 0) continue;
             const int bandTop = levelY(hi) - rowStep / 2 - 2;
             const int bandBot = levelY(lo) + rowStep / 2 + 2;
-            if (bandBot > mapTop && bandTop < mapBottom)
-                r.fillRoundedRect(mapX + 6, bandTop, mapW - 12, bandBot - bandTop, 10, accent, 15);
-            // Заголовок акта — в расширенном зазоре под его первой полосой.
+            if (bandBot > mapTop && bandTop < mapBottom) {
+                r.fillRoundedRect(mapX + 6, bandTop, mapW - 12, bandBot - bandTop, 12, accent, 12);
+                // Волосяная линия по верхней кромке — глава начинается здесь.
+                r.fillRect(mapX + 26, bandTop, mapW - 52, 1, accent, 70);
+            }
+            // Баннер акта — в расширенном зазоре под его первой полосой. Счёт
+            // «3/5» заменён пипсами: их видно, не читая цифры.
             const int labelY = levelY(lo) - rowStep / 2 - actHeaderPad / 2 - FONT_SMALL.ascent / 2;
             if (labelY > mapTop + 2 && labelY < mapBottom - FONT_SMALL.lineHeight) {
                 const int done = campaignActDoneCount(a);
-                const int total = campaignActPlayableTotal(a);
-                char label[128];
-                snprintf(label, sizeof(label), "%s. %s • %d/%d", romanAct(a), CAMPAIGN_ACT_TITLES[a - 1], done, total);
-                const int lw = r.textWidth(FONT_SMALL, label) + 18;
-                // У акта с двумя полосами центр свободен — подпись по центру.
-                // У однополосного (акт I и ствол акта V) центр занят делами,
-                // поэтому подпись уходит к левой кромке.
-                const int lx = campaignActLanes(a) > 1 ? centerX - lw / 2 : mapX + 12;
-                r.fillRoundedRect(lx, labelY - 1, lw, FONT_SMALL.lineHeight + 2, 6, 0xFF0E0B16, 225);
-                r.drawText(FONT_SMALL, lx + 9, labelY, label,
-                           isCampaignActUnlocked(a) ? accent : 0xFF6E6678, false);
+                const int total = std::max(1, campaignActPlayableTotal(a));
+                char label[96];
+                snprintf(label, sizeof(label), "%s. %s", romanAct(a), CAMPAIGN_ACT_TITLES[a - 1]);
+                const int tw2 = r.textWidth(FONT_SMALL, label);
+                const int pipGap = 10;
+                const int bw2 = 30 + tw2 + 14 + total * pipGap + 8;
+                // У акта с двумя полосами центр свободен — баннер по центру.
+                // У однополосного (акт I и ствол акта V) центр занят делами.
+                const int lx = campaignActLanes(a) > 1 ? centerX - bw2 / 2 : mapX + 12;
+                const uint32_t bannerCol = isCampaignActUnlocked(a) ? accent : 0xFF6E6678;
+                r.fillRoundedRect(lx, labelY - 3, bw2, FONT_SMALL.lineHeight + 6, 9, 0xFF100C18, 232);
+                r.drawRoundedRect(lx, labelY - 3, bw2, FONT_SMALL.lineHeight + 6, 9, bannerCol, 1, 110);
+                drawCampaignDiamond(r, lx + 13, labelY + FONT_SMALL.lineHeight / 2 - 2, 5, bannerCol, 240);
+                r.drawText(FONT_SMALL, lx + 23, labelY, label, bannerCol, false);
+                for (int p = 0; p < total; ++p) {
+                    const int px2 = lx + 26 + tw2 + 14 + p * pipGap;
+                    const int py2 = labelY + FONT_SMALL.lineHeight / 2 - 2;
+                    if (p < done) r.fillCircle(px2, py2, 3, 0xFF69E8A8, 235);
+                    else r.drawCircleRing(px2, py2, 3, 1, 0xFF5A5270, 200);
+                }
             }
         }
         for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
@@ -8534,22 +8717,9 @@ struct Game {
                 const int y1 = levelY(campaignSnakeLevel(pre[k]));
                 const int x1 = centerX + campaignSnakeDx(pre[k], spread);
                 if (std::max(y1, y2) < mapTop - 40 || std::min(y1, y2) > mapBottom + 40) continue;
-                const uint32_t col = campaignSnakeEdgeColor(pre[k], i);
-                const bool dead = col == 0xFF2A2532;
-                // Тело змеи: тёмная подложка + светлая сердцевина.
-                r.drawLine(x1, y1, x2, y2, 0xFF171320, dead ? 5 : 9, 235, false);
-                if (dead) {
-                    // Отмершая ветка рвётся на штрихи: сплошная линия читалась
-                    // как рабочий маршрут, а он закрыт до новой ночи.
-                    const int steps = 8;
-                    for (int t = 0; t + 1 < steps; t += 2) {
-                        const int ax = x1 + (x2 - x1) * t / steps, ay = y1 + (y2 - y1) * t / steps;
-                        const int bx = x1 + (x2 - x1) * (t + 1) / steps, by = y1 + (y2 - y1) * (t + 1) / steps;
-                        r.drawLine(ax, ay, bx, by, col, 2, 150, false);
-                    }
-                } else {
-                    r.drawLine(x1, y1, x2, y2, col, 4, 235, false);
-                }
+                const bool dead = isCampaignMissionLockedByTrack(pre[k]) || isCampaignMissionLockedByTrack(i);
+                const bool passed = isCampaignMissionCompleted(pre[k]) && isCampaignMissionCompleted(i);
+                drawCampaignSnakeBody(r, x1, y1, x2, y2, passed, dead);
             }
         }
         // ── Узлы дел ────────────────────────────────────────────────────────
@@ -8567,33 +8737,20 @@ struct Game {
             const bool hovered = std::abs(mouseX - x) <= rad + 3 && std::abs(mouseY - y) <= rad + 3;
             const uint32_t accent = getCampaignAccent(i);
             const bool fork = campaignForkOfMission(i) >= 0;
+            // Дыхание времени: живые зацепки качаются, мёртвые стоят.
+            const float pulse = 0.5f + 0.5f * sinf(globalTime * 2.2f);
             if (fork) {
                 const int pick = campaignForkPick(fork);
-                const bool chosenHead = pick != 0 && campaignForkSide(fork, i) == pick;
+                const int side = campaignForkSide(fork, i);
+                const bool chosenHead = pick != 0 && side == pick;
                 const int dir = campaignSnakeDx(i, spread) > 0 ? 1 : -1;
-                drawCampaignSnakeHead(r, x, y, rad, dir, !dead, chosenHead, hovered, accent);
+                // Глаза светятся цветом своей ветки: золото — А, бирюза — Б.
+                const uint32_t eyeGlow = side == 2 ? 0xFF5FE0C8 : 0xFFFFC860;
+                drawCampaignSnakeHead(r, x, y, rad, dir, !dead, chosenHead, hovered, accent, eyeGlow);
+                if (focused) r.drawCircleRing(x, y, rad + 5, 1, 0xFFFFFFFF, 210);
             } else {
-                const uint32_t fill = dead ? 0xFF191521
-                                    : completed ? 0xFF17342A
-                                    : unlocked ? (hovered ? 0xFF33284A : 0xFF221A33) : 0xFF161320;
-                const uint32_t edge = dead ? 0xFF3E3949
-                                    : completed ? 0xFF69E8A8
-                                    : unlocked ? (hovered ? 0xFFFFE9A8 : accent) : 0xFF46405A;
-                r.fillCircle(x, y, rad, fill, 255);
-                r.drawCircleRing(x, y, rad, completed || unlocked ? 2 : 1, edge, 245);
-                char num[8];
-                snprintf(num, sizeof(num), "%d", i);
-                r.drawTextCentered(FONT_SMALL, x, y - FONT_SMALL.ascent / 2 - 1, num,
-                                   dead ? 0xFF7A7386 : completed ? 0xFFBFFFDC : unlocked ? 0xFFFFEECD : 0xFF8A8296, false);
-            }
-            if (focused) r.drawCircleRing(x, y, rad + 4, 1, focused && canChoose ? 0xFFFFD858 : 0xFFFFFFFF, 220);
-            else if (canChoose) r.drawCircleRing(x, y, rad + 6, 1, 0xFFFFD858, 90);
-            // Название — сбоку от узла, наружу от осевой, чтобы не резать маршрут.
-            // Отмершее дело перечёркнуто: серый кружок без пометки читался как
-            // «просто ещё не открыто».
-            if (dead && !fork) {
-                const int q = std::max(4, rad - 3);
-                r.drawLine(x - q, y + q, x + q, y - q, 0xFF7C7488, 1, 200, false);
+                const int state = dead ? 3 : completed ? 2 : (unlocked || canChoose) ? 1 : 0;
+                drawCampaignSnakeNode(r, x, y, rad, state, hovered, focused, accent, pulse);
             }
             const char* label = def.mapTitle ? def.mapTitle : def.title;
             const int dx = campaignSnakeDx(i, spread);
@@ -8606,21 +8763,29 @@ struct Game {
             // центр — это и есть узел, поэтому текст идёт вправо.
             const int tw = dx >= 0 ? std::max(0, mapX + mapW - 8 - (x + gap))
                                    : std::max(0, (x - gap) - (mapX + 8));
+            // Клип режет заливки и линии, но не текст: подпись у края окна
+            // вылезала на рамку обрезанными буквами. Такие подписи не рисуем —
+            // узел остаётся, буквы вернутся при прокрутке.
+            const bool labelVisible = y - FONT_SMALL.lineHeight * 2 > mapTop
+                                   && y + FONT_SMALL.lineHeight * 2 < mapBottom;
             std::string lines[2];
             int lineCount = 1;
             lines[0] = label;
-            if (fork && r.textWidth(FONT_SMALL, label) > tw) {
-                // Головы развилки подписываем двумя строками: сбоку от них всего
-                // треть ширины карты, а названия веток длинные.
+            if (r.textWidth(FONT_SMALL, label) > tw) {
+                // Название не влезает в один ряд — режем по последнему пробелу
+                // на две строки. Прежде так подписывались только головы
+                // развилки, и в остальных узлах имя обрывалось на «ПЕЧАТЬ
+                // СВИДЕ…». Если и две строки не влезают, вторая уже режется
+                // fitText: обрыв на середине слова читается как ошибка.
                 const std::string full(label);
-                const size_t cut = full.rfind(' ');
-                if (cut != std::string::npos && cut > 0) {
-                    lines[0] = full.substr(0, cut);
-                    lines[1] = full.substr(cut + 1);
+                const size_t space = full.rfind(' ');
+                if (space != std::string::npos && space > 0 && space + 1 < full.size()) {
+                    lines[0] = full.substr(0, space);
+                    lines[1] = full.substr(space + 1);
                     lineCount = 2;
                 }
             }
-            for (int ln = 0; ln < lineCount; ++ln) {
+            for (int ln = 0; labelVisible && ln < lineCount; ++ln) {
                 const int ly = y - FONT_SMALL.ascent / 2 + (lineCount == 2 ? (ln == 0 ? -8 : 8) : 0);
                 if (dx >= 0) {
                     r.drawText(FONT_SMALL, x + gap, ly,
@@ -9511,6 +9676,7 @@ struct Game {
             "2.10.32 • МЕТАЛЛ, ТКАНЬ И СТЕКЛО СВЕТЯТСЯ ПО-РАЗНОМУ",
             "2.10.33 • СТРАЖИ ОЖИЛИ: ПЕРИФЕРИЯ ОТСТАЁТ, ПОЗА ДОГОНЯЕТ, ОТДАЧА ПРИСЕДАЕТ",
             "2.10.34 • КАМПАНИЯ: РАЗВИЛКА В КАЖДОМ АКТЕ И КАРТА-ЗМЕЙКА",
+            "2.10.35 • КАМПАНИЯ БЕЗ АРИФМЕТИКИ: ЗНАКИ ВМЕСТО СЧЁТЧИКОВ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -9640,7 +9806,8 @@ struct Game {
             "• Свет у стражей был у каждого свой: у Моргара блик сверху, у Малакора справа, а у Протоколиста вообще снизу — шесть стражей выглядели как шесть разных игр. Теперь направление одно на весь бестиарий: сверху-слева.\n• После отрисовки фигуры идёт один проход по её маске: край со стороны света подсвечивается, обратная сторона уходит в собственную тень, стыки деталей получают вполовину более слабый эффект (иначе фигура выглядит тиснёной).\n• Стыки деталей важнее силуэта: раньше объём читался только по внешнему контуру, а щит на плече и книга на груди оставались плоскими. Теперь у каждой детали есть свой освещённый верх и затемнённый низ.\n• Мягкий градиент по фигуре и затемнение последних 14 пикселей у земли: страж стоит на полу, а не лежит на нём картинкой.\n• Тень больше не висит на фиксированной высоте: она рисуется по реальному низу фигуры. Азарот висел над землёй на 24 пикселя, Протоколист — на 34, Двойник — на 22. Ниже тени добавлен узкий контактный эллипс.\n• Вспышка попадания и ярость проверены отдельно: свет не выжигает белое и не спорит с красным кольцом фазы.\n• Цена прохода — около 0.5 мс на стража (три стража в кадре: 1.4–1.6 мс из 16.7). Область прохода 250×232 пикселя, за её края фигура не выходит ни в одной позе.\n• Лист было/стало — design/boss_lighting.png, разбор с цифрами — design/char_model_audit.md.",            "• У всех шести стражей руки, посохи и перья рисуются лямбдой DL, а в ней были перепутаны аргументы: в цвет попадала толщина (почти чёрный пиксель 0x0000000A без альфы), а в толщину — упакованный цвет, который как int отрицателен. Линия вырождалась в цепочку одиночных тёмных точек: у Кардинала и Протоколиста рук не было видно вовсе, остальные линии тоже не читались.\n• Порядок аргументов исправлен, и линии появились сразу у четырёх стражей: Моргар (древко), Кардинал (руки и перо), Протоколист (обе руки), Двойник (руки обоих тел).\n• Протоколист: рука выходит из-под наплечника, локтем уходит за мантию и возвращается кистью на верхний угол тома. Между предплечьем и мантией сквозной просвет — первая настоящая дыра в силуэте стража (стенд /tmp/negspace: 0 → 5 дыр).\n• Объём рук: тело камнем, блик тонкой линией по верхне-левой стороне. Раньше блик шёл по центру трубы, и вся рука светилась, как пластиковая.\n• Моргар: гребень врос в шлем и ломает верхнюю линию головы. Шею с просветом пробовал дважды — на приземистом торсе она читалась тонкой палкой и горлышком бутылки, а рога по краям шлема висели в воздухе; для стража-башни сплошная масса — намеренная часть образа.\n• Двойник: руки обоих тел стали стеклянными с тонким бликом — после починки DL они светились белыми палками ярче головы.\n• Цифры (площадь / выпуклость / заполнение / дыры): Моргар 8046/0.72/72%/2 → 8677/0.77/77%/0; Протоколист 12076/0.60/60%/0 → 13873/0.68/67%/5; Двойник 13661/0.72/72%/3 → 14161/0.74/74%/5; Кардинал 5993/0.65/65% → 6153/0.66/66%.\n• Лист было/стало — design/boss_silhouettes_231.png, разбор с цифрами — design/char_model_audit.md, §11.",
             "• Проход объёма применял один приём ко всем шести стражам: металл, ткань, камень и стекло получали одинаковый блик и одинаковую тень, и вся линейка выглядела отлитой из одного материала.\n• Теперь у каждого материала своя рампа. Металл (Моргар): блик в 2 px и короткая жёсткая тень. Ткань (Кардинал) и плоть (Малакор): широкий мягкий переход, а на стыке деталей только тень, без светлого канта. Камень (Азарот, Протоколист): посередине. Стекло (Двойник): яркий край почти без собственной тени. Пергамент, страницы книг, кость и маска блика не получают вовсе — на них он читался как пластик.\n• Пергамент отличается от камня не яркостью, а теплом: у Протоколиста камень тоже светлый, но синего в нём больше красного.\n• Контактная тень между деталями: кант в 2 px, в полтора раза сильнее обычной тени силуэта. Раньше стык шёл на 45 % от силуэта, и детали сливались в одно пятно.\n• Ступенчатую рампировку (три тона по осям кадра) пробовал и отверг: на крупном теле она даёт прямой диагональный шов через всю фигуру — у Азарота балахон делился на светлую и тёмную половину ровной линией. Тона даёт форма: блик у края, кольцо собственной тени внутри, контактный кант на стыке.\n• Цифры: тонов на фигуре 171–373 (порог аудита 30), доля пяти самых частых 19–36 % (порог 75 %). Контраст стыка деталей: Моргар 30.2 → 47.3, Кардинал 41.7 → 51.8, Двойник 32.3 → 38.1, Азарот 30.6 → 32.7, Протоколист 29.9 → 32.2, Малакор 33.5 → 32.6 (у мягких материалов стык и должен быть мягким).\n• Цена: +0.05 мс на стража, три стража в кадре 1.43 → 1.59 мс из 16.7.\n• Лист было/стало — design/boss_materials_232.png, разбор — design/char_model_audit.md, §12.",
             "Четвёртый пункт аудита моделей: анимация стражей. Периферия теперь отстаёт от корпуса по фазе: подол, полы мантии, ленты, перья и кисти считаются от времени, снятого на 60-160 мс раньше, поэтому корпус уже пошёл, а подол ещё висит.\nПоза замаха и выброса догоняется пружиной с перелётом вместо мгновенной ступеньки: перелёт до 1,012, после удара проседание до -0,057, успокоение 16 кадров.\nОтдача от попадания стала приседанием: по вертикали фигура ужимается сильнее, чем по горизонтали, и объём сохраняется. Кардинал качается в такт шагу.\nНиже 60 px мелкие частицы, заклёпки и трещины не рисуются - силуэт остаётся чистым.\nЗамеры: расхождение подол/корпус 1,24 -> 2,82 px, W/H при ударе 0,63 -> 0,71, ход корпуса Кардинала 0,1 -> 4,2 px, одиночных пикселей у Азарота 26 -> 0. Три стража на кадр: 1,30 -> 1,27 мс.",
-            "• Кампания больше не держится на одной развилке: выбор спрашивают на входе в каждый акт II–V, и каждый раз он меняет четверть прохождения. Выбор в акте V теперь виден как выбор, а не как два дела подряд.\n• Новый экран «ЗМЕЙКА»: маршрут растёт снизу вверх, камера стартует у акта I, пройденное светится зелёным, непройденное серое, по колесу мыши маршрут прокручивается, а камера сама подъезжает к выбранному делу.\n• Развилка нарисована как две головы змеи: глаза со зрачками и раздвоенный язык. Клик по голове выбирает ветку: вторая гаснет, её голова получает крестики вместо глаз, полоса сереет, связи рвутся на штрихи.\n• Первый клик по голове показывает дело в досье, второй — идёт в бой (или Enter), поэтому выбор нельзя сделать случайно.\n• В настройках появился переключатель «Карта кампании»: ЗМЕЙКА или КАРТА. Прежняя карта колонками осталась целиком — новый интерфейс не вместо старого.\n• Сейв v9: выбор хранится по каждой развилке отдельно (campaignFork[4]). Старый сейв мигрирует: прежний «след» переносится в акты II–IV, а выбор акта V восстанавливается по тому, какое дело было закрыто.\n• Счётчики актов считают одно прохождение: в акте с развилкой в счёт идёт одна голова, поэтому «3/6» в акте V больше не появится.\n• setClip теперь режет и заливки, а не только текст: прокручиваемый маршрут не рисует дела поверх кнопок внизу экрана.\n• Дерево кампании перестроено в tools/campaign.py: у дел 009, 011, 019, 022 по два пререквизита — головы акта III открываются с любой полосы акта II, и то же для акта IV.\n• Проверено на 1920x1080, 1600x900, 1280x720, 1080x1920 и 800x600. Листы — design/campaign_snake.png и design/campaign_snake_old.png, разбор — design/campaign_map_snake.md."
+            "• Кампания больше не держится на одной развилке: выбор спрашивают на входе в каждый акт II–V, и каждый раз он меняет четверть прохождения. Выбор в акте V теперь виден как выбор, а не как два дела подряд.\n• Новый экран «ЗМЕЙКА»: маршрут растёт снизу вверх, камера стартует у акта I, пройденное светится зелёным, непройденное серое, по колесу мыши маршрут прокручивается, а камера сама подъезжает к выбранному делу.\n• Развилка нарисована как две головы змеи: глаза со зрачками и раздвоенный язык. Клик по голове выбирает ветку: вторая гаснет, её голова получает крестики вместо глаз, полоса сереет, связи рвутся на штрихи.\n• Первый клик по голове показывает дело в досье, второй — идёт в бой (или Enter), поэтому выбор нельзя сделать случайно.\n• В настройках появился переключатель «Карта кампании»: ЗМЕЙКА или КАРТА. Прежняя карта колонками осталась целиком — новый интерфейс не вместо старого.\n• Сейв v9: выбор хранится по каждой развилке отдельно (campaignFork[4]). Старый сейв мигрирует: прежний «след» переносится в акты II–IV, а выбор акта V восстанавливается по тому, какое дело было закрыто.\n• Счётчики актов считают одно прохождение: в акте с развилкой в счёт идёт одна голова, поэтому «3/6» в акте V больше не появится.\n• setClip теперь режет и заливки, а не только текст: прокручиваемый маршрут не рисует дела поверх кнопок внизу экрана.\n• Дерево кампании перестроено в tools/campaign.py: у дел 009, 011, 019, 022 по два пререквизита — головы акта III открываются с любой полосы акта II, и то же для акта IV.\n• Проверено на 1920x1080, 1600x900, 1280x720, 1080x1920 и 800x600. Листы — design/campaign_snake.png и design/campaign_snake_old.png, разбор — design/campaign_map_snake.md.",
+            "• Экран кампании перестал быть ведомостью. Строка «ДЕЛА 17 / 30 • ВЕТОК ВЫБРАНО 3 ИЗ 4» заменена полосой пути: одна клетка — одно дело этой ночи, зелёная клетка пройдена, золотая ждёт, справа четыре ромба развилок, выбранная светится цветом своей ветки.\n• Рядом с полосой осталась только ночь, и то если она не первая: «НОЧЬ 3» вместо столбца чисел.\n• У дел на карте больше нет номеров. Состояние читается знаком: галочка — дело закрыто, пульсирующий ромб — можно идти, косой крест — ветка отмерла, точка — ещё закрыто.\n• Заголовок главы тоже без дроби: ромб, название акта и пипсы по числу дел, заполненные означают пройденное.\n• Маршрут стал телом змеи: изогнутое, толще в середине и тоньше у узлов, с бликом по верхней кромке и свечением у пройденного. Отмершая ветка рвётся на штрихи и сереет.\n• Фон карты получил глубину, у главы появилась тонкая линия по верхней кромке: карта перестала быть плоской плашкой.\n• Досье дела снизу вместо строки «ДЕЛО 30 • АКТ V • ТИР VI • +45% • БОСС ~3 МИН» показывает знаки: часы с минутами, ступени тира с процентом, ромб следа. Страж остался словом — имя не рисуется знаком.\n• На пустом месте досье появилась бледная печать главы: карточка перестала выглядеть недогруженной.\n• Подписи дел больше не обрываются на полуслове у края окна: длинное название переносится на две строки, а подпись, которая не влезает целиком, не рисуется до прокрутки.\n• Прежняя карта колонками не тронута: переключатель «Карта кампании» в настройках, строка 9."
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
