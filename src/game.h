@@ -183,7 +183,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 131;
+static constexpr int PATCH_NOTES_COUNT = 132;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -373,6 +373,7 @@ struct SmartCloseState {
     float slip = 0.0f;         // остаток выскальзывания стрелка
     float slipCd = 0.0f;
     float slipX = 0.0f, slipY = 0.0f;
+    float recover = 0.0f;      // перехватчик отходит после рывка
     float dive = 0.0f;         // остаток нырка увёртливого
     float diveCd = 0.0f;
     float orbitSign = 1.0f;
@@ -387,7 +388,7 @@ struct SmartCloseSteer {
 };
 
 static SmartCloseSteer smartCloseSteer(SmartCloseState& st, int tactic, float dx, float dy, float dist,
-                                       float playerVX, float playerVY, float dt) {
+                                       float playerVX, float playerVY, float dt, float flank = 1.0f) {
     SmartCloseSteer out;
     st.lungeCd = std::max(0.0f, st.lungeCd - dt);
     st.slipCd = std::max(0.0f, st.slipCd - dt);
@@ -416,7 +417,9 @@ static SmartCloseSteer smartCloseSteer(SmartCloseState& st, int tactic, float dx
             st.slipCd = 1.1f;
             st.slip = 0.32f;
             // Уходит в ту сторону, куда герой не бежит: сбоку зазор живёт дольше.
-            const float sign = (playerVX * sideX + playerVY * sideY) >= 0.0f ? -1.0f : 1.0f;
+            // Если герой стоит, сторону решает фланг — двое не уходят в одну точку.
+            const float across = playerVX * sideX + playerVY * sideY;
+            const float sign = (across > 12.0f) ? -1.0f : (across < -12.0f ? 1.0f : flank);
             st.slipX = sideX * sign - toX * 0.35f;
             st.slipY = sideY * sign - toY * 0.35f;
             out.active = true;
@@ -426,20 +429,32 @@ static SmartCloseSteer smartCloseSteer(SmartCloseState& st, int tactic, float dx
             return out;
         }
         if (st.retreating) {
-            // Отход по диагонали: прямая спина читалась как выход из боя.
+            // Отход по диагонали: прямая спина читалась как выход из боя. Сторона
+            // диагонали своя у каждого моба (фланг), иначе пачка стрелков отходила
+            // одной стеной, как один моб, размноженный втрое.
             out.active = true;
-            out.x = -toX + sideX * 0.40f;
-            out.y = -toY + sideY * 0.40f;
+            out.x = -toX + sideX * 0.40f * flank;
+            out.y = -toY + sideY * 0.40f * flank;
             out.speedMul = 0.92f;
             // В упор не стреляет: залп без времени на реакцию — не умный бой.
             out.holdFire = dist < 104.0f;
         }
     } else if (tactic == 1) {
+        st.recover = std::max(0.0f, st.recover - dt);
         if (st.lunge > 0.0f) {
             st.lunge -= dt;
             out.active = true;
             out.x = st.lungeX; out.y = st.lungeY;
             out.speedMul = 2.8f;
+            // После броска перехватчик не остаётся в герое: иначе весь смысл
+            // замаха пропадает — он приезжает в контакт и стоит там до
+            // следующей перезарядки (на стенде это 39 % времени в контакте).
+            if (st.lunge <= 0.0f) st.recover = 0.55f;
+        } else if (st.recover > 0.0f) {
+            out.active = true;
+            out.x = -toX + sideX * 0.35f * flank;
+            out.y = -toY + sideY * 0.35f * flank;
+            out.speedMul = 0.85f;
         } else if (st.windup > 0.0f) {
             st.windup -= dt;
             // На замахе перехватчик отходит на полшага: рывку нужен разбег, и
@@ -457,8 +472,16 @@ static SmartCloseSteer smartCloseSteer(SmartCloseState& st, int tactic, float dx
             out.x = toX; out.y = toY;
             out.speedMul = 0.5f;
         } else if (dist < 320.0f) {
-            // Средняя дистанция — перехват с упреждением, как раньше.
+            // Средняя дистанция — перехват с упреждением, как раньше. Вплотную
+            // без готового рывка он не лезет грудью: идёт по касательной, пока
+            // перезаряжается, и заходит на бросок сбоку.
             out.active = true;
+            if (dist < 120.0f) {
+                out.x = sideX * flank + toX * 0.15f;
+                out.y = sideY * flank + toY * 0.15f;
+                out.speedMul = 0.9f;
+                return out;
+            }
             const float interceptTime = std::min(0.72f, dist / 190.0f);
             float leadX = playerVX * interceptTime, leadY = playerVY * interceptTime;
             const float leadLen = sqrtf(leadX * leadX + leadY * leadY);
@@ -537,6 +560,7 @@ struct Monster {
     float smartDodgeTimer = 0.0f;
     float smartThinkTimer = 0.0f;
     float smartDodgeX = 0.0f, smartDodgeY = 0.0f;
+    float lastMoveX = 0.0f, lastMoveY = 0.0f; // фактическое направление шага: для отладочных меток
     SmartCloseState smartClose; // ближний бой разумного: отход, замах, рывок, круг
     float specialTimer = 0.0f;
     float abilityTimer = 0.0f;
@@ -804,6 +828,8 @@ struct Game {
         messages.missingClips = voiceMissing;
     }
     bool debugOverlay = false;     // F3 technical read-out
+    bool debugAiIntent = false;    // решения разумных мобов: строка состояния у каждого
+    int debugAiStandCycle = 0;     // сколько раз звали «СТЕНД ИИ»: сдвигает углы тройки
     // Дебаг-меню (F9 или клавиша `). Раньше оно открывалось только по коду v404,
     // и со стороны выглядело так, будто отладки в игре нет вообще. Теперь F9
     // открывает меню сразу, а бой под ним замирает.
@@ -904,7 +930,10 @@ struct Game {
     // Chest rewards
     std::vector<ChestReward> chestRewards;
     int smartOneTapCount[3] = {0, 0, 0};
-    float smartSpawnChance[3] = {0.01f, 0.01f, 0.01f};
+    // 2 % на тактику вместо 1 %. При 1 % первый разумный моб появлялся раз в две
+    // минуты, и проверить его поведение можно было только стендом. Верхний предел
+    // держит суммарную долю около 6 % спавнов — это модулятор боя, не его основа.
+    float smartSpawnChance[3] = {0.02f, 0.02f, 0.02f};
     float smartStrengthMultiplier[3] = {1.0f, 1.0f, 1.0f};
     int pendingResonatorBurst = 0;
     int killWindowStartCount = 0;
@@ -2508,7 +2537,7 @@ struct Game {
         breakthroughActive = false; breakthroughEarlyHit = false; breakthroughQueued = false;
         breakthroughEscalation = 0.0f;
         smartOneTapCount[0] = smartOneTapCount[1] = smartOneTapCount[2] = 0;
-        smartSpawnChance[0] = smartSpawnChance[1] = smartSpawnChance[2] = 0.01f;
+        smartSpawnChance[0] = smartSpawnChance[1] = smartSpawnChance[2] = 0.02f;
         smartStrengthMultiplier[0] = smartStrengthMultiplier[1] = smartStrengthMultiplier[2] = 1.0f;
         pendingResonatorBurst = 0; pendingMatryoshkaSplits.clear(); eventCooldown = 35.0f;
         squadTimer = 14.0f;
@@ -2994,6 +3023,9 @@ struct Game {
         m.smartThinkTimer = 0.0f;
         m.smartDodgeX = m.smartDodgeY = 0.0f;
         m.smartClose = SmartCloseState();
+        // Фланг по чётности номера: половина стаи обходит слева, половина справа.
+        // Без этого три разумных моба кружили по одному кольцу друг за другом.
+        m.smartClose.orbitSign = (m.uniqueId & 1) ? 1.0f : -1.0f;
         m.hitFlashTimer = 0.0f;
         m.freezeTimer = 0.0f;
         m.shootTimer = m.isSmart && m.smartTactic == 0 ? 0.75f : (1.3f + (rand() % 150) / 100.0f);
@@ -5159,8 +5191,9 @@ struct Game {
                 // Вблизи тактика ведёт моба сама (см. smartCloseSteer): стрелок
                 // держит зазор, перехватчик бьёт рывком с замахом, увёртливый
                 // кружит. Дальше 320 px решатель молчит и остаётся обычный ход.
+                const float flank = (m.uniqueId & 1) ? 1.0f : -1.0f;
                 const SmartCloseSteer steer = smartCloseSteer(m.smartClose, m.smartTactic, dx, dy, dist,
-                                                              playerVelocityX, playerVelocityY, dt);
+                                                              playerVelocityX, playerVelocityY, dt, flank);
                 if (steer.active) {
                     moveX = steer.x; moveY = steer.y;
                     closeSpeedMul = steer.speedMul;
@@ -5171,6 +5204,13 @@ struct Game {
                     moveX = m.smartDodgeX; moveY = m.smartDodgeY;
                     closeSpeedMul = 1.0f;
                 }
+            } else if ((m.type == 3 || m.type == 8) && dist < 96.0f && m.shootTimer > 0.45f) {
+                // Обычный стрелок сам не отходит: герой подходил вплотную и убивал
+                // его бесплатно, пока тот перезаряжался. Теперь он пятится, пока
+                // не готов выстрел, и снова наступает после него. Огры (type 9) и
+                // стражи этого не делают: им пятам не место.
+                moveX = -dx; moveY = -dy;
+                closeSpeedMul = 0.55f;
             }
             const float bossPhaseSpeed = m.isBoss ? (m.bossPhase == 1 ? 1.0f : (m.bossPhase == 2 ? 1.10f : 1.20f)) : 1.0f;
             float currentSpeed = m.speed * spdMult * bossPhaseSpeed * closeSpeedMul;
@@ -5183,15 +5223,20 @@ struct Game {
             // и его длина при float-округлении бывала 0.9999999 — моб с «единичным»
             // вектором не двигался вообще (рывок перехватчика не срабатывал).
             if (moveLen > 0.01f) {
-                m.x += (moveX / moveLen) * currentSpeed * dt;
-                m.y += (moveY / moveLen) * currentSpeed * dt;
+                m.lastMoveX = moveX / moveLen;
+                m.lastMoveY = moveY / moveLen;
+                m.x += m.lastMoveX * currentSpeed * dt;
+                m.y += m.lastMoveY * currentSpeed * dt;
             }
 
             // Ranged attacks for Cultist/Bosses, plus rare predictive sharpshooters.
             bool smartShooter = m.isSmart && m.smartTactic == 0;
-            if (smartShooter && smartHoldFire) {
+            if (smartShooter && (smartHoldFire || dist < 132.0f)) {
                 // В упор стрелок не бьёт: залп без времени на реакцию — не умный
                 // бой, а нечестный. Он отходит и стреляет, когда появился зазор.
+                // Проверка по дистанции, а не только по состоянию решателя:
+                // между кадрами таймер успевал дойти до нуля в тот же кадр, когда
+                // моб только начал отходить (на стенде — 1 выстрел в упор на 2281).
                 m.shootTimer = std::max(m.shootTimer, 0.2f);
             } else if (((m.type == 3 || m.type == 8 || m.type == 9 || m.isBoss) || smartShooter) && dist < (smartShooter ? 700.0f : 500.0f)) {
                 m.shootTimer -= dt;
@@ -6118,6 +6163,35 @@ struct Game {
                         r.drawCircleRing(sx, sy, (int)m.radius + 10, 2, smartColor, 230, true);
                         r.drawCircleRing(sx, sy, (int)m.radius + 16, 1, smartColor, 120, true);
                     }
+                    // Отладка ИИ (F9): что моб решил прямо сейчас. Без этого
+                    // поведение приходилось угадывать по движению.
+                    if (debugAiIntent) {
+                        const char* intent = nullptr;
+                        if (m.smartTactic == 0) {
+                            intent = m.smartClose.slip > 0.0f ? "ВЫСКОЛЬЗНУЛ"
+                                   : m.smartClose.retreating ? "ДЕРЖИТ ЗАЗОР" : "СБЛИЖАЕТСЯ";
+                        } else if (m.smartTactic == 1) {
+                            intent = m.smartClose.lunge > 0.0f ? "РЫВОК"
+                                   : m.smartClose.windup > 0.0f ? "ЗАМАХ" : "ПЕРЕХВАТ";
+                        } else {
+                            intent = m.smartClose.dive > 0.0f ? "НЫРОК" : "КРУГ";
+                        }
+                        char info[96];
+                        const float ddx = m.x - playerX, ddy = m.y - playerY;
+                        snprintf(info, sizeof(info), "%s  %d", intent, (int)sqrtf(ddx * ddx + ddy * ddy));
+                        const int tw = r.textWidth(FONT_SMALL, info);
+                        // Над мобом — по умолчанию, под ним — если над ним уже
+                        // висит верхний HUD (стенд ставит мобов и на 230 px).
+                        int labelY = sy - (int)m.radius - 40;
+                        if (labelY < 168) labelY = sy + (int)m.radius + 10;
+                        r.fillRoundedRect(sx - tw / 2 - 5, labelY, tw + 10, 16, 4, 0xFF07060C, 225);
+                        r.drawTextCentered(FONT_SMALL, sx, labelY + 2, info, smartColor, false);
+                        // Куда он реально шагает: отрезок по фактическому вектору
+                        // хода, а не по направлению на героя.
+                        const int hx = sx + (int)(m.lastMoveX * ((int)m.radius + 24));
+                        const int hy = sy + (int)(m.lastMoveY * ((int)m.radius + 24));
+                        r.drawLine(sx, sy, hx, hy, smartColor, 1, 110, true);
+                    }
                 }
                 if (m.freezeTimer > 0.0f) {
                     r.fillRoundedRect(sx - 11, sy - 14, 22, 26, 4, 0xFF40E8FF, 95);
@@ -6374,7 +6448,7 @@ struct Game {
         char line[256];
         const int pad = 8, lineH = 17;
         const bool hasMessage = storyTimer > 0.0f && !storyLine.empty();
-        const int rows = 15 + (hasMessage ? 2 : 0);
+        const int rows = 16 + (hasMessage ? 2 : 0);
         const int labelW = 176;
         const int boxW = std::min(SCREEN_W - 16, 486), boxH = rows * lineH + pad * 2;
         const int bx = 8, by = 8;
@@ -6417,11 +6491,26 @@ struct Game {
         // line better than the clip count does (a file can be in the corridor and still drown).
         snprintf(line, sizeof(line), "x%.2f  SFX %+.1f ДБ", sound.announcerBusGain(), sound.announcerDuckDb());
         put(14, "ГОЛОС ШИНА", line, sound.voiceSpeaking() ? 0xFF9BF0B0 : 0xFFE6E0F4);
+        // Состав ИИ: сколько на арене разумных по тактикам и элит. Раньше это
+        // можно было узнать только глазами по кольцам.
+        {
+            int smartCount[3] = {0, 0, 0}, eliteCount = 0, shooters = 0;
+            for (const Monster& m : monsters) {
+                if (m.hp <= 0.0f) continue;
+                if (m.isElite) ++eliteCount;
+                if (m.isSmart) ++smartCount[std::max(0, std::min(2, m.smartTactic))];
+                else if (m.type == 3 || m.type == 8) ++shooters;
+            }
+            snprintf(line, sizeof(line), "A%d Б%d В%d • ЭЛИТ %d • СТРЕЛКОВ %d%s",
+                     smartCount[0], smartCount[1], smartCount[2], eliteCount, shooters,
+                     debugAiIntent ? " • МЕТКИ" : "");
+            put(15, "ИИ", line, (smartCount[0] + smartCount[1] + smartCount[2]) > 0 ? 0xFF7CE8FF : 0xFFE6E0F4);
+        }
         if (hasMessage) {
             snprintf(line, sizeof(line), "%s  %.1f С", storySpeaker.c_str(), storyTimer);
-            put(15, "НА ЭКРАНЕ", line, 0xFFC9A6FF);
+            put(16, "НА ЭКРАНЕ", line, 0xFFC9A6FF);
             snprintf(line, sizeof(line), "%s  ПРОЗВУЧАЛО %d", sound.voiceEnabled() ? "ГОЛОС ON" : "ГОЛОС OFF", sound.voiceSpokenCount());
-            put(16, "ОЗВУЧЕНО", line, sound.voiceEnabled() ? 0xFF9BF0B0 : 0xFFFF9B7E);
+            put(17, "ОЗВУЧЕНО", line, sound.voiceEnabled() ? 0xFF9BF0B0 : 0xFFFF9B7E);
         }
     }
 
@@ -9939,8 +10028,9 @@ struct Game {
             "2.10.35 • КАМПАНИЯ БЕЗ АРИФМЕТИКИ: ЗНАКИ ВМЕСТО СЧЁТЧИКОВ",
             "2.10.36 • КАМПАНИЯ: РАСКЛАДКА ПОД ЛЮБОЙ ФОРМАТ ЭКРАНА",
             "2.10.37 • РАЗУМНЫЕ МОБЫ БЛИЖНЕГО БОЯ: ЗАМАХ, РЫВОК, КРУГ",
+            "2.10.38 • ИИ ВИДНО И ПРОВЕРЯЕМО: СТЕНД, МЕТКИ, ФЛАНГ",
         };
-                // Keep each note to ~8 wrapped lines: the panel does not scroll.
+                // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
             "Основа игры: пять героев, автоматическое оружие и выбор прокачки во время боя.\nПервые руины, самоцветы опыта, сундуки и сохранение между забегами.",
             "Кампания обрела четыре печати и охоту на боссов.\nПобеды открывают героев, главы и страницы Зала славы.",
@@ -10071,7 +10161,8 @@ struct Game {
             "• Кампания больше не держится на одной развилке: выбор спрашивают на входе в каждый акт II–V, и каждый раз он меняет четверть прохождения. Выбор в акте V теперь виден как выбор, а не как два дела подряд.\n• Новый экран «ЗМЕЙКА»: маршрут растёт снизу вверх, камера стартует у акта I, пройденное светится зелёным, непройденное серое, по колесу мыши маршрут прокручивается, а камера сама подъезжает к выбранному делу.\n• Развилка нарисована как две головы змеи: глаза со зрачками и раздвоенный язык. Клик по голове выбирает ветку: вторая гаснет, её голова получает крестики вместо глаз, полоса сереет, связи рвутся на штрихи.\n• Первый клик по голове показывает дело в досье, второй — идёт в бой (или Enter), поэтому выбор нельзя сделать случайно.\n• В настройках появился переключатель «Карта кампании»: ЗМЕЙКА или КАРТА. Прежняя карта колонками осталась целиком — новый интерфейс не вместо старого.\n• Сейв v9: выбор хранится по каждой развилке отдельно (campaignFork[4]). Старый сейв мигрирует: прежний «след» переносится в акты II–IV, а выбор акта V восстанавливается по тому, какое дело было закрыто.\n• Счётчики актов считают одно прохождение: в акте с развилкой в счёт идёт одна голова, поэтому «3/6» в акте V больше не появится.\n• setClip теперь режет и заливки, а не только текст: прокручиваемый маршрут не рисует дела поверх кнопок внизу экрана.\n• Дерево кампании перестроено в tools/campaign.py: у дел 009, 011, 019, 022 по два пререквизита — головы акта III открываются с любой полосы акта II, и то же для акта IV.\n• Проверено на 1920x1080, 1600x900, 1280x720, 1080x1920 и 800x600. Листы — design/campaign_snake.png и design/campaign_snake_old.png, разбор — design/campaign_map_snake.md.",
             "• Экран кампании перестал быть ведомостью. Строка «ДЕЛА 17 / 30 • ВЕТОК ВЫБРАНО 3 ИЗ 4» заменена полосой пути: одна клетка — одно дело этой ночи, зелёная клетка пройдена, золотая ждёт, справа четыре ромба развилок, выбранная светится цветом своей ветки.\n• Рядом с полосой осталась только ночь, и то если она не первая: «НОЧЬ 3» вместо столбца чисел.\n• У дел на карте больше нет номеров. Состояние читается знаком: галочка — дело закрыто, пульсирующий ромб — можно идти, косой крест — ветка отмерла, точка — ещё закрыто.\n• Заголовок главы тоже без дроби: ромб, название акта и пипсы по числу дел, заполненные означают пройденное.\n• Маршрут стал телом змеи: изогнутое, толще в середине и тоньше у узлов, с бликом по верхней кромке и свечением у пройденного. Отмершая ветка рвётся на штрихи и сереет.\n• Фон карты получил глубину, у главы появилась тонкая линия по верхней кромке: карта перестала быть плоской плашкой.\n• Досье дела снизу вместо строки «ДЕЛО 30 • АКТ V • ТИР VI • +45% • БОСС ~3 МИН» показывает знаки: часы с минутами, ступени тира с процентом, ромб следа. Страж остался словом — имя не рисуется знаком.\n• На пустом месте досье появилась бледная печать главы: карточка перестала выглядеть недогруженной.\n• Подписи дел больше не обрываются на полуслове у края окна: длинное название переносится на две строки, а подпись, которая не влезает целиком, не рисуется до прокрутки.\n• Прежняя карта колонками не тронута: переключатель «Карта кампании» в настройках, строка 9.",
             "• Экран кампании считает раскладку от размера окна, а не от жёстких 1280x720: высота карты, шаг ряда, ширина досье и кнопки выводятся из размеров экрана.\n• Досье встаёт сбоку на широком окне (от 960 px) и на низком (900x520), а под картой — в портрете и в маленьком окне, где ширина дороже высоты.\n• Шаг ряда маршрута считается от высоты: на 1080p вся кампания видна целиком без прокрутки, в высоком портрете ряды расходятся до 64 px, в маленьком окне ужимаются до 40.\n• Если маршрут короче окна, он прижат к низу, но не вплотную: под актом I остаётся четверть запаса.\n• Полоса пути и печати подстраиваются под ширину: в окне уже 820 px плашка «ПЕЧАТИ СЛОМАНЫ» уступает место самим печатям, клетки дел и ромбы развилок сжимаются, «НОЧЬ N» прячется, если не влезает.\n• Сводка дела в досье больше не теряет имя стража: если в общую строку оно не влезает, ему отдаётся отдельная строка над «ЦЕЛЬю».\n• Цель в узкой колонке переносится на две строки — коробка стала выше, текст больше не вылезает за рамку.\n• Одна строка из середины брифинга больше не рисуется: если в досье влезает меньше двух строк, текст не показывается вовсе — обрыв читался как ошибка.\n• Иллюстрация дела режется по своей рамке: на низкой карточке луна и страж больше не вылезают на карту. Иллюстрация включается только там, где под неё есть место (досье от 300 px).\n• Проверено на 1920x1080, 1600x900, 1280x720, 1024x600, 900x700, 900x520, 800x600, 720x480, 1080x1920 и 720x1280.",
-            "• Разумные мобы (1% обычных врагов, метка «!») раньше были умными только на дистанции: упреждение, увёртка от снаряда, выстрел с 700 px. В упор все три тактики превращались в обычного моба — лезли в контакт и давили телом. Теперь у каждой тактики свой приём вблизи.\n• Стрелок держит зазор 168 px и пятится по диагонали; если его прижали ближе 104 px, он не стреляет в упор, а выскальзывает вбок рывком 1.5× на треть секунды (перезарядка 1.1 с) — залп без времени на реакцию был не умным боем, а нечестным.\n• Перехватчик отходит на полшага, замахивается 0.26 с и бьёт рывком 2.8× по прямой: линия удара и кольцо видны заранее, из рывка уходят шагом в сторону. Перезарядка 1.7 с.\n• Увёртливый кружит вокруг героя на кольце ~150 px, меняет сторону раз в 1.6 с и раз в 3 с ныряет к герою, чтобы не быть мебелью. Увёртка от снаряда осталась и по-прежнему важнее всего.\n• У каждого приёма есть телеграф: линия замаха со вспышкой, след рывка, дуга выскальзывания, кольцо нырка.\n• Попутно починен порог движения врага: тактика отдаёт нормализованное направление, и при float-округлении его длина бывала 0.9999999 — враг с «единичным» вектором не двигался вообще, поэтому рывок перехватчика не срабатывал.\n• Мерил симуляцией на 14 секунд: раньше все три тактики стояли в контакте 10,7–12,5 секунд из 14. Теперь стрелок не входит в контакт вообще (167–208 px, 7 с на кольце), перехватчик бьёт рывком 8 раз, увёртливый касается героя 0,4–0,6 с с пятью нырками. Разбор — design/smart_mobs_close.md, кадры приёмов — design/smart_mobs_close.png."
+            "• Разумные мобы (1% обычных врагов, метка «!») раньше были умными только на дистанции: упреждение, увёртка от снаряда, выстрел с 700 px. В упор все три тактики превращались в обычного моба — лезли в контакт и давили телом. Теперь у каждой тактики свой приём вблизи.\n• Стрелок держит зазор 168 px и пятится по диагонали; если его прижали ближе 104 px, он не стреляет в упор, а выскальзывает вбок рывком 1.5× на треть секунды (перезарядка 1.1 с) — залп без времени на реакцию был не умным боем, а нечестным.\n• Перехватчик отходит на полшага, замахивается 0.26 с и бьёт рывком 2.8× по прямой: линия удара и кольцо видны заранее, из рывка уходят шагом в сторону. Перезарядка 1.7 с.\n• Увёртливый кружит вокруг героя на кольце ~150 px, меняет сторону раз в 1.6 с и раз в 3 с ныряет к герою, чтобы не быть мебелью. Увёртка от снаряда осталась и по-прежнему важнее всего.\n• У каждого приёма есть телеграф: линия замаха со вспышкой, след рывка, дуга выскальзывания, кольцо нырка.\n• Попутно починен порог движения врага: тактика отдаёт нормализованное направление, и при float-округлении его длина бывала 0.9999999 — враг с «единичным» вектором не двигался вообще, поэтому рывок перехватчика не срабатывал.\n• Мерил симуляцией на 14 секунд: раньше все три тактики стояли в контакте 10,7–12,5 секунд из 14. Теперь стрелок не входит в контакт вообще (167–208 px, 7 с на кольце), перехватчик бьёт рывком 8 раз, увёртливый касается героя 0,4–0,6 с с пятью нырками. Разбор — design/smart_mobs_close.md, кадры приёмов — design/smart_mobs_close.png.",
+            "• ИИ игры можно было проверить только глазами: разумный моб выпадал в 1 % спавнов, то есть раз в две минуты, а нужная тактика — раз в шесть. Теперь в игре есть стенд: F9 → 14 ставит культиста, скелета и бегуна на кольца 150/190/230 px вокруг героя, F9 → 15 включает метки решений. Секретных кодов не нужно — это те же пункты дебаг-меню, что и остальные.\n• Над каждым разумным мобом видно, что он решил: «ВЫСКОЛЬЗНУЛ / ДЕРЖИТ ЗАЗОР / СБЛИЖАЕТСЯ», «РЫВОК / ЗАМАХ / ПЕРЕХВАТ», «НЫРОК / КРУГ» и дистанция до героя. Отрезок показывает фактический шаг, а не направление на героя.\n• В F3 появилась строка «ИИ»: сколько сейчас на арене разумных по тактикам, сколько элит и стрелков.\n• Перехватчик больше не приезжает в героя и не стоит в нём: после рывка он 0.55 с отходит, а вплотную без готового рывка идёт по касательной. Замах снова что-то решает: время в контакте 39–44 % → 7 %.\n• Три разумных моба больше не ходят одной стеной: сторона фланга берётся от чётности номера, половина стаи обходит слева, половина справа.\n• Стрелок не стреляет с 132 px и ближе, даже если решил отходить в этом же кадре: на замере было 1 попадание в упор на 2281 выстрел, стало 0.\n• Шанс разумного поднят с 1 % до 2 % на тактику: около 6 % спавнов вместо 3 %, разумный моб встречается не раз в две минуты, а примерно раз в десять секунд.\n• В tools/ лежат два стенда: ai_probe.cpp — бой без окна (доли времени в контакте, число приёмов, выстрелы в упор, мс на кадр) и advisor_probe.cpp — шесть проверок советника прокачки и таблицы сложности героев, с кодом возврата 1 при провале.\n• Меню отладки на 800×600 больше не обрезало последнюю строку: шаг строки считается от высоты окна.\n• Разбор с цифрами и честным списком слабых мест — design/ai_testing.md, кадры — design/ai_stand.png и design/ai_debug_menu.png."
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
@@ -11141,7 +11232,7 @@ struct Game {
         if (mouseClicked && ghov) { sound.play(SFX_CLICK, 0.02f); helpPage = 1; glossaryScroll = 0; }
     }
 
-    static constexpr int CHEAT_ITEM_COUNT = 14;
+    static constexpr int CHEAT_ITEM_COUNT = 16;
 
     static const char* cheatItemLabel(int index) {
         static const char* const labels[CHEAT_ITEM_COUNT] = {
@@ -11158,7 +11249,9 @@ struct Game {
             "ПРИЗВАТЬ СТРАЖА",
             "ПОЛНЫЙ ЗАРЯД СУПЕРУМЕНИЯ",
             "F3-ОВЕРЛЕЙ",
-            "НОВАЯ НОЧЬ (xЗОЛОТО)"
+            "НОВАЯ НОЧЬ (xЗОЛОТО)",
+            "СТЕНД ИИ: ТРИ ТАКТИКИ РЯДОМ",
+            "ИИ-МЕТКИ: РЕШЕНИЯ НА ЭКРАНЕ"
         };
         return labels[index < 0 || index >= CHEAT_ITEM_COUNT ? 0 : index];
     }
@@ -11173,8 +11266,41 @@ struct Game {
                 return names[cheatBossCycle % 6];
             }
             case 12: return debugOverlay ? "ВКЛ" : "ВЫКЛ";
+            case 14: return "A B C • 150/190/230";
+            case 15: return debugAiIntent ? "ВКЛ" : "ВЫКЛ";
             default: return "";
         }
+    }
+
+    // ── Стенд разумных мобов ────────────────────────────────────────────────
+    // Живой разумный моб появляется в 2 % спавнов, и ещё реже — нужная тактика.
+    // Проверить поведение глазами было нельзя, приходилось ждать. Стенд ставит
+    // все три тактики вокруг героя сразу.
+    void spawnSmartMobStand() {
+        if (state != STATE_PLAYING) return;
+        static const int types[3] = {3, 1, 2};   // культист, скелет, бегун
+        // Каждое нажатие ставит тройку на новую тройку углов, чтобы стенд не
+        // сваливался в одну точку при повторном вызове.
+        const float angleOffset = 0.35f + (float)(debugAiStandCycle % 4) * 0.52f;
+        ++debugAiStandCycle;
+        for (int i = 0; i < 3; ++i) {
+            const int tactic = i % 3;
+            const float a = i * 2.0943951f + angleOffset;   // 120° друг от друга
+            // Три разных кольца: сразу видно, кто держит зазор, кто идёт на
+            // перехват, а кто уже готовит нырок.
+            const float r = 150.0f + 40.0f * i;
+            spawnMonster(types[tactic], false, false);
+            if (monsters.empty()) continue;
+            Monster& m = monsters.back();
+            m.isSmart = true;
+            m.smartTactic = tactic;
+            m.smartClose = SmartCloseState();
+            m.smartClose.orbitSign = (m.uniqueId & 1) ? 1.0f : -1.0f;
+            m.x = playerX + cosf(a) * r;
+            m.y = playerY + sinf(a) * r;
+            m.shootTimer = 0.9f;
+        }
+        announce(GMSG_WORLD_EVENT, "ОТЛАДКА: СТЕНД ИИ — СТРЕЛОК, ПЕРЕХВАТЧИК, УВЁРТЛИВЫЙ", 2.6f);
     }
 
     void openCheatMenu() {
@@ -11240,6 +11366,8 @@ struct Game {
             case 11: superCharge = 100.0f; break;                 // полный заряд
             case 12: debugOverlay = !debugOverlay; break;         // F3-оверлей
             case 13: beginNewCampaignCycle(); break;              // новая ночь (xзолото)
+            case 14: spawnSmartMobStand(); break;                 // стенд ИИ: три тактики
+            case 15: debugAiIntent = !debugAiIntent; break;        // метки решений
             default: break;
         }
         writeSave();
@@ -11249,8 +11377,16 @@ struct Game {
     void renderCheatMenu(Renderer& r) {
         r.fillRect(0, 0, SCREEN_W, SCREEN_H, 0xFF05040A, 214);
         const int w = std::min(660, SCREEN_W - 40);
-        const int rowStep = 32;
-        const int h = std::min(SCREEN_H - 32, 118 + CHEAT_ITEM_COUNT * rowStep);
+        // Шаг строки подстраивается под высоту окна: после пятнадцатого пункта
+        // (стенд ИИ) меню перестало влезать в 800×600 и последняя строка
+        // обрезалась. Если места всё равно не хватает, список идёт за выбором.
+        const int h = std::min(SCREEN_H - 32, 118 + CHEAT_ITEM_COUNT * 32);
+        const int rowsArea = h - 76 - 12;
+        const int rowStep = std::max(22, std::min(32, rowsArea / CHEAT_ITEM_COUNT));
+        const int rowH = std::max(17, rowStep - 6);
+        const int visibleRows = std::max(1, rowsArea / rowStep);
+        int firstRow = 0;
+        if (cheatSelection >= visibleRows) firstRow = cheatSelection - visibleRows + 1;
         const int x = (SCREEN_W - w) / 2, y = (SCREEN_H - h) / 2;
         r.fillRoundedRect(x, y, w, h, 12, 0xFF14101F, 250);
         r.drawRoundedRect(x, y, w, h, 12, 0xFFFF7A83, 2);
@@ -11258,23 +11394,25 @@ struct Game {
         r.drawTextCentered(FONT_SMALL, x + w / 2, y + 48,
                            "↑ / ↓ — СТРОКА  •  ENTER — ВЫПОЛНИТЬ  •  1…9, 0 — БЫСТРО  •  ESC — ЗАКРЫТЬ  (БОЙ ЗАМЕР)",
                            0xFFC6BBD8, false);
-        for (int i = 0; i < CHEAT_ITEM_COUNT; ++i) {
-            const int iy = y + 76 + i * rowStep;
-            if (iy + 28 > y + h - 12) break;
-            const bool hov = mouseX >= x + 20 && mouseX <= x + w - 20 && mouseY >= iy && mouseY <= iy + 26;
+        for (int i = firstRow; i < CHEAT_ITEM_COUNT; ++i) {
+            const int iy = y + 76 + (i - firstRow) * rowStep;
+            if (iy + rowH + 2 > y + h - 12) break;
+            const bool hov = mouseX >= x + 20 && mouseX <= x + w - 20 && mouseY >= iy && mouseY <= iy + rowH;
             const bool sel = (i == cheatSelection);
-            r.fillRoundedRect(x + 20, iy, w - 40, 26, 6,
+            const int textY = iy + (rowH - 11) / 2;
+            r.fillRoundedRect(x + 20, iy, w - 40, rowH, 6,
                               sel ? 0xFF3F2C60 : (hov ? 0xFF32254C : 0xFF1D1729));
-            r.drawRoundedRect(x + 20, iy, w - 40, 26, 6,
+            r.drawRoundedRect(x + 20, iy, w - 40, rowH, 6,
                               sel ? 0xFFFFD858 : (hov ? 0xFFFFE068 : 0xFF4A3F63), sel ? 2 : 1);
             char label[128];
             if (i < 10) snprintf(label, sizeof(label), "%d  %s", i + 1, cheatItemLabel(i));
             else snprintf(label, sizeof(label), "    %s", cheatItemLabel(i));
-            r.drawText(FONT_SMALL, x + 34, iy + 6, label, sel ? 0xFFFFF2C8 : 0xFFE8E1F0, false);
+            r.drawText(FONT_SMALL, x + 34, textY, label, sel ? 0xFFFFF2C8 : 0xFFE8E1F0, false);
             const std::string state = cheatItemState(i);
             if (!state.empty())
-                r.drawTextRight(FONT_SMALL, x + w - 34, iy + 6, state.c_str(),
-                                (i == 5 && cheatGodMode) || (i == 12 && debugOverlay) ? 0xFF8AF0AE : 0xFFB9ADCC, false);
+                r.drawTextRight(FONT_SMALL, x + w - 34, textY, state.c_str(),
+                                (i == 5 && cheatGodMode) || (i == 12 && debugOverlay) || (i == 15 && debugAiIntent)
+                                    ? 0xFF8AF0AE : 0xFFB9ADCC, false);
             // Клик срабатывает только по своей строке: раньше условие захватывало
             // и подсвеченную клавиатурой строку, поэтому клик мимо пункта запускал её.
             if (mouseClicked && hov) { cheatSelection = i; runCheat(i); }
