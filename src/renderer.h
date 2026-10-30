@@ -15,6 +15,26 @@
 static int SCREEN_W = 1280;
 static int SCREEN_H = 720;
 
+// Логический размер кадра: во что игра рисует и что потом растягивается на окно.
+// Высота (в альбоме) и ширина (в портрете) держатся на 720 px, поэтому плотность
+// мира не зависит от монитора, а видимая площадь — зависит от соотношения сторон.
+// Это же число, а не размер окна, определяет, где кончается экран: «за краем»
+// значит «за пределами этих пикселей». Одна функция на игру и на стенды, иначе
+// тест меряет не то, что видит игрок.
+inline void logicalScreenSize(int clientW, int clientH, int& outW, int& outH) {
+    if (clientW < 240 || clientH < 240) { outW = SCREEN_W; outH = SCREEN_H; return; }
+    const double aspect = (double)clientW / (double)clientH;
+    if (aspect >= 1.0) {
+        const int h = 720;
+        outH = h;
+        outW = std::max(640, ((int)(h * aspect + 8.0) / 16) * 16);
+    } else {
+        const int w = 720;
+        outW = w;
+        outH = std::max(720, ((int)(w / aspect + 8.0) / 16) * 16);
+    }
+}
+
 inline uint32_t makeRGB(int r, int g, int b) {
     r = r < 0 ? 0 : (r > 255 ? 255 : r);
     g = g < 0 ? 0 : (g > 255 ? 255 : g);

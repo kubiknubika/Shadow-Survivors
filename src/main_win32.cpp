@@ -24,15 +24,8 @@ static void updateViewportRect(int clientW, int clientH) {
     if (clientW < 240 || clientH < 240) return;
     g_winW = clientW; g_winH = clientH;
     g_viewX = 0; g_viewY = 0; g_viewW = g_winW; g_viewH = g_winH;
-    const double aspect = (double)g_winW / (double)g_winH;
     int logicalW, logicalH;
-    if (aspect >= 1.0) {
-        logicalH = 720;
-        logicalW = std::max(640, ((int)(logicalH * aspect + 8.0) / 16) * 16);
-    } else {
-        logicalW = 720;
-        logicalH = std::max(720, ((int)(logicalW / aspect + 8.0) / 16) * 16);
-    }
+    logicalScreenSize(g_winW, g_winH, logicalW, logicalH);
     if (SCREEN_W != logicalW || SCREEN_H != logicalH) {
         SCREEN_W = logicalW; SCREEN_H = logicalH;
         g_renderer.resize(SCREEN_W, SCREEN_H);
