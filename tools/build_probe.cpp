@@ -15,6 +15,13 @@
 //      он живёт. Это единственный замер, где защитные вложения что-то значат.
 //   3. «Герои» — один и тот же билд и поток за пять героев.
 //   4. «Стиль» — стоять или кайтить по кругу на одном билде.
+//   5. «Решения» — сколько прокачек успевает дать забег (сбор опыта).
+//   6. «Матрица разнообразия» — 7 оружий × 3 способа добрать третий слот.
+//   7. «Артефакты» — что ускоряет зачистку живой волны.
+//   8. «Каталог билдов» — что реально собирается в окне 0–5 / 5–10 / 10–15 мин.
+//      Каждая сборка считается дважды: все ранги сразу и по одной прокачке,
+//      когда предмет уже открыт. Смертность здесь выключена: вопрос про состав,
+//      а не про «сколько прожил». Картинка — weapon_chart --catalog.
 //
 // Все сборки получают одинаковый бюджет — 17 рангов. Это не «сильная» сборка
 // против «слабой», а разные способы потратить одно и то же.
@@ -152,17 +159,34 @@ static RunResult runStream(Game& g, const Build& build, float seconds, bool mort
     return res;
 }
 
+// Честная сборка: ранг из списка выдаётся только тогда, когда игра сама дала
+// прокачку, предмет уже открыт по времени и его не держит потолок ранга
+// (девятый ранг оружия требует резонансной реликвии IV). Если пункт списка
+// заблокирован — попытка уходит следующему, а не сгорает.
+static void tryRampStep(Game& g, const std::vector<ItemRank>& order) {
+    for (const ItemRank& ir : order) {
+        if (g.itemLevels[ir.id] >= ir.rank) continue;
+        if (!g.isItemUnlocked(ir.id)) return;                  // ещё не открылся — ждём
+        if (g.itemLevels[ir.id] >= g.getItemMaxLevel(ir.id)) continue;   // потолок — ниже по списку
+        const int before = g.itemLevels[ir.id];
+        g.applyUpgrade(ir.id);
+        if (g.itemLevels[ir.id] > before) return;
+    }
+}
+
 // Настоящий забег: штатный спавн игры, герой смертен и не двигается сам.
 // Это единственный замер, где сложность растёт так же, как в игре, поэтому он
 // и годен для ответа «какая сборка доживает дальше».
 static RunResult runReal(Game& g, const Build& build, float seconds, bool mortal,
-                         float moveSpeed, bool collect = false) {
+                         float moveSpeed, bool collect = false, bool ramp = false) {
     RunResult res;
     const float dt = 1.0f / 60.0f;
     resetArena(g, true);
     g.cheatGodMode = !mortal;
     g.playerHp = g.playerMaxHp;
-    for (const ItemRank& item : build.items) g.itemLevels[item.id] = item.rank;
+    if (!ramp) for (const ItemRank& item : build.items) g.itemLevels[item.id] = item.rank;
+    // Первый предмет — тот, с которым игрок начинает забег (первый же выбор драфта).
+    else if (!build.items.empty()) g.applyUpgrade(build.items[0].id);
     for (int i = 0; i < 7; ++i) g.weaponTimers[i] = 0.0f;
     for (int i = 0; i < 4; ++i) g.tierWeaponTimers[i] = 0.0f;
     g.checkSymbiosis();
@@ -173,6 +197,12 @@ static RunResult runReal(Game& g, const Build& build, float seconds, bool mortal
     int levelUps = 0;
     float orbit = 0.0f;
     for (int f = 0; f < frames; ++f) {
+        if (ramp) {
+            // Слоты сборки растут от убитых стражей. Здесь стражи не спавнятся
+            // (nextBossIndex=999), поэтому их вклад подаётся по расписанию игры:
+            // босс приходит на 90-й, 180-й, 270-й секунде и т.д.
+            g.runBossKills = std::min(4, (int)(g.runTime / 90.0f));
+        }
         if (collect) {
             // Идёт к ближайшему самоцвету: без сбора опыта забег не даёт прокачек,
             // а вопрос «сколько решений успевает принять игрок» без этого не измерить.
@@ -198,7 +228,11 @@ static RunResult runReal(Game& g, const Build& build, float seconds, bool mortal
         // Модальное окно прокачки засчитывается как решение, но не применяется:
         // иначе заданная сборка расползлась бы случайными картами и сравнение
         // «равный бюджет» перестало бы быть равным.
-        if (g.state == STATE_LEVELUP) { ++levelUps; g.state = STATE_PLAYING; }
+        if (g.state == STATE_LEVELUP) {
+            ++levelUps;
+            g.state = STATE_PLAYING;
+            if (ramp) tryRampStep(g, build.items);
+        }
         g.state = STATE_PLAYING;
         g.update(dt);
         aliveSum += (long long)g.monsters.size();
@@ -261,14 +295,19 @@ static WaveResult runWave(Game& g, int weaponId, int weaponLevel, int artifactId
 // Один и тот же забег на трёх зёрнах. Одно зерно давало разброс до ±40 % на
 // «сколько прожил» у оружия, которое зависит от крит-бросков (топор, шар), и
 // выдавало удачу за стратегию. Теперь в таблицах — среднее, а разброс печатается.
-struct SeedAvg { RunResult mean; double survivedMin = 1e9, survivedMax = 0.0; };
+struct SeedAvg {
+    RunResult mean;
+    double survivedMin = 1e9, survivedMax = 0.0;
+    int lastLevelUps = 0;      // прокачки последнего зерна — с ним и печатается состав
+};
 
 static SeedAvg runRealSeeds(Game& g, const Build& build, float seconds, float moveSpeed,
-                            bool collect = false, int seeds = 3) {
+                            bool collect = false, int seeds = 3, bool ramp = false,
+                            bool mortal = true) {
     SeedAvg out;
     for (int s = 0; s < seeds; ++s) {
         srand(20260201 + s);
-        RunResult r = runReal(g, build, seconds, true, moveSpeed, collect);
+        RunResult r = runReal(g, build, seconds, mortal, moveSpeed, collect, ramp);
         out.mean.survived += r.survived / seeds;
         out.mean.kills += (double)r.kills / seeds;
         out.mean.damage += r.damage / seeds;
@@ -278,8 +317,67 @@ static SeedAvg runRealSeeds(Game& g, const Build& build, float seconds, float mo
         out.mean.hpLeft += r.hpLeft / seeds;
         out.survivedMin = std::min(out.survivedMin, r.survived);
         out.survivedMax = std::max(out.survivedMax, r.survived);
+        out.lastLevelUps = r.levelUps;
     }
     return out;
+}
+
+// ── Каталог билдов: что можно собрать в каждом окне забега ────────────────────
+//
+// Бюджет — не выдуманный: это замеренное число прокачек на 5-й, 10-й и 15-й
+// минуте (17 / 30 / 39, блок 5). Уровни предметов ограничены тем, что открыто
+// по времени: до 5-й минуты почти всё — тир I, к 10-й открываются тиры II–III,
+// к 15-й — IV–V.
+struct CatalogBuild {
+    const char* name;
+    const char* idea;
+    std::vector<ItemRank> items;
+};
+struct Epoch {
+    const char* title;
+    float seconds;
+    std::vector<CatalogBuild> builds;
+};
+
+static std::vector<Epoch> makeCatalog() {
+    // Правило отбора: предмет должен открыться не позже чем за 2 минуты до конца
+    // окна, иначе его ранги физически не успеть получить. В эпоху 1 открыто
+    // только базовое (тир I, id 0..15 плюс 16 на 3-й минуте), в эпоху 2 — тиры
+    // II–III, в эпоху 3 — всё, кроме Звезды Пепла (27 открывается на 13-й
+    // минуте, на её ранги остаётся меньше двух минут).
+    //
+    // Порядок внутри сборки — порядок вложений: оружие, его резонанс, затем
+    // остальное по времени открытия. Поздний тир в начале списка означал бы,
+    // что прокачки до его открытия сгорают впустую (в игре окно выбора не ждёт).
+    return {
+        {"ЭПОХА 1: 0–5 мин, 17 прокачек, тир I и Печать Сердца на 3-й минуте", 300.0f, {
+            {"Клинки-симбиоз",   "глубина в одно оружие",       {{0, 9}, {7, 4}, {11, 4}}},
+            {"Клинки-темп",      "клинки + частота",            {{0, 8}, {11, 4}, {12, 5}}},
+            {"Молния-заряд",     "клинки молний + супер",       {{3, 8}, {11, 2}, {12, 2}, {15, 5}}},
+            {"Аура-танк",        "HP + урон вблизи",            {{4, 9}, {10, 4}, {11, 4}}},
+            {"Ширина",           "два оружия и книга",          {{0, 6}, {1, 6}, {7, 5}}},
+            {"Феникс-страховка", "воскрешение + HP",            {{0, 8}, {14, 2}, {10, 4}, {11, 3}}},
+            {"Экономист",        "опыт, золото, магнит",        {{0, 8}, {7, 4}, {9, 2}, {13, 3}}},
+        }},
+        {"ЭПОХА 2: 5–10 мин, 30 прокачек, открылись тиры II–III", 600.0f, {
+            {"Гроза",            "молния + урон элитам",        {{3, 9}, {10, 4}, {11, 5}, {15, 3}, {12, 3}, {16, 3}, {20, 3}}},
+            {"Ожог",             "вихрь + поджог критом",       {{2, 9}, {9, 4}, {11, 5}, {16, 3}, {12, 3}, {17, 3}, {34, 3}}},
+            {"Перекрёстный",     "два оружия + рикошет",        {{0, 6}, {1, 6}, {11, 4}, {12, 4}, {15, 4}, {17, 3}, {33, 3}}},
+            {"Переполнение",     "аура + щит из лечения",       {{4, 9}, {11, 4}, {10, 4}, {12, 4}, {16, 3}, {22, 3}, {30, 3}}},
+            {"Топор-пробитие",   "топор + радиус и линза",      {{5, 9}, {12, 4}, {11, 5}, {10, 4}, {20, 3}, {17, 2}, {18, 3}}},
+            {"Лёд-контроль",     "кольцо + линза и руна",       {{6, 9}, {13, 4}, {12, 4}, {11, 4}, {10, 4}, {21, 2}, {18, 3}}},
+            {"Вихрь-линза",      "вихрь + радиус и крит",       {{2, 9}, {9, 4}, {11, 5}, {12, 4}, {15, 2}, {17, 3}, {18, 3}}},
+            {"Супер-цикл",       "супер каждые полминуты",      {{3, 9}, {10, 4}, {11, 5}, {15, 5}, {12, 1}, {16, 3}, {17, 3}}},
+        }},
+        {"ЭПОХА 3: 10–15 мин, 39 прокачек, открылись тиры IV–V", 900.0f, {
+            {"Казнь",            "молния + добивание Палача",   {{3, 9}, {10, 6}, {11, 6}, {12, 6}, {15, 3}, {16, 3}, {17, 3}, {37, 3}}},
+            {"Возмездие",        "топор + контрудар за HP",     {{5, 9}, {12, 6}, {11, 6}, {10, 6}, {17, 3}, {19, 3}, {23, 3}, {38, 3}}},
+            {"Морозный взрыв",   "лёд + откол Оттепели",        {{6, 9}, {13, 5}, {12, 6}, {11, 6}, {10, 4}, {18, 3}, {35, 3}}},
+            {"Симбиоз-печать",   "клинки + Печать Разоблачения", {{0, 9}, {7, 4}, {11, 6}, {12, 6}, {15, 3}, {16, 3}, {17, 3}, {29, 3}}},
+            {"Крит-суперкрит",   "крит, ожог, Осколок Луны",    {{0, 9}, {7, 4}, {11, 6}, {12, 6}, {15, 5}, {16, 3}, {17, 3}, {34, 3}}},
+            {"Танк-возмездие",   "аура, щиты, контрудар",       {{4, 9}, {11, 6}, {10, 6}, {12, 6}, {22, 3}, {23, 3}, {30, 3}, {38, 3}}},
+        }},
+    };
 }
 
 static Build bladeBuild() {
@@ -449,6 +547,46 @@ int main(int argc, char** argv) {
     }
     printf("  лучший: %s — зачистка быстрее на %.0f%%\n", bestName.c_str(), bestDelta);
     printf("  худший: %s — медленнее на %.0f%%\n", worstName.c_str(), -worstDelta);
+
+    printf("\n8. КАТАЛОГ БИЛДОВ: что реально можно собрать в каждом окне забега\n");
+    printf("   бюджет = замеренное число прокачек (17 / 30 / 39), предметы — из открытых к этому времени тиров\n");
+    printf("   слева — сборка стоит с нуля секунды; справа — те же ранги, но выдаются по одной прокачке,\n");
+    printf("   только когда предмет открылся и игра сама дала уровень: так игрок и собирает\n");
+    for (const Epoch& epoch : makeCatalog()) {
+        printf("\n  %s\n", epoch.title);
+        printf("  %-24s %-30s %7s %7s | %7s %7s %8s\n", "билд", "идея", "убито", "урон", "убито", "урон", "пик живых");
+        for (const CatalogBuild& cb : epoch.builds) {
+            Build build = {cb.name, cb.idea, cb.items};
+            // Сборка, которая не ходит за опытом, не получает прокачек — поэтому
+            // в каталоге обе версии собирают опыт с той же скоростью героя:
+            // разница между ними только в том, когда приходят ранги.
+            // Смертность здесь выключена намеренно: вопрос каталога — успевает ли
+            // сборка собраться и сколько она сносит к концу окна, а не «сколько
+            // прожил». Выживание замерено отдельно (герои, стиль, 2.10.44):
+            // подсадка смертности на неполной сборке мерила бы первые 15 секунд
+            // забега, а не силу билда.
+            const float collectSpeed = HERO_DEFS[0].moveSpeed;
+            SeedAvg instant = runRealSeeds(g, build, epoch.seconds, collectSpeed, true, 3, false, false);
+            SeedAvg honest = runRealSeeds(g, build, epoch.seconds, collectSpeed, true, 3, true, false);
+            RunResult ri = instant.mean, rh = honest.mean;
+            int ranks = 0;
+            for (int i = 0; i < ITEM_COUNT; ++i) ranks += g.itemLevels[i];
+            printf("  %-24s %-30s %7.0f %7.0f | %7.0f %7.0f %8.0f  (ур. %d, рангов %d)\n",
+                   cb.name, cb.idea, (double)ri.kills, (double)ri.damage,
+                   (double)rh.kills, (double)rh.damage, (double)rh.peakAlive,
+                   honest.lastLevelUps, ranks);
+            printf("      собрано к концу:");
+            for (int i = 0; i < ITEM_COUNT; ++i)
+                if (g.itemLevels[i] > 0) printf(" %d:%d", i, g.itemLevels[i]);
+            printf("\n");
+            if (csv) fprintf(csv, "catalog,%s,%.1f,%d,%.0f,%.1f,%d,%d,%.2f\n", cb.name,
+                             ri.survived, ri.kills, ri.damage, ri.avgAlive,
+                             ri.peakAlive, ri.aliveEnd, ri.hpLeft);
+            if (csv) fprintf(csv, "catalogramp,%s,%.1f,%d,%.0f,%.1f,%d,%d,%.2f\n", cb.name,
+                             rh.survived, rh.kills, rh.damage, rh.avgAlive,
+                             rh.peakAlive, rh.aliveEnd, rh.hpLeft);
+        }
+    }
 
     if (csv) fclose(csv);
     if (failures) { printf("\nПРОВАЛОВ: %d\n", failures); return 1; }

@@ -547,6 +547,142 @@ static void drawMatrix(Renderer& r, const std::vector<StratRow>& rows) {
     }
 }
 
+
+// ── Режим каталога: 21 сборка в трёх окнах забега ───────────────────────────
+//     build/build_probe 60 300 /tmp/build.csv
+//     build/weapon_chart /tmp/weapon_after.csv design/builds_catalog.ppm --catalog /tmp/build.csv
+// Полоса — убийства к концу окна. В CSV две строки на сборку: catalog — ранги
+// стоят с нулевой секунды (потолок), catalogramp — те же ранги, выданные по
+// одной прокачке (честная сборка). Тёмная часть полосы — потолок, светлая —
+// честная сборка; разница между ними и есть цена позднего прихода карт.
+static void drawCatalog(Renderer& r, const std::vector<StratRow>& rows) {
+    r.drawText(FONT_LARGE, 40, 20, "КАТАЛОГ СБОРОК: ЧТО РЕАЛЬНО СОБИРАЕТСЯ ЗА 5, 10 И 15 МИНУТ", 0xFFFFE6A8);
+    r.drawText(FONT_SMALL, 40, 56,
+               "стенд tools/build_probe.cpp: 21 сборка из существующих 40 предметов, три зерна, герой бессмертен (меряется состав, а не выживание)",
+               0xFF9C93B4, false);
+    r.drawText(FONT_SMALL, 40, 76,
+               "цифры справа от полосы — убийства к концу окна и пик живых врагов; тёмный хвост полосы — потолок, если бы все ранги пришли на нулевой секунде",
+               0xFF9C93B4, false);
+
+    std::vector<const StratRow*> honest, ceiling;
+    for (const StratRow& row : rows) {
+        if (row.kind == "catalogramp") honest.push_back(&row);
+        else if (row.kind == "catalog") ceiling.push_back(&row);
+    }
+    if (honest.empty() || honest.size() != ceiling.size()) {
+        r.drawText(FONT_MED, 40, 130, "в CSV нет строк catalog/catalogramp — пересоберите стенд", 0xFFE07A7A, false);
+        return;
+    }
+
+    struct EpochDef { const char* title; const char* budget; int first; int count; };
+    const EpochDef epochs[3] = {
+        {"0–5 МИНУТ", "15–17 прокачек, открыт тир I", 0, 7},
+        {"5–10 МИНУТ", "25–28 прокачек, открылись тиры II–III", 7, 8},
+        {"10–15 МИНУТ", "33–37 прокачек, открылись тиры IV–V", 15, 6},
+    };
+    const int colW = 512, labelW = 196, barW = 190, rowH = 30;
+
+    for (int e = 0; e < 3; ++e) {
+        const EpochDef& def = epochs[e];
+        const int x = 40 + e * colW;
+        double maxKills = 1.0;
+        for (int i = def.first; i < def.first + def.count && i < (int)ceiling.size(); ++i)
+            maxKills = std::max(maxKills, (double)ceiling[i]->kills);
+        r.drawText(FONT_MED, x, 110, def.title, 0xFFFFD79A);
+        r.drawText(FONT_SMALL, x + 4, 132, def.budget, 0xFF8E84A8, false);
+        int y = 158;
+        for (int i = def.first; i < def.first + def.count && i < (int)honest.size(); ++i) {
+            const StratRow* h = honest[i];
+            const StratRow* c = ceiling[i];
+            r.drawText(FONT_SMALL, x, y + 2, wallName(h->name).c_str(), 0xFFD8D0EA, false);
+            const int full = (int)(barW * std::min(1.0, (double)c->kills / maxKills));
+            const int fill = (int)(barW * std::min(1.0, (double)h->kills / maxKills));
+            r.fillRect(x + labelW, y, barW, 17, 0xFF1B1728);
+            r.fillRect(x + labelW, y, std::max(2, full), 17, 0xFF3A586E);
+            r.fillRect(x + labelW, y, std::max(2, fill), 17, 0xFF57C9A0);
+            char buf[48];
+            snprintf(buf, sizeof(buf), "%d", h->kills);
+            r.drawText(FONT_SMALL, x + labelW + barW + 8, y + 1, buf, 0xFFF4EEFF, false);
+            snprintf(buf, sizeof(buf), "%d", h->peak);
+            r.drawText(FONT_SMALL, x + labelW + barW + 76, y + 1, buf, 0xFF8E84A8, false);
+            y += rowH;
+        }
+    }
+
+    // Итоги считаются из данных, а не переписаны руками.
+    double sumGap = 0.0, maxGap = 0.0;
+    std::string maxGapName;
+    int peakLo = 1 << 30, peakHi = 0;
+    for (size_t i = 0; i < honest.size(); ++i) {
+        const double gap = ceiling[i]->kills > 0
+            ? 100.0 * (ceiling[i]->kills - honest[i]->kills) / (double)ceiling[i]->kills : 0.0;
+        sumGap += gap;
+        if (gap > maxGap) { maxGap = gap; maxGapName = wallName(honest[i]->name); }
+        peakLo = std::min(peakLo, honest[i]->peak);
+        peakHi = std::max(peakHi, honest[i]->peak);
+    }
+    char line[320];
+    r.drawText(FONT_MED, 40, 434, "ЧТО ВИДНО", 0xFFE8DCFF);
+    int y = 468;
+    snprintf(line, sizeof(line), "• Поздний приход карт стоит %.1f %% убийств в среднем; хуже всех «%s» — %.0f %%. Сборка не рушится от того, что карты пришли позже.",
+             sumGap / (double)honest.size(), maxGapName.c_str(), maxGap);
+    r.drawText(FONT_SMALL, 46, y, line, 0xFFBFB4D8, false); y += 24;
+    static const char* epochNames[3] = {"5 мин", "10 мин", "15 мин"};
+    snprintf(line, sizeof(line), "• Внутри окна разброс убийств: %s — ", epochNames[0]);
+    {
+        std::string spread;
+        for (int e = 0; e < 3; ++e) {
+            const EpochDef& def = epochs[e];
+            int lo = 1 << 30, hi = 0;
+            for (int i = def.first; i < def.first + def.count && i < (int)honest.size(); ++i) {
+                lo = std::min(lo, honest[i]->kills);
+                hi = std::max(hi, honest[i]->kills);
+            }
+            char part[64];
+            snprintf(part, sizeof(part), "%s%s %.0f %%", e ? ", " : "", epochNames[e],
+                     100.0 * (hi - lo) / std::max(1, lo));
+            spread += part;
+        }
+        snprintf(line, sizeof(line), "• Внутри окна разброс убийств: %s. До 5-й минуты билд почти неразличим, после — решает.", spread.c_str());
+    }
+    r.drawText(FONT_SMALL, 46, y, line, 0xFFBFB4D8, false); y += 24;
+    snprintf(line, sizeof(line), "• Затор в толпе гуляет от %d до %d живых: сборки с заморозкой и отталкиванием держат поле, чистый урон копит.", peakLo, peakHi);
+    r.drawText(FONT_SMALL, 46, y, line, 0xFFBFB4D8, false); y += 24;
+    r.drawText(FONT_SMALL, 46, y, "• Планы на 30 и 39 рангов не влезают: за окно игра выдаёт 15–17, 25–28 и 33–37 прокачек — последние карты приходят после закрытия окна.", 0xFFBFB4D8, false); y += 24;
+    r.drawText(FONT_SMALL, 46, y, "• Опыт — тоже ресурс билда: самая сильная сборка получает 17.5 / 30.5 / 39.0 прокачек там, где средняя — 17 / 26 / 37.", 0xFFBFB4D8, false); y += 36;
+
+    r.drawText(FONT_MED, 40, y, "ЧЕГО В ИГРЕ НЕТ (подробно — design/builds_catalog.md)", 0xFFE8DCFF);
+    y += 30;
+    static const char* gaps[4] = {
+        "• Билда на щит: щит дают только Покров и Чаша, «щит за убийство» отсутствует.",
+        "• Золото в забеге ничего не покупает: монета — 4 ранга в ноль боевой ценности.",
+        "• Добивание не архетип: Палач капут на 3 рангах и не работает по стражам.",
+        "• Нет отражения, дальнего боя, призыва и складывающегося урона по времени.",
+    };
+    for (int i = 0; i < 4; ++i) {
+        r.drawText(FONT_SMALL, 46, y, gaps[i], 0xFF9C93B4, false);
+        y += 20;
+    }
+
+    // Пустое место внизу — под правила, из которых эти сборки и складываются.
+    const int ry = 724;
+    r.drawText(FONT_MED, 40, ry, "ПЯТЬ ПРАВИЛ, ИЗ КОТОРЫХ СКЛАДЫВАЕТСЯ ЛЮБОЙ БИЛД", 0xFFE8DCFF);
+    static const char* rules[5] = {
+        "1. Бюджет окна: 15–17 / 25–28 / 33–37 прокачек. План на 39 рангов в 15 минут не влезает.",
+        "2. Опыт — ресурс: быстрее убиваешь — больше карт. Слабый старт отстаёт навсегда.",
+        "3. Девятый ранг оружия существует только вместе с резонансной реликвией IV.",
+        "4. Поздний предмет в начале плана сжигает прокачки: окно выбора не ждёт открытия.",
+        "5. Слоты: 5 + стражи + уровень/10. К 15-й минуте это 8–9 предметов, а не «всё открытое».",
+    };
+    for (int i = 0; i < 5; ++i) {
+        r.drawText(FONT_SMALL, 46, ry + 30 + i * 20, rules[i], 0xFF9C93B4, false);
+    }
+
+    r.drawText(FONT_SMALL, 40, 866,
+               "полный разбор каждой сборки с составом и числами — design/builds_catalog.md; стенд — tools/build_probe.cpp, блок 8",
+               0xFF8E84A8, false);
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) { printf("usage: weapon_chart <in.csv> <out.ppm> [--variety <clear.csv>]\n"); return 1; }
     std::vector<Row> rows;
@@ -587,6 +723,23 @@ int main(int argc, char** argv) {
             fwrite(rgb, 1, 3, sf);
         }
         fclose(sf);
+        printf("%s\n", argv[2]);
+        return 0;
+    }
+
+    if (argc >= 5 && !strcmp(argv[3], "--catalog")) {
+        std::vector<StratRow> strat;
+        if (!readStrategyCsv(argv[4], &strat)) return 1;
+        drawCatalog(r, strat);
+        FILE* cf = fopen(argv[2], "wb");
+        if (!cf) { printf("не записать %s\n", argv[2]); return 1; }
+        fprintf(cf, "P6\n%d %d\n255\n", SCREEN_W, SCREEN_H);
+        for (int i = 0; i < SCREEN_W * SCREEN_H; ++i) {
+            const uint32_t c = r.pixels[i];
+            unsigned char rgb[3] = {(unsigned char)((c >> 16) & 0xFF), (unsigned char)((c >> 8) & 0xFF), (unsigned char)(c & 0xFF)};
+            fwrite(rgb, 1, 3, cf);
+        }
+        fclose(cf);
         printf("%s\n", argv[2]);
         return 0;
     }
