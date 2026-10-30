@@ -261,6 +261,292 @@ static void drawVariety(Renderer& r, const std::vector<Row>& weapons, const std:
                "но в живом бою решает не это: см. время зачистки слева", 0xFF8E84A8, false);
 }
 
+
+// ── Режим стратегии: картинка из стенда build_probe ───────────────────────────
+//
+//     g++ -O2 -std=c++17 -Isrc tools/build_probe.cpp -o build/build_probe
+//     build/build_probe 60 300 /tmp/build.csv
+//     g++ -O2 -std=c++17 -Isrc tools/weapon_chart.cpp -o build/weapon_chart
+//     build/weapon_chart /tmp/weapon_after.csv design/weapons_strategy.ppm \
+//         --strategy /tmp/build.csv
+struct StratRow {
+    std::string kind, name;
+    double survived = 0.0;
+    int kills = 0;
+    double damage = 0.0;
+    int peak = 0;
+};
+
+static std::vector<std::string> splitComma(const char* line) {
+    std::vector<std::string> out;
+    const char* p = line;
+    while (*p) {
+        const char* c = strchr(p, ',');
+        if (!c) {
+            std::string tail(p);
+            while (!tail.empty() && (tail.back() == '\n' || tail.back() == '\r')) tail.pop_back();
+            out.push_back(tail);
+            break;
+        }
+        out.emplace_back(p, (size_t)(c - p));
+        p = c + 1;
+    }
+    return out;
+}
+
+static bool readStrategyCsv(const char* path, std::vector<StratRow>* rows) {
+    FILE* f = fopen(path, "r");
+    if (!f) { printf("не открыть %s\n", path); return false; }
+    char line[512];
+    bool header = true;
+    while (fgets(line, sizeof(line), f)) {
+        if (header) { header = false; continue; }
+        const std::vector<std::string> f7 = splitComma(line);
+        if (f7.size() < 6) continue;
+        StratRow row;
+        row.kind = f7[0];
+        row.name = f7[1];
+        row.survived = atof(f7[2].c_str());
+        row.kills = atoi(f7[3].c_str());
+        row.damage = atof(f7[4].c_str());
+        row.peak = (int)atof(f7[6].c_str());
+        rows->push_back(row);
+    }
+    fclose(f);
+    return !rows->empty();
+}
+
+// Имя для картинки: в шрифте нет стрелки, поэтому «->».
+static std::string wallName(std::string s) {
+    const std::string arrow = "→";
+    for (size_t at = s.find(arrow); at != std::string::npos; at = s.find(arrow, at)) s.replace(at, arrow.size(), "->");
+    return s;
+}
+
+// «стартовая сборка (0:1) -> БЬЁРН» на картинке нужно как «БЬЁРН».
+static std::string afterArrow(const std::string& s) {
+    const std::string arrow = "-> ";
+    const size_t at = s.find(arrow);
+    return at == std::string::npos ? s : s.substr(at + arrow.size());
+}
+
+static const StratRow* findRow(const std::vector<StratRow>& rows, const char* kind, const char* prefix) {
+    for (const StratRow& row : rows)
+        if (row.kind == kind && row.name.rfind(prefix, 0) == 0) return &row;
+    return nullptr;
+}
+
+static void drawBars(Renderer& r, int x, int y, int labelW, int barW, const char* title,
+                     const std::vector<const StratRow*>& items, bool secondsMode, uint32_t color) {
+    r.drawText(FONT_MED, x, y, title, 0xFFE8DCFF);
+    double maxV = 1.0;
+    for (const StratRow* item : items) maxV = std::max(maxV, secondsMode ? item->survived : (double)item->kills);
+    int rowY = y + 34;
+    for (const StratRow* item : items) {
+        const double v = secondsMode ? item->survived : (double)item->kills;
+        const int w = (int)(barW * (v / maxV));
+        r.drawText(FONT_SMALL, x, rowY + 2, wallName(item->name).c_str(), 0xFFCFC4E4, false);
+        r.fillRect(x + labelW, rowY, barW, 18, 0xFF221C33);
+        r.fillRect(x + labelW, rowY, std::max(2, w), 18, color);
+        char buf[32];
+        if (secondsMode) snprintf(buf, sizeof(buf), "%.0f с", v);
+        else snprintf(buf, sizeof(buf), "%d", (int)v);
+        r.drawText(FONT_SMALL, x + labelW + barW + 10, rowY + 2, buf, 0xFFF4EEFF, false);
+        rowY += 26;
+    }
+}
+
+static void drawStrategy(Renderer& r, const std::vector<StratRow>& rows) {
+    r.drawText(FONT_LARGE, 40, 22, "СТРАТЕГИЯ: ЧТО ДАЮТ ОДНИ И ТЕ ЖЕ 17 РАНГОВ ВЛОЖЕНИЙ", 0xFFFFE6A8);
+    r.drawText(FONT_SMALL, 40, 58,
+               "стенд tools/build_probe.cpp: 12 сборок с равным бюджетом, фиксированное зерно, поток 8 мобов/с, здоровье как на 10-й минуте",
+               0xFF9C93B4, false);
+    r.drawText(FONT_SMALL, 40, 78,
+               "слева герой бессмертен (меряется темп), справа смертен (меряется, сколько он живёт); справа 300 с — предел замера, а не «ровно столько и умер»",
+               0xFF9C93B4, false);
+
+    std::vector<const StratRow*> pressure, real;
+    for (const StratRow& row : rows) {
+        if (row.kind == "pressure") pressure.push_back(&row);
+        else if (row.kind == "real") real.push_back(&row);
+    }
+    drawBars(r, 40, 112, 215, 330, "1. НАПОР: убито за 60 с потока", pressure, false, 0xFF6FD3C8);
+    drawBars(r, 810, 112, 215, 330, "2. ЗАБЕГ: сколько секунд прожил", real, true, 0xFFD08A6F);
+
+    // Наблюдения считаются из того же CSV, что и полосы: подпись не разъедется
+    // с картинкой после следующей правки баланса.
+    const StratRow* deep = findRow(rows, "real", "Клинки: симбиоз");
+    const StratRow* wide = findRow(rows, "real", "Клинки: ширина");
+    const StratRow* axe = findRow(rows, "real", "Топор: симбиоз");
+    const StratRow* blade = findRow(rows, "pressure", "Клинки: симбиоз");
+    const StratRow* wideP = findRow(rows, "pressure", "Клинки: ширина");
+
+    double startMin = 1.0e9, startMax = 0.0;
+    std::string startMinName, startMaxName;
+    for (const StratRow& row : rows) {
+        if (row.kind != "hero" || row.name.find("(0:1)") == std::string::npos) continue;
+        if (row.survived < startMin) { startMin = row.survived; startMinName = row.name; }
+        if (row.survived > startMax) { startMax = row.survived; startMaxName = row.name; }
+    }
+    const StratRow* standStart = findRow(rows, "style", "старт: стоит");
+    const StratRow* moveStart = findRow(rows, "style", "старт: обходит");
+    const StratRow* standStrong = findRow(rows, "style", "сильная: стоит");
+    const StratRow* moveStrong = findRow(rows, "style", "сильная: обходит");
+
+    r.drawText(FONT_MED, 40, 476, "ЧТО ИЗ ЭТОГО СЛЕДУЕТ", 0xFFE8DCFF);
+    char buf[256];
+    int y = 510;
+    if (deep && wide) {
+        snprintf(buf, sizeof(buf), "• Ширина проигрывает глубине: два оружия по 6 — %.0f с и %d убийств, одно оружие 9-го ранга — %.0f с и %d.",
+                 wide->survived, wide->kills, deep->survived, deep->kills);
+        r.drawText(FONT_SMALL, 46, y, buf, 0xFFBFB4D8, false); y += 22;
+    }
+    if (blade && wideP) {
+        snprintf(buf, sizeof(buf), "  В напоре у смешанной сборки %d убийств против %d: очередь врагов растёт, а не рассасывается.",
+                 wideP->kills, blade->kills);
+        r.drawText(FONT_SMALL, 46, y, buf, 0xFF9C93B4, false); y += 22;
+    }
+    if (startMin > 0.0 && startMax > 0.0) {
+        snprintf(buf, sizeof(buf), "• Герой решает на старте: жизнь от %.1f с (%s) до %.1f с (%s), разброс x%.1f.",
+                 startMin, afterArrow(wallName(startMinName)).c_str(),
+                 startMax, afterArrow(wallName(startMaxName)).c_str(),
+                 startMax / std::max(0.1, startMin));
+        r.drawText(FONT_SMALL, 46, y, buf, 0xFFBFB4D8, false); y += 22;
+        r.drawText(FONT_SMALL, 46, y, "  На сильной сборке все пятеро доживают до 300 с: к пятому-девятому рангу оружия статы героя тонут в билде.",
+                   0xFF9C93B4, false); y += 22;
+    }
+    if (standStart && moveStart) {
+        snprintf(buf, sizeof(buf), "• Стиль: на старте обход по кругу удваивает жизнь (%.1f -> %.1f с).", standStart->survived, moveStart->survived);
+        r.drawText(FONT_SMALL, 46, y, buf, 0xFFBFB4D8, false); y += 22;
+    }
+    if (standStrong && moveStrong) {
+        snprintf(buf, sizeof(buf), "  На сильной сборке оба стиля доживают до %.0f с: движение перестаёт быть обязательным.", std::min(standStrong->survived, moveStrong->survived));
+        r.drawText(FONT_SMALL, 46, y, buf, 0xFF9C93B4, false); y += 22;
+    }
+    if (axe && deep) {
+        snprintf(buf, sizeof(buf), "• Разница между лучшей и худшей сборкой: %.0f с против %.0f с — в %.1f раза.",
+                 deep->survived, axe->survived, deep->survived / std::max(1.0, axe->survived));
+        r.drawText(FONT_SMALL, 46, y, buf, 0xFFBFB4D8, false); y += 22;
+    }
+    r.drawText(FONT_SMALL, 46, y, "• Решения: забег на 5 минут даёт 18 прокачек; симбиоз (оружие 9 + резонанс IV) забирает 13 из них — 72 %.",
+               0xFFBFB4D8, false);
+    y += 40;
+
+    // Цена симбиоза: какой артефакт обязан быть IV ранга и что он даёт по урону.
+    // Числа — из таблицы пассивок того же стенда (weapon_probe, блок пассивок).
+    r.drawText(FONT_MED, 40, y, "ЦЕНА СИМБИОЗА: КАКОЙ АРТЕФАКТ ОБЯЗАН БЫТЬ IV РАНГА И ЧТО ОН ДАЁТ", 0xFFE8DCFF);
+    static const char* price[7] = {
+        "Клинки  ->  Книга мудрости: 0 % урона, только опыт",
+        "Шар     ->  Сапоги ветра: 0 % урона, только скорость",
+        "Вихрь   ->  Магнитный амулет: 0 % урона, только сбор",
+        "Молния  ->  Сердце титана: 0 % урона, только HP",
+        "Аура    ->  Перчатка берсерка: +129 % урона",
+        "Топор   ->  Часы вечности: +68 % урона",
+        "Лёд     ->  Проклятая монета: 0 % урона, золото и злее элиты",
+    };
+    for (int i = 0; i < 7; ++i) {
+        const int col = i % 3;
+        const int rowI = i / 3;
+        const uint32_t color = (i >= 4) ? 0xFF9FE8B8 : 0xFFBFB4D8;
+        r.drawText(FONT_SMALL, 46 + col * 500, y + 34 + rowI * 24, price[i], color, false);
+    }
+    r.drawText(FONT_SMALL, 46, y + 34 + 3 * 24 + 10, "У пяти из семи оружий симбиоз требует вложить четыре ранга в артефакт без урона; у ауры и топора тот же ранг идёт в урон.", 0xFF9C93B4, false);
+    r.drawText(FONT_SMALL, 46, y + 34 + 3 * 24 + 30, "На карточке оружия 8-го ранга теперь написано, какой именно артефакт нужен и сколько у него уже рангов.", 0xFF9C93B4, false);
+
+    r.drawText(FONT_SMALL, 40, 866,
+               "цвет полосы — порядок строки: слева темп, справа живучесть; подробности — design/weapons_strategy.md",
+               0xFF8E84A8, false);
+}
+
+
+// ── Режим матрицы: 7 оружий × 3 способа добрать третий слот ──────────────────
+//     build/build_probe 60 300 /tmp/build.csv
+//     build/weapon_chart /tmp/weapon_after.csv design/build_diversity.ppm --matrix /tmp/build.csv
+static void drawMatrix(Renderer& r, const std::vector<StratRow>& rows) {
+    r.drawText(FONT_LARGE, 40, 22, "РАЗНООБРАЗИЕ СБОРОК: 7 ОРУЖИЙ × 3 ТРЕТЬИХ СЛОТА", 0xFFFFE6A8);
+    r.drawText(FONT_SMALL, 40, 58,
+               "у всех 21 сборки один бюджет: оружие 9-го ранга + его резонанс IV + один артефакт; 300 с штатного спавна, среднее по трём зёрнам",
+               0xFF9C93B4, false);
+    r.drawText(FONT_SMALL, 40, 78,
+               "в клетке — сколько секунд сборка прожила; 300 с — предел замера (значит «пережила»), меньше — умерла; под числом убийства",
+               0xFF9C93B4, false);
+
+    static const char* fillers[3] = {"урон (берсерк)", "оборона (клятва)", "частота (часы)"};
+    int colX[4] = {420, 760, 1100, 1440};
+    r.drawText(FONT_SMALL, 44, 118, "оружие", 0xFF8E84A8, false);
+    for (int c = 0; c < 3; ++c) r.drawText(FONT_SMALL, colX[c], 118, fillers[c], 0xFF8E84A8, false);
+
+    int rowY = 146;
+    for (int w = 0; w < 7; ++w) {
+        // Строки лежат в CSV по три подряд: ищем по префиксу имени.
+        const StratRow* cells[3] = {nullptr, nullptr, nullptr};
+        static const char* shortName[7] = {"Клинки", "Шар", "Вихрь", "Молния", "Аура", "Топор", "Лёд"};
+        for (const StratRow& row : rows) {
+            if (row.kind != "matrix") continue;
+            for (int c = 0; c < 3; ++c) {
+                char prefix[64];
+                snprintf(prefix, sizeof(prefix), "%s + %s", shortName[w], fillers[c]);
+                if (row.name == prefix) cells[c] = &row;
+            }
+        }
+        r.drawText(FONT_MED, 44, rowY + 12, shortName[w], 0xFFE8DCFF, false);
+        for (int c = 0; c < 3; ++c) {
+            const int x = colX[c], y = rowY, wdt = 300, h = 46;
+            if (!cells[c]) { r.fillRect(x, y, wdt, h, 0xFF1A1626); continue; }
+            const double t = std::min(1.0, cells[c]->survived / 300.0);
+            const uint32_t fill = mixColor(0xFF7A2E3A, 0xFF3FA97B, (float)t);
+            r.fillRect(x, y, wdt, h, 0xFF120F1C);
+            r.fillRect(x, y, (int)(wdt * t), h, fill);
+            char buf[48];
+            snprintf(buf, sizeof(buf), "%.0f с", cells[c]->survived);
+            r.drawText(FONT_SMALL, x + 10, y + 6, buf, 0xFFF4EEFF, false);
+            snprintf(buf, sizeof(buf), "%d убийств", cells[c]->kills);
+            r.drawText(FONT_SMALL, x + 10, y + 26, buf, 0xFFD8D0EA, false);
+        }
+        rowY += 54;
+    }
+
+    // Итоги считаются из данных, а не переписаны руками.
+    int survivedAll = 0, total = 0;
+    int bestKills = 0, worstKills = 1 << 30;
+    std::string bestName, worstName;
+    for (const StratRow& row : rows) {
+        if (row.kind != "matrix") continue;
+        ++total;
+        if (row.survived >= 299.0) ++survivedAll;
+        if (row.kills > bestKills) { bestKills = row.kills; bestName = row.name; }
+        if (row.kills < worstKills) { worstKills = row.kills; worstName = row.name; }
+    }
+    char line[256];
+    r.drawText(FONT_MED, 40, rowY + 20, "ЧТО ВИДНО", 0xFFE8DCFF);
+    snprintf(line, sizeof(line), "• Пережили замер во всех трёх зёрнах %d сборок из %d: третий слот решает не всё, а только для слабых оружий.", survivedAll, total);
+    r.drawText(FONT_SMALL, 46, rowY + 54, line, 0xFFBFB4D8, false);
+    snprintf(line, sizeof(line), "• Разброс темпа: от %d убийств (%s) до %d (%s) — в %.1f раза.", worstKills, worstName.c_str(), bestKills, bestName.c_str(), (double)bestKills / std::max(1, worstKills));
+    r.drawText(FONT_SMALL, 46, rowY + 76, line, 0xFFBFB4D8, false);
+    r.drawText(FONT_SMALL, 46, rowY + 98, "• У клинков, молнии, ауры и льда все три слота дают 300 с — там третий слот не меняет исход, только счёт.", 0xFF9C93B4, false);
+    r.drawText(FONT_SMALL, 46, rowY + 120, "• У шара и топора без обороны забег кончается на 164–206-й секунде: это не «слабый урон», а нехватка живучести.", 0xFF9C93B4, false);
+    r.drawText(FONT_SMALL, 46, rowY + 142, "  Разбор — design/build_diversity.md.", 0xFF9C93B4, false);
+
+    // Артефакты по живой волне: сюда попадают добивание, ожог и откол,
+    // которых не видно на бессмертных мишенях.
+    std::vector<const StratRow*> artifacts;
+    for (const StratRow& row : rows) if (row.kind == "artifact") artifacts.push_back(&row);
+    if (!artifacts.empty()) {
+        std::sort(artifacts.begin(), artifacts.end(), [](const StratRow* a, const StratRow* b) {
+            return a->survived < b->survived;
+        });
+        r.drawText(FONT_MED, 40, rowY + 190, "АРТЕФАКТЫ ПО ЖИВОЙ ВОЛНЕ: клинки 4-го ранга против 40 мобов", 0xFFE8DCFF);
+        const int shown = std::min<int>(8, (int)artifacts.size());
+        for (int i = 0; i < shown; ++i) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "%s — %.2f с, %+.0f%%",
+                     artifacts[i]->name.c_str(), artifacts[i]->survived, artifacts[i]->damage);
+            const uint32_t color = artifacts[i]->damage >= 8.0 ? 0xFF9FE8B8 : 0xFFBFB4D8;
+            r.drawText(FONT_SMALL, 46 + (i / 4) * 760, rowY + 222 + (i % 4) * 22, buf, color, false);
+        }
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) { printf("usage: weapon_chart <in.csv> <out.ppm> [--variety <clear.csv>]\n"); return 1; }
     std::vector<Row> rows;
@@ -270,6 +556,40 @@ int main(int argc, char** argv) {
     Renderer r;
     r.resize(SCREEN_W, SCREEN_H);
     r.clear(0xFF0E0C16);
+
+    if (argc >= 5 && !strcmp(argv[3], "--matrix")) {
+        std::vector<StratRow> strat;
+        if (!readStrategyCsv(argv[4], &strat)) return 1;
+        drawMatrix(r, strat);
+        FILE* mf = fopen(argv[2], "wb");
+        if (!mf) { printf("не записать %s\n", argv[2]); return 1; }
+        fprintf(mf, "P6\n%d %d\n255\n", SCREEN_W, SCREEN_H);
+        for (int i = 0; i < SCREEN_W * SCREEN_H; ++i) {
+            const uint32_t c = r.pixels[i];
+            unsigned char rgb[3] = {(unsigned char)((c >> 16) & 0xFF), (unsigned char)((c >> 8) & 0xFF), (unsigned char)(c & 0xFF)};
+            fwrite(rgb, 1, 3, mf);
+        }
+        fclose(mf);
+        printf("%s\n", argv[2]);
+        return 0;
+    }
+
+    if (argc >= 5 && !strcmp(argv[3], "--strategy")) {
+        std::vector<StratRow> strat;
+        if (!readStrategyCsv(argv[4], &strat)) return 1;
+        drawStrategy(r, strat);
+        FILE* sf = fopen(argv[2], "wb");
+        if (!sf) { printf("не записать %s\n", argv[2]); return 1; }
+        fprintf(sf, "P6\n%d %d\n255\n", SCREEN_W, SCREEN_H);
+        for (int i = 0; i < SCREEN_W * SCREEN_H; ++i) {
+            const uint32_t c = r.pixels[i];
+            unsigned char rgb[3] = {(unsigned char)((c >> 16) & 0xFF), (unsigned char)((c >> 8) & 0xFF), (unsigned char)(c & 0xFF)};
+            fwrite(rgb, 1, 3, sf);
+        }
+        fclose(sf);
+        printf("%s\n", argv[2]);
+        return 0;
+    }
 
     if (argc >= 5 && !strcmp(argv[3], "--variety")) {
         std::vector<ClearRow> clears;

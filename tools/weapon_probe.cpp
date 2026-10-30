@@ -253,6 +253,38 @@ static void measureSuper(Game& g, int targets, float radius, double* damage, int
     }
 }
 
+// Почему артефакт не даёт урона в этом стенде. Пустая строка — даёт.
+// Стенд стоячий и с бессмертными мишенями, поэтому срабатывания «по событию»
+// здесь не видны, и это надо писать прямо, а не выдавать за нулевой вклад.
+static const char* passiveReason(int id) {
+    switch (id) {
+        case 7:  return "опыт: +10% за ранг";
+        case 8:  return "скорость шага";
+        case 9:  return "радиус сбора";
+        case 10: return "HP и регенерация";
+        case 13: return "золото";
+        case 14: return "воскрешение";
+        case 15: return "заряд супера";
+        case 19: return "урон боссам, боссов нет";
+        case 20: return "урон элитам, элит нет";
+        case 21: return "возврат рывка";
+        case 22: return "лечение с элит";
+        case 23: return "щит";
+        case 28: return "эхо рывка";
+        case 30: return "щит из лечения";
+        case 31: return "цепь от перебора урона";
+        case 32: return "искры от самоцветов";
+        case 33: return "нужно второе оружие";
+        case 34: return "ожог 4-6 по 3-7 урона";
+        case 35: return "откол после заморозки";
+        case 36: return "отражение снаряда";
+        case 37: return "добивание, мишени бессмертны";
+        case 38: return "нужно потерять HP";
+        case 39: return "заряд супера";
+        default: return "";
+    }
+}
+
 int main(int argc, char** argv) {
     const float seconds = argc > 1 ? (float)atof(argv[1]) : 20.0f;
     const int onlyWeapon = argc > 2 ? atoi(argv[2]) : -1;
@@ -438,16 +470,20 @@ int main(int argc, char** argv) {
         const double baseDps = std::max(1.0, avgDps(-1));
         printf("  база без артефактов: %.0f DPS\n", baseDps);
         for (int p = 7; p < ITEM_COUNT; ++p) {
+            if (ITEM_DEFS[p].isWeapon) continue;   // оружие тиров меряется в своей таблице
             if (g.getItemMaxLevel(p) <= 0) continue;
             const double dps = avgDps(p);
             const double delta = 100.0 * (dps / baseDps - 1.0);
+            const char* reason = passiveReason(p);
             const char* verdict = delta >= 5.0 ? "урон"
-                                : (delta > -3.0 ? "не про урон в этом стенде" : "ХУЖЕ БАЗЫ");
+                                : (delta > -3.0 ? (reason[0] ? reason : "не про урон")
+                                                : "ХУЖЕ БАЗЫ");
             printf("  %-28s %6.0f DPS %+6.1f%%  %s\n", ITEM_DEFS[p].name, dps, delta, verdict);
             if (delta <= -3.0) ++failures;
         }
-        printf("  «не про урон здесь» — артефакт про опыт, золото, сбор или выживание:\n");
-        printf("  в стенде герой стоит на месте, поэтому такие бонусы урона не дают.\n");
+        printf("  «не про урон» — артефакт про опыт, золото, сбор, выживание или\n");
+        printf("  срабатывание по событию (смерть, удар, потеря HP): в стоячем стенде\n");
+        printf("  с бессмертными мишенями такого события нет, поэтому вклад не виден.\n");
     }
 
     // ── Суперумение ─────────────────────────────────────────────────────────
