@@ -124,6 +124,12 @@ inline void touchEnd(TouchPointer* pointers, GameT& g, int32_t id) {
 
 // Каждый кадр: смещение стика превращается в те же флаги, что ставит клавиатура.
 // Диагональ работает как на клавиатуре — нормализуется в игре.
+//
+// Если пальца на стике нет, флаги НЕ обнуляются: их мог поставить физический
+// клавиатурный ввод (AKEYCODE_W/A/S/D в main_android.cpp, геймпад на Android TV,
+// клавиатура планшета). Раньше здесь стоял сброс, и на телефоне любая
+// клавиатура работала ровно один кадр — до первого touchUpdate. Отпускание
+// пальца снимает флаги само (touchEnd), а зависший палец закрывается ACTION_CANCEL.
 template <typename GameT>
 inline void touchUpdate(GameT& g, const TouchPointer* pointers) {
     for (int i = 0; i < TOUCH_MAX_POINTERS; ++i) {
@@ -139,8 +145,6 @@ inline void touchUpdate(GameT& g, const TouchPointer* pointers) {
         g.keyLeft = left; g.keyRight = right;
         return;
     }
-    g.keyW = g.keyA = g.keyS = g.keyD = false;
-    g.keyUp = g.keyDown = g.keyLeft = g.keyRight = false;
 }
 
 // Кнопки видны всегда, стик — пока палец на экране. Рисуется в тот же кадр,

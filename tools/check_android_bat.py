@@ -30,7 +30,12 @@ GRADLE_ROOT = os.path.join(ROOT, "android", "build.gradle")
 CMAKE = os.path.join(ROOT, "android", "app", "src", "main", "cpp", "CMakeLists.txt")
 MANIFEST = os.path.join(ROOT, "android", "app", "src", "main", "AndroidManifest.xml")
 VERSION_H = os.path.join(ROOT, "src", "version.h")
-DOCS = [os.path.join(ROOT, "ANDROID_BUILD.md"), os.path.join(ROOT, "design", "android.md")]
+DOCS = [os.path.join(ROOT, "ANDROID_BUILD.md"), os.path.join(ROOT, "design", "android.md"),
+        os.path.join(ROOT, "README.md")]
+RES = os.path.join(ROOT, "android", "app", "src", "main", "res")
+STRINGS = os.path.join(RES, "values", "strings.xml")
+DENSITIES = {"mipmap-mdpi": 48, "mipmap-hdpi": 72, "mipmap-xhdpi": 96,
+             "mipmap-xxhdpi": 144, "mipmap-xxxhdpi": 192}
 
 
 def read(path):
@@ -247,6 +252,57 @@ def check_project():
     return problems
 
 
+# ── ресурсы: XML и иконки ───────────────────────────────────────────────────
+
+def check_resources():
+    """Манифест и строки — валидный XML, иконки — PNG нужного размера.
+
+    Сломанный XML Gradle ловит сам, но сообщение будет про aapt2 и без
+    указания на строку; PNG неверного размера система просто не покажет.
+    """
+    problems = []
+    import xml.etree.ElementTree as ET
+    for path in (MANIFEST, STRINGS):
+        if not os.path.exists(path):
+            problems.append("нет %s" % os.path.relpath(path, ROOT))
+            continue
+        try:
+            ET.parse(path)
+        except ET.ParseError as exc:
+            problems.append("%s: не разбирается как XML (%s)"
+                            % (os.path.relpath(path, ROOT), exc))
+
+    # размер PNG читается из IHDR — без сторонних библиотек
+    for folder, size in DENSITIES.items():
+        icon = os.path.join(RES, folder, "ic_launcher.png")
+        if not os.path.exists(icon):
+            problems.append("нет иконки %s/ic_launcher.png" % folder)
+            continue
+        with open(icon, "rb") as fh:
+            head = fh.read(26)
+        if head[:8] != b"\x89PNG\r\n\x1a\n":
+            problems.append("%s/ic_launcher.png: не PNG" % folder)
+            continue
+        width = int.from_bytes(head[16:20], "big")
+        height = int.from_bytes(head[20:24], "big")
+        if (width, height) != (size, size):
+            problems.append("%s/ic_launcher.png: %dx%d, ожидалось %dx%d"
+                            % (folder, width, height, size, size))
+
+    # иконка в манифесте должна существовать
+    manifest = read(MANIFEST) if os.path.exists(MANIFEST) else ""
+    if "@mipmap/ic_launcher" in manifest and not os.path.exists(
+            os.path.join(RES, "mipmap-mdpi", "ic_launcher.png")):
+        problems.append("манифест ссылается на @mipmap/ic_launcher, а файла нет")
+
+    # название приложения
+    if "@string/app_name" in manifest:
+        strings = read(STRINGS) if os.path.exists(STRINGS) else ""
+        if "app_name" not in strings:
+            problems.append("манифест ждёт @string/app_name, а в strings.xml его нет")
+    return problems
+
+
 # ── документация ────────────────────────────────────────────────────────────
 
 def check_docs():
@@ -276,7 +332,9 @@ def check_docs():
                     candidates = [os.path.join(ROOT, rel),
                                   os.path.join(os.path.dirname(doc_path), rel),
                                   os.path.join(ROOT, "android", rel),
-                                  os.path.join(ROOT, "android", "app", "src", "main", rel)]
+                                  os.path.join(ROOT, "android", "app", "src", "main", rel),
+                                  os.path.join(ROOT, "src", rel),
+                                  os.path.join(ROOT, "tools", rel)]
                 if not any(os.path.exists(os.path.normpath(c)) for c in candidates):
                     problems.append("%s ссылается на несуществующий `%s`"
                                     % (os.path.relpath(doc_path, ROOT), token))
@@ -298,10 +356,10 @@ def check_docs():
 
 def main(argv):
     strict = "--strict" in argv
-    problems = check_bat() + check_project() + check_docs()
+    problems = check_bat() + check_project() + check_resources() + check_docs()
     version = re.search(r'#define GAME_VERSION\s+"([\d.]+)"',
                         read(VERSION_H)).group(1)
-    print("Android-сборка %s: батник, проект, инструкция" % version)
+    print("Android-сборка %s: батник, проект, ресурсы, инструкция" % version)
     if problems:
         print("рассхождения:")
         for problem in problems:
