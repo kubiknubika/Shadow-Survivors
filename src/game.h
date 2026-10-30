@@ -7808,8 +7808,13 @@ struct Game {
     }
     int campaignActDoneCount(int act) const {
         int done = 0;
-        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i)
-            if (CAMPAIGN_MISSIONS[i].act == act && isCampaignMissionCompleted(i)) ++done;
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+            if (CAMPAIGN_MISSIONS[i].act != act) continue;
+            // Отмершая голова не входит в счёт: иначе «6/5» в акте после финала,
+            // где обе головы были закрыты в разных прохождениях.
+            if (isCampaignMissionLockedByTrack(i)) continue;
+            if (isCampaignMissionCompleted(i)) ++done;
+        }
         return done;
     }
     // ── Вертикальный список для портретного окна ───────────────────────────
@@ -8306,19 +8311,39 @@ struct Game {
     // Уровень (ряд) дела в змейке. Считается из самого дерева, а не из таблицы:
     // голова развилки всегда стоит на ряд выше своего пререквизита, поэтому
     // слияние акта V автоматически оказывается над выбором «сохранить/сжечь».
+    // Ряды считаются один раз на процесс: дерево неизменно после сборки, а
+    // рекурсия по двум пререквизитам в каждом кадре давала сотни тысяч вызовов
+    // (экран кампании стоил 11 мс на кадр вместо 9,7 у прежней карты).
+    const int* campaignSnakeLevelTable() const {
+        static int cache[CAMPAIGN_MISSION_COUNT];
+        static bool ready = false;
+        if (!ready) {
+            for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+                const CampaignMissionDef& def = CAMPAIGN_MISSIONS[i];
+                if (def.prereqA < 0 && def.prereqB < 0)
+                    cache[i] = campaignSnakeActBase(def.act) +
+                               std::max(0, campaignActSlotOf(def.act, def.track, i));
+                else cache[i] = 0;
+            }
+            // Разгоняем уровни по рёбрам, пока они не перестанут меняться.
+            for (int pass = 0; pass < CAMPAIGN_MISSION_COUNT; ++pass) {
+                bool changed = false;
+                for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+                    const CampaignMissionDef& def = CAMPAIGN_MISSIONS[i];
+                    int lvl = cache[i];
+                    if (def.prereqA >= 0) lvl = std::max(lvl, cache[def.prereqA] + 1);
+                    if (def.prereqB >= 0) lvl = std::max(lvl, cache[def.prereqB] + 1);
+                    if (lvl > cache[i]) { cache[i] = lvl; changed = true; }
+                }
+                if (!changed) break;
+            }
+            ready = true;
+        }
+        return cache;
+    }
     int campaignSnakeLevel(int mission) const {
         if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return 0;
-        const CampaignMissionDef& def = CAMPAIGN_MISSIONS[mission];
-        // Дело без пререквизита — начало своего акта, его ряд задаёт база акта.
-        if (def.prereqA < 0 && def.prereqB < 0)
-            return campaignSnakeActBase(def.act) +
-                   std::max(0, campaignActSlotOf(def.act, def.track, mission));
-        // Всё остальное стоит ровно над своим родителем. Это и держит обе головы
-        // развилки на одном ряду, и ставит слияние акта V над выбором.
-        int lvl = 0;
-        if (def.prereqA >= 0) lvl = std::max(lvl, campaignSnakeLevel(def.prereqA) + 1);
-        if (def.prereqB >= 0) lvl = std::max(lvl, campaignSnakeLevel(def.prereqB) + 1);
-        return lvl;
+        return campaignSnakeLevelTable()[mission];
     }
     // Развилка отнимает одно дело из общего счёта: пройти можно только одну
     // голову из двух, поэтому «17 / 30» никогда не превращалось в «30 / 30».
