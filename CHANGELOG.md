@@ -1,6 +1,55 @@
-# CHANGELOG — ShadowSurvivors 2.10.49+
+# CHANGELOG — ShadowSurvivors 2.10.50+
 
-## 2.10.49 (текущая версия) — «Android: то же ядро, касания, звук через AAudio»
+## 2.10.50 — «Android: инструкция по сборке и батник»
+
+Просьба: «Напиши мд файл с инструкцией по сборке на андроиде. И билд батник для
+андроида». До этого собрать APK можно было только из Android Studio — теперь
+то же самое делает один двойной щелчок, а инструкция отвечает на вопросы
+«что поставить» и «почему не собралось».
+
+### `build_android.bat`
+
+```
+build_android.bat                  :: debug-APK
+build_android.bat release          :: release-APK (подпись отладочным ключом)
+build_android.bat install          :: собрать и поставить на телефон через adb
+build_android.bat clean release    :: очистить и собрать release
+```
+
+- номер версии читается из `src/version.h` (2.10.50 → `versionCode` 3050), поэтому
+  APK, exe и хроника в игре всегда с одним номером;
+- Java: `JAVA_HOME` → JDK внутри Android Studio (`jbr`/`jre`) → `where java`,
+  предупреждение при JDK младше 17;
+- SDK: `ANDROID_HOME` → `ANDROID_SDK_ROOT` → `%LOCALAPPDATA%\Android\Sdk`,
+  `android\local.properties` пишется сам;
+- Gradle: `android\gradlew.bat` → `gradle.bat` в PATH → своя копия в
+  `build\gradle-dist\gradle-8.2` (скачивается один раз);
+- весь вывод Gradle — в `build\android_build.log`, APK копируется в
+  `build\ShadowSurvivors_<версия>_<тип>.apk`;
+- при ошибке показываются последние строки журнала, окно всегда остаётся
+  открытым.
+
+### `ANDROID_BUILD.md`
+
+Что нужно поставить, три способа сборки (батник, Android Studio, консоль),
+установка по кабелю и без, где лежат сейв, настройки и `crash.log`, что делать
+с музыкой, таблица частых ошибок с причинами (JDK 17, лицензии SDK, NDK, ABI,
+подпись, нехватка места) и честный список того, чего в репозитории нет.
+
+### Прочее
+
+`android/app/build.gradle` принимает `-PappVersion`/`-PappVersionCode` (по
+умолчанию 2.10.50/3050), `release` подписан отладочным ключом — чтобы APK сразу
+ставился на свой телефон. В `.gitignore` добавлены `android/local.properties`,
+каталоги сборки Gradle и `*.apk`.
+
+**Честно:** батник в этой среде не запускался — здесь нет Windows, JDK, SDK и
+NDK. Проверено статически: CRLF, UTF-8 с `chcp 65001`, все метки и переходы,
+кавычки в путях с пробелами, поведение при отсутствии инструментов. Первый
+настоящий прогон — на вашей машине; ответ на любую неудачу целиком лежит в
+`build\android_build.log`.
+
+## 2.10.49 — «Android: то же ядро, касания, звук через AAudio»
 
 Просьба: «Сделай билд под Android». В репозитории появился проект `android/` и
 платформенный слой `src/main_android.cpp`. Игра осталась одна: `game.h` и
