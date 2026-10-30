@@ -1253,16 +1253,6 @@ struct Game {
         return -1;
     }
     int campaignForkMission(int side) const { return campaignNextForkMission(side); }
-    // Сколько развилок ещё не выбрано — этим живёт подпись кнопки.
-    int campaignOpenForks() const {
-        int n = 0;
-        for (int f = 0; f < CAMPAIGN_FORK_COUNT; ++f) {
-            if (campaignForkPick(f) != 0) continue;
-            const int ha = campaignForkHead(f, 1), hb = campaignForkHead(f, 2);
-            if ((ha >= 0 && isCampaignMissionUnlocked(ha)) || (hb >= 0 && isCampaignMissionUnlocked(hb))) ++n;
-        }
-        return n;
-    }
     // Дальше листается любой акт, где есть открытое или закрытое дело: запуск
     // всё равно закрыт пререквизитом, а смотреть вперёд игрок вправе.
     int campaignReachableAct() const {
@@ -1274,12 +1264,6 @@ struct Game {
             }
         }
         return best;
-    }
-    int campaignTrackCompletedCount() const {
-        int n = 0;
-        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i)
-            if (!isCampaignMissionLockedByTrack(i) && isCampaignMissionCompleted(i)) ++n;
-        return n;
     }
     void chooseCampaignFork(int mission) {
         const int fork = campaignForkOfMission(mission);
@@ -8344,14 +8328,6 @@ struct Game {
     int campaignSnakeLevel(int mission) const {
         if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return 0;
         return campaignSnakeLevelTable()[mission];
-    }
-    // Развилка отнимает одно дело из общего счёта: пройти можно только одну
-    // голову из двух, поэтому «17 / 30» никогда не превращалось в «30 / 30».
-    int campaignPossibleMissionCount() const { return CAMPAIGN_MISSION_COUNT - CAMPAIGN_FORK_COUNT; }
-    int campaignForkCountInAct(int act) const {
-        int n = 0;
-        for (int f = 0; f < CAMPAIGN_FORK_COUNT; ++f) if (CAMPAIGN_FORKS[f].act == act) ++n;
-        return n;
     }
     int campaignSnakeRows() const {
         int rows = 1;
