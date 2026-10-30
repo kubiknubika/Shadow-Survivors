@@ -15,4 +15,6 @@ $CXX -std=c++17 -fsyntax-only -Wall -Wextra -Wno-unused-parameter \
     -D__ANDROID__ -Isrc -Itools/android_stub src/main_android.cpp
 echo "ядро игры без Windows (тот же кадр, что и на десктопе):"
 $CXX -std=c++17 -fsyntax-only -Isrc tools/screen_check.cpp
+echo "батник, проект и инструкция (кодировка, метки, версии, lib_name):"
+python3 tools/check_android_bat.py --strict
 echo "ok"

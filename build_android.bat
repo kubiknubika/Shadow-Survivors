@@ -28,6 +28,7 @@ if not exist "%BUILD%" mkdir "%BUILD%"
 >> "%LOG%" echo Date: %date% %time%
 
 rem --------------------------------------------------------------- аргументы
+set "RC=0"
 set "TASK=assembleDebug"
 set "DO_INSTALL=0"
 set "CLEANARG="
@@ -88,8 +89,13 @@ if not defined JAVA_HOME (
 )
 set "JAVA_EXE=java"
 if defined JAVA_HOME set "JAVA_EXE=%JAVA_HOME%\bin\java.exe"
+rem Версию читаем через файл, а не командой внутри for /f: путь JDK из
+rem Android Studio ("C:\Program Files\...") содержит пробелы, и такая
+rem команда развалилась бы на "C:\Program".
 set "JVER=unknown"
-for /f "tokens=3" %%j in ('"!JAVA_EXE!" -version 2^>^&1 ^| findstr /i /c:"version"' ) do set "JVER=%%~j"
+"!JAVA_EXE!" -version > "%BUILD%\java_version.txt" 2>&1
+if exist "%BUILD%\java_version.txt" for /f "tokens=3" %%j in ('findstr /i /c:"version" "%BUILD%\java_version.txt"') do set "JVER=%%~j"
+del "%BUILD%\java_version.txt" >nul 2>&1
 echo Java: !JVER!
 >> "%LOG%" echo Java: !JVER!
 set "JMAJOR=0"
@@ -128,6 +134,16 @@ echo SDK: !SDKDIR!
 
 if not exist "!SDKDIR!/platforms" (
     echo ВНИМАНИЕ: в SDK нет папки platforms - Gradle попробует скачать её сам.
+)
+rem NDK и CMake нужны для сборки src/main_android.cpp. Gradle умеет ставить
+rem их сам, но только при принятых лицензиях - иначе ошибка будет позже и
+rem непонятнее.
+if not exist "!SDKDIR!/ndk" (
+    echo ВНИМАНИЕ: в SDK нет NDK. Gradle попробует скачать 26.1.10909125 сам,
+    echo а если не сможет - sdkmanager "ndk;26.1.10909125" и sdkmanager --licenses.
+)
+if not exist "!SDKDIR!/platform-tools/adb.exe" if "%DO_INSTALL%"=="1" (
+    echo ВНИМАНИЕ: в SDK нет platform-tools - adb для install не найдётся.
 )
 
 rem ------------------------------------------------------------------ Gradle
@@ -170,7 +186,7 @@ if errorlevel 1 (
     echo.
     echo ОШИБКА: Gradle не собрал APK. Последние строки журнала:
     echo.
-    powershell -NoProfile -Command "Get-Content -LiteralPath '%LOG%' -Tail 24"
+    powershell -NoProfile -Command "Get-Content -Encoding UTF8 -LiteralPath '%LOG%' -Tail 24"
     echo.
     echo Полный журнал: build\android_build.log
     echo Разбор частых ошибок: ANDROID_BUILD.md, раздел «Если не собралось».
@@ -210,7 +226,9 @@ rem ------------------------------------------------------------------- adb
 if "%DO_INSTALL%"=="1" (
     set "ADB="
     for /f "delims=" %%a in ('where adb.exe 2^>nul') do if not defined ADB set "ADB=%%a"
-    if not defined ADB if exist "!SDKDIR!/platform-tools/adb.exe" set "ADB=!SDKDIR!/platform-tools/adb.exe"
+    rem Путь для запуска - с обратными слэшами: SDKDIR с прямыми нужен только
+    rem в local.properties, а программу надёжнее звать обычным путём Windows.
+    if not defined ADB if exist "!SDKDIR!/platform-tools/adb.exe" set "ADB=!ANDROID_HOME!\platform-tools\adb.exe"
     if not defined ADB (
         echo ВНИМАНИЕ: adb не найден - установите APK вручную.
     ) else (
@@ -220,7 +238,7 @@ if "%DO_INSTALL%"=="1" (
             echo ВНИМАНИЕ: adb install не сработал. Проверьте: телефон подключён,
             echo отладка по USB включена, на телефоне разрешена установка.
             echo Последние строки журнала:
-            powershell -NoProfile -Command "Get-Content -LiteralPath '%LOG%' -Tail 10"
+            powershell -NoProfile -Command "Get-Content -Encoding UTF8 -LiteralPath '%LOG%' -Tail 10"
         ) else (
             echo Установлено. Запускайте «Пепел Тьмы» на телефоне.
         )
@@ -233,6 +251,7 @@ if "%DO_INSTALL%"=="1" (
 goto done
 
 :fail
+set "RC=1"
 echo.
 echo Сборка НЕ завершена. Журнал: build\android_build.log
 echo Инструкция и разбор ошибок: ANDROID_BUILD.md
@@ -240,5 +259,4 @@ echo Инструкция и разбор ошибок: ANDROID_BUILD.md
 if defined CP_OLD chcp !CP_OLD! >nul 2>&1
 echo.
 pause
-endlocal
-exit /b 0
+endlocal & exit /b %RC%
