@@ -183,7 +183,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 129;
+static constexpr int PATCH_NOTES_COUNT = 130;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -7542,6 +7542,9 @@ struct Game {
         static const uint32_t skyBottom[CAMPAIGN_ACT_COUNT] = {0xFF13101A,0xFF101812,0xFF101B25,0xFF190E16,0xFF110D1B};
         const int actIndex = campaignActOf(missionIndex) - 1;
         const uint32_t accent = getCampaignAccent(missionIndex);
+        // Сцена собрана под высоту 110+, и на низкой карточке её части (луна,
+        // башни, страж) вылезали на карту сверху. Клип держит их в рамке.
+        r.setClip(x, y, w, h);
         r.fillRoundedRect(x, y, w, h, 10, skyBottom[actIndex]);
         r.fillGradientV(x + 1, y + 1, w - 2, h - 2, skyTop[actIndex], skyBottom[actIndex], 255);
 
@@ -7644,6 +7647,7 @@ struct Game {
             r.drawBossFigure(x + w - 136, y + h - 66,
                              CAMPAIGN_MISSIONS[missionIndex].bossType % 6, globalTime, false, false, false, 1.02f);
         }
+        r.clearClip();
         r.drawRoundedRect(x, y, w, h, 10, accent, 1, 210);
     }
 
@@ -8102,11 +8106,14 @@ struct Game {
         // Узкая карточка — иллюстрация полосой сверху, текст под ней: в узкой
         // колонке картинка слева оставляла тексту 300 px и налезала на буквы.
         const bool artOnTop = detailW < 760;
-        const bool withArt = detailH >= (artOnTop ? 220 : 240) && detailW >= 420;
+        // Иллюстрация занимает 110 px и требует ещё места под текст: на карточке
+        // ниже 300 px она съедала заголовок, и он наезжал на «ЦЕЛЬ».
+        const bool withArt = artOnTop ? (detailH >= 300 && detailW >= 420)
+                                      : (detailH >= 240 && detailW >= 620);
         const bool withObjective = detailH >= 140;
         const bool tightDossier = detailH < 110;
         const int artW = withArt ? (artOnTop ? detailW - 24 : std::min(330, detailW * 30 / 100)) : 0;
-        const int artH = withArt ? (artOnTop ? std::min(118, detailH / 3) : detailH - 24) : 0;
+        const int artH = withArt ? (artOnTop ? std::max(110, std::min(128, detailH / 3)) : detailH - 24) : 0;
         const int textX = detailX + 16 + (withArt && !artOnTop ? artW + 14 : 0);
         const int textW = detailX + detailW - 16 - textX;
         r.fillRoundedRect(detailX, detailY, detailW, detailH, 10, 0xFF15111F, 250);
@@ -8154,8 +8161,11 @@ struct Game {
         r.drawTextCentered(FONT_SMALL, detailX + detailW - statusW / 2 - 14, statusY,
                            fitText(r, FONT_SMALL, status, statusW - 12).c_str(), statusColor, false);
         const int titleY = statusY + (tightDossier ? 18 : 21);
-        const int titleH = tightDossier ? FONT_SMALL.lineHeight : FONT_MED.lineHeight;
-        if (tightDossier)
+        // В узкой боковой колонке крупный шрифт не влезает и режется на «ЗАТОПЛЕННЫЙ
+        // РЕЕС…» — там имя дела набирается мелким.
+        const bool smallTitle = tightDossier || textW < 320;
+        const int titleH = smallTitle ? FONT_SMALL.lineHeight : FONT_MED.lineHeight;
+        if (smallTitle)
             r.drawText(FONT_SMALL, textX, titleY,
                        fitText(r, FONT_SMALL, mission.title, textW).c_str(), 0xFFFFE4A8, false);
         else
@@ -8168,6 +8178,12 @@ struct Game {
         // ступени, чем обрезать имя стража на середине.
         const int infoY = detailY + detailH - (tightDossier ? 20 : 24);
         const bool showInfo = infoY >= titleY + titleH;
+        // Плашка «ЦЕЛЬ» рисуется после сводки и перекрывает всё, что попало в её
+        // полосу: отдельная строка стража должна стоять над ней, а не внутри.
+        // Цель в узкой колонке переносится на две строки — коробка под неё выше.
+        const int objH = textW < 420 ? 62 : 48;
+        const int objY = detailY + detailH - objH - 32;
+        const int bossY = (withObjective ? objY : infoY) - FONT_SMALL.lineHeight - 4;
         if (showInfo) {
             int cx2 = textX;
             const int right = textX + textW;
@@ -8208,19 +8224,26 @@ struct Game {
                     cx2 += trackW + 12;
                 }
             }
-            // страж остаётся словом: имя не рисуется знаком
+            // Страж остаётся словом: имя не рисуется знаком. Если в общую строку
+            // оно не влезает, ему отдаётся отдельная строка над сводкой — раньше
+            // в широком окне имя просто пропадало (не хватало 12 px).
             char boss[128];
             snprintf(boss, sizeof(boss), "СТРАЖ: %s", mission.finalBoss);
-            if (cx2 + r.textWidth(FONT_SMALL, boss) <= right)
+            const int bossW = r.textWidth(FONT_SMALL, boss);
+            if (cx2 + bossW <= right) {
                 r.drawText(FONT_SMALL, cx2, infoY, boss, 0xFFE4D7B5, false);
+            } else if (bossY >= titleY + titleH + 2) {
+                r.drawText(FONT_SMALL, textX, bossY,
+                           fitText(r, FONT_SMALL, boss, textW).c_str(), 0xFFE4D7B5, false);
+            }
         }
 
-        const int objH = 48;
-        const int objY = detailY + detailH - objH - 32;
         const int briefY = titleY + titleH + 6;
         const int briefBottom = withObjective ? objY - 6 : (showInfo ? infoY - 6 : detailY + detailH - 6);
+        // Одна строка из середины брифинга выглядит обрывом, а не приёмом: если
+        // в досье влезает меньше двух строк, текст не показываем совсем.
         const int briefLines = std::max(0, (briefBottom - briefY) / FONT_SMALL.lineHeight);
-        if (briefLines > 0) {
+        if (briefLines >= 2) {
             // Брифинг режем по целым строкам: половина строки под «ЦЕЛЬю» выглядела
             // как обрезанный текст, а не как приём.
             r.setClip(textX - 2, briefY - 2, textW + 4, briefLines * FONT_SMALL.lineHeight + 2);
@@ -8543,41 +8566,66 @@ struct Game {
             ? "Снизу вверх • клик по голове выбирает ветку, вторая гаснет навсегда"
             : "Снизу вверх • колесо — прокрутка • клик по голове змеи выбирает ветку, вторая гаснет навсегда";
         renderSubmenuFrame(r, "КАМПАНИЯ • ЗМЕЙКА", snakeHint);
-        const int buttonY = SCREEN_H - 100, buttonH = 54;
-        const bool wide = SCREEN_W >= 1040 && SCREEN_W > SCREEN_H;
-        const bool compact = !wide;
+        // ── Раскладка под формат экрана ──────────────────────────────────────
+        // Кнопки и досье растут вместе с окном: жёсткие «100 px снизу и 200 px на
+        // досье» на 600 px высоты отдавали карте меньше трети экрана.
+        const int buttonH = std::max(44, std::min(58, SCREEN_H / 12));
+        const int buttonY = SCREEN_H - buttonH - std::max(14, SCREEN_H / 26);
+        // Досье стоит сбоку, если окно широкое и горизонтальное: под картой оно
+        // отбирало высоту, а в змейке высоты не хватает больше всего.
+        // Боковая колонка включается на широком окне (960+) и на низком: при
+        // высоте 520 досье под картой оставляло маршруту 176 px, а сбоку — 330.
+        // На 800x600 наоборот: сбоку карта сужается до 408 px и подписи ломаются,
+        // поэтому там досье остаётся под картой.
+        const bool sided = SCREEN_W > SCREEN_H &&
+                           (SCREEN_W >= 960 || (SCREEN_H < 620 && SCREEN_W >= 880));
+        const bool compact = !sided;
         int mapX, mapW, mapTop, mapBottom, detailX, detailY, detailW, detailH;
-        if (wide) {
-            const int gap = 22;
+        if (sided) {
+            const int gap = std::max(14, SCREEN_W / 80);
+            // Боковая колонка — от 300 до 520 px и не шире 34 %: уже режется
+            // брифинг, шире — карта превращается в полосу.
+            const int sideW = std::max(320, std::min(SCREEN_W * 34 / 100, 520));
             mapX = 24;
-            mapW = (SCREEN_W - 24 * 2 - gap) * 62 / 100;
+            mapW = SCREEN_W - 24 - gap - sideW - 24;
             detailX = mapX + mapW + gap;
-            detailW = SCREEN_W - 24 - detailX;
+            detailW = sideW;
             mapTop = 118;
-            mapBottom = buttonY - 12;
+            mapBottom = buttonY - 10;
             detailY = mapTop;
             detailH = mapBottom - mapTop;
         } else {
             // В узком окне кнопки идут двумя рядами, поэтому досье обязано
             // закончиться выше верхнего ряда, иначе оно ложится на «НАЗАД».
-            const int actionsTop = buttonY - (campaignActionsTwoRows(SCREEN_W) ? buttonH + 10 : 0);
-            const int minDetailH = SCREEN_H < 560 ? 84 : 150;
+            const int actionsTop = buttonY - (campaignActionsTwoRows(SCREEN_W) ? buttonH + 8 : 0);
+            // Низкое окно: заголовок и подзаголовок занимают почти пятую часть,
+            // карта начинается сразу под строкой печатей.
+            mapTop = SCREEN_H < 560 ? 106 : 112;
+            // Досье берёт четверть свободной высоты: в портрете это 240 px с
+            // иллюстрацией, в маленьком окне — 96 px на три строки.
+            const int freeH = std::max(160, actionsTop - mapTop);
+            // В высоком окне досье можно взять больше четверти: там помещается и
+            // иллюстрация, и брифинг, и цель.
+            detailH = std::max(SCREEN_H < 560 ? 88 : 96, std::min(340, freeH / 4));
             mapX = 20;
             mapW = SCREEN_W - 40;
-            detailH = std::max(minDetailH, std::min(SCREEN_H / 4, 200));
             detailX = mapX;
             detailW = mapW;
-            detailY = actionsTop - 12 - detailH;
-            mapTop = 112;
-            mapBottom = detailY - 12;
+            detailY = actionsTop - 10 - detailH;
+            mapBottom = detailY - 10;
         }
         // ── Шапка со счётчиками ──────────────────────────────────────────────
         const int seals = storySealCount();
-        r.fillRoundedRect(20, 84, 176, 24, 7, 0xFF251B35);
-        r.drawRoundedRect(20, 84, 176, 24, 7, 0xFFFFD878, 1);
-        r.drawTextCentered(FONT_SMALL, 108, 89, "ПЕЧАТИ СЛОМАНЫ", 0xFFFFE5A0, false);
+        // В узком окне плашка «ПЕЧАТИ СЛОМАНЫ» не влезает — остаются сами печати,
+        // и полосе пути достаётся на 200 px больше.
+        const bool sealsPlate = SCREEN_W >= 820;
+        if (sealsPlate) {
+            r.fillRoundedRect(20, 84, 176, 24, 7, 0xFF251B35);
+            r.drawRoundedRect(20, 84, 176, 24, 7, 0xFFFFD878, 1);
+            r.drawTextCentered(FONT_SMALL, 108, 89, "ПЕЧАТИ СЛОМАНЫ", 0xFFFFE5A0, false);
+        }
         for (int i = 0; i < 4; ++i) {
-            const int sx = 204 + i * 20;
+            const int sx = 20 + (sealsPlate ? 184 : 0) + i * 20;
             r.fillRoundedRect(sx, 90, 14, 11, 4, i < seals ? 0xFF65D89A : 0xFF3B3345);
             r.drawRoundedRect(sx, 90, 14, 11, 4, i < seals ? 0xFFB6FFD0 : 0xFF6C6177, 1);
         }
@@ -8585,11 +8633,14 @@ struct Game {
         // Числа тут ничего не добавляли: глаз ищет картинку. Одна клетка — одно
         // дело этой ночи, четыре ромба справа — развилки: выбранная светится,
         // пустая ждёт своей очереди.
-        const int barX = 292, barY = 88, barH = 14;
+        const int barX = sealsPlate ? 292 : 20 + 4 * 20 + 14, barY = 88, barH = 14;
         int cells = 0;
         for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i)
             if (!isCampaignMissionLockedByTrack(i)) ++cells;
-        const int barW = std::min(SCREEN_W - barX - 220, 330);
+        // Справа от полосы — четыре ромба развилок и, если хватает места, ночь.
+        const int forkSpan = 30 + CAMPAIGN_FORK_COUNT * 22;
+        const bool nightFits = SCREEN_W >= 900;
+        const int barW = std::max(80, std::min(330, SCREEN_W - barX - forkSpan - (nightFits ? 88 : 10)));
         r.fillRoundedRect(barX - 5, barY - 5, barW + 10, barH + 10, 8, 0xFF171226, 235);
         r.drawRoundedRect(barX - 5, barY - 5, barW + 10, barH + 10, 8, 0xFF3A3350, 1, 170);
         if (cells > 0) {
@@ -8612,33 +8663,44 @@ struct Game {
             const uint32_t col = picked ? (campaignForkPick(f) == 1 ? 0xFFFFC860 : 0xFF5FE0C8) : 0xFF463E5A;
             drawCampaignDiamond(r, fx, barY + barH / 2, 7, col, picked ? 245 : 190);
         }
-        if (save.campaignCycle > 0) {
+        if (save.campaignCycle > 0 && nightFits) {
             char night[32];
             snprintf(night, sizeof(night), "НОЧЬ %d", save.campaignCycle);
-            r.drawText(FONT_SMALL, barX + barW + 30 + CAMPAIGN_FORK_COUNT * 22 + 14, barY - 1, night, 0xFFCFC2A6, false);
+            r.drawText(FONT_SMALL, barX + barW + forkSpan + 14, barY - 1, night, 0xFFCFC2A6, false);
         }
 
         // ── Камера ───────────────────────────────────────────────────────────
         const int rows = campaignSnakeRows();
-        const int rowStep = wide ? 46 : (SCREEN_H < 700 ? 34 : 40);
         // Между актами — чуть больше воздуха: в этот зазор встаёт подпись акта,
         // иначе она наезжает на название последнего дела предыдущей полосы.
-        const int actHeaderPad = wide ? 20 : 12;
+        const int actHeaderPad = sided ? 20 : 12;
+        // Шаг ряда считается от окна: в высоком окне маршрут растягивается на всю
+        // высоту (на 1080p кампания видна целиком), в низком ужимается до 34 px —
+        // ниже двухстрочные подписи наезжают на соседний ряд.
+        const int viewH0 = std::max(120, mapBottom - mapTop);
+        // Пол поднят до 40 px: подпись в две строки занимает 38 px, и на шаге 34
+        // ряды наезжали друг на друга. Потолок 64 — больше в высоком окне не нужно.
+        const int rowStep = std::max(40, std::min(64, (viewH0 - 4 * actHeaderPad - 26) /
+                                                     std::max(1, rows - 1)));
         std::vector<int> actOfLevel((size_t)rows, 1);
         for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
             const int lv = campaignSnakeLevel(i);
             if (lv >= 0 && lv < rows) actOfLevel[(size_t)lv] = CAMPAIGN_MISSIONS[i].act;
         }
-        const int spread = std::max(46, std::min(wide ? 210 : 96, mapW * (wide ? 27 : 22) / 100));
+        // Полосы развилки расходятся тем шире, чем шире карта, но не дальше
+        // 210 px: иначе подписи дел уезжают от своих узлов.
+        const int spread = std::max(44, std::min(sided ? 200 : 140, mapW * 22 / 100));
         const int margin = rowStep / 2 + 12;
         const int contentH = margin * 2 + (rows - 1) * rowStep + (CAMPAIGN_ACT_COUNT - 1) * actHeaderPad;
-        const int viewH = std::max(96, mapBottom - mapTop);
+        const int viewH = viewH0;
         const int maxScroll = std::max(0, contentH - viewH);
         const int selected = std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, storyMissionCursor));
         const int centerX = mapX + mapW / 2;
         // Если маршрут короче окна, он прижат к нижней кромке: акт I всегда
         // начинается снизу, иначе в высоком окне под ним остаётся пустота.
-        const int bottomAnchor = std::max(0, viewH - contentH);
+        // Если маршрут короче окна, он прижат к низу, но не вплотную: четверть
+        // запаса остаётся под актом I, иначе первый ряд липнет к кромке.
+        const int bottomAnchor = std::max(0, (viewH - contentH) * 3 / 4);
         auto levelY = [&](int level) {
             const int pad = (CAMPAIGN_ACT_COUNT - actOfLevel[(size_t)level]) * actHeaderPad;
             return mapTop + margin + bottomAnchor + (rows - 1 - level) * rowStep + pad - campaignSnakeScroll;
@@ -8728,7 +8790,10 @@ struct Game {
             const int y = levelY(campaignSnakeLevel(i));
             if (y < mapTop - 40 || y > mapBottom + 40) continue;
             const int x = centerX + campaignSnakeDx(i, spread);
-            const int rad = campaignSnakeNodeR(i, compact);
+            // Узлы крупнеют вместе с шагом ряда: на высоком окне 9 px в ряду 64 px
+            // выглядят точками.
+            const int rad = campaignSnakeNodeR(i, compact) +
+                            (rowStep >= 58 ? 3 : (rowStep >= 46 ? 1 : 0));
             const bool completed = isCampaignMissionCompleted(i);
             const bool unlocked = isCampaignMissionUnlocked(i);
             const bool dead = isCampaignMissionLockedByTrack(i);
@@ -9677,6 +9742,7 @@ struct Game {
             "2.10.33 • СТРАЖИ ОЖИЛИ: ПЕРИФЕРИЯ ОТСТАЁТ, ПОЗА ДОГОНЯЕТ, ОТДАЧА ПРИСЕДАЕТ",
             "2.10.34 • КАМПАНИЯ: РАЗВИЛКА В КАЖДОМ АКТЕ И КАРТА-ЗМЕЙКА",
             "2.10.35 • КАМПАНИЯ БЕЗ АРИФМЕТИКИ: ЗНАКИ ВМЕСТО СЧЁТЧИКОВ",
+            "2.10.36 • КАМПАНИЯ: РАСКЛАДКА ПОД ЛЮБОЙ ФОРМАТ ЭКРАНА",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -9807,7 +9873,8 @@ struct Game {
             "• Проход объёма применял один приём ко всем шести стражам: металл, ткань, камень и стекло получали одинаковый блик и одинаковую тень, и вся линейка выглядела отлитой из одного материала.\n• Теперь у каждого материала своя рампа. Металл (Моргар): блик в 2 px и короткая жёсткая тень. Ткань (Кардинал) и плоть (Малакор): широкий мягкий переход, а на стыке деталей только тень, без светлого канта. Камень (Азарот, Протоколист): посередине. Стекло (Двойник): яркий край почти без собственной тени. Пергамент, страницы книг, кость и маска блика не получают вовсе — на них он читался как пластик.\n• Пергамент отличается от камня не яркостью, а теплом: у Протоколиста камень тоже светлый, но синего в нём больше красного.\n• Контактная тень между деталями: кант в 2 px, в полтора раза сильнее обычной тени силуэта. Раньше стык шёл на 45 % от силуэта, и детали сливались в одно пятно.\n• Ступенчатую рампировку (три тона по осям кадра) пробовал и отверг: на крупном теле она даёт прямой диагональный шов через всю фигуру — у Азарота балахон делился на светлую и тёмную половину ровной линией. Тона даёт форма: блик у края, кольцо собственной тени внутри, контактный кант на стыке.\n• Цифры: тонов на фигуре 171–373 (порог аудита 30), доля пяти самых частых 19–36 % (порог 75 %). Контраст стыка деталей: Моргар 30.2 → 47.3, Кардинал 41.7 → 51.8, Двойник 32.3 → 38.1, Азарот 30.6 → 32.7, Протоколист 29.9 → 32.2, Малакор 33.5 → 32.6 (у мягких материалов стык и должен быть мягким).\n• Цена: +0.05 мс на стража, три стража в кадре 1.43 → 1.59 мс из 16.7.\n• Лист было/стало — design/boss_materials_232.png, разбор — design/char_model_audit.md, §12.",
             "Четвёртый пункт аудита моделей: анимация стражей. Периферия теперь отстаёт от корпуса по фазе: подол, полы мантии, ленты, перья и кисти считаются от времени, снятого на 60-160 мс раньше, поэтому корпус уже пошёл, а подол ещё висит.\nПоза замаха и выброса догоняется пружиной с перелётом вместо мгновенной ступеньки: перелёт до 1,012, после удара проседание до -0,057, успокоение 16 кадров.\nОтдача от попадания стала приседанием: по вертикали фигура ужимается сильнее, чем по горизонтали, и объём сохраняется. Кардинал качается в такт шагу.\nНиже 60 px мелкие частицы, заклёпки и трещины не рисуются - силуэт остаётся чистым.\nЗамеры: расхождение подол/корпус 1,24 -> 2,82 px, W/H при ударе 0,63 -> 0,71, ход корпуса Кардинала 0,1 -> 4,2 px, одиночных пикселей у Азарота 26 -> 0. Три стража на кадр: 1,30 -> 1,27 мс.",
             "• Кампания больше не держится на одной развилке: выбор спрашивают на входе в каждый акт II–V, и каждый раз он меняет четверть прохождения. Выбор в акте V теперь виден как выбор, а не как два дела подряд.\n• Новый экран «ЗМЕЙКА»: маршрут растёт снизу вверх, камера стартует у акта I, пройденное светится зелёным, непройденное серое, по колесу мыши маршрут прокручивается, а камера сама подъезжает к выбранному делу.\n• Развилка нарисована как две головы змеи: глаза со зрачками и раздвоенный язык. Клик по голове выбирает ветку: вторая гаснет, её голова получает крестики вместо глаз, полоса сереет, связи рвутся на штрихи.\n• Первый клик по голове показывает дело в досье, второй — идёт в бой (или Enter), поэтому выбор нельзя сделать случайно.\n• В настройках появился переключатель «Карта кампании»: ЗМЕЙКА или КАРТА. Прежняя карта колонками осталась целиком — новый интерфейс не вместо старого.\n• Сейв v9: выбор хранится по каждой развилке отдельно (campaignFork[4]). Старый сейв мигрирует: прежний «след» переносится в акты II–IV, а выбор акта V восстанавливается по тому, какое дело было закрыто.\n• Счётчики актов считают одно прохождение: в акте с развилкой в счёт идёт одна голова, поэтому «3/6» в акте V больше не появится.\n• setClip теперь режет и заливки, а не только текст: прокручиваемый маршрут не рисует дела поверх кнопок внизу экрана.\n• Дерево кампании перестроено в tools/campaign.py: у дел 009, 011, 019, 022 по два пререквизита — головы акта III открываются с любой полосы акта II, и то же для акта IV.\n• Проверено на 1920x1080, 1600x900, 1280x720, 1080x1920 и 800x600. Листы — design/campaign_snake.png и design/campaign_snake_old.png, разбор — design/campaign_map_snake.md.",
-            "• Экран кампании перестал быть ведомостью. Строка «ДЕЛА 17 / 30 • ВЕТОК ВЫБРАНО 3 ИЗ 4» заменена полосой пути: одна клетка — одно дело этой ночи, зелёная клетка пройдена, золотая ждёт, справа четыре ромба развилок, выбранная светится цветом своей ветки.\n• Рядом с полосой осталась только ночь, и то если она не первая: «НОЧЬ 3» вместо столбца чисел.\n• У дел на карте больше нет номеров. Состояние читается знаком: галочка — дело закрыто, пульсирующий ромб — можно идти, косой крест — ветка отмерла, точка — ещё закрыто.\n• Заголовок главы тоже без дроби: ромб, название акта и пипсы по числу дел, заполненные означают пройденное.\n• Маршрут стал телом змеи: изогнутое, толще в середине и тоньше у узлов, с бликом по верхней кромке и свечением у пройденного. Отмершая ветка рвётся на штрихи и сереет.\n• Фон карты получил глубину, у главы появилась тонкая линия по верхней кромке: карта перестала быть плоской плашкой.\n• Досье дела снизу вместо строки «ДЕЛО 30 • АКТ V • ТИР VI • +45% • БОСС ~3 МИН» показывает знаки: часы с минутами, ступени тира с процентом, ромб следа. Страж остался словом — имя не рисуется знаком.\n• На пустом месте досье появилась бледная печать главы: карточка перестала выглядеть недогруженной.\n• Подписи дел больше не обрываются на полуслове у края окна: длинное название переносится на две строки, а подпись, которая не влезает целиком, не рисуется до прокрутки.\n• Прежняя карта колонками не тронута: переключатель «Карта кампании» в настройках, строка 9."
+            "• Экран кампании перестал быть ведомостью. Строка «ДЕЛА 17 / 30 • ВЕТОК ВЫБРАНО 3 ИЗ 4» заменена полосой пути: одна клетка — одно дело этой ночи, зелёная клетка пройдена, золотая ждёт, справа четыре ромба развилок, выбранная светится цветом своей ветки.\n• Рядом с полосой осталась только ночь, и то если она не первая: «НОЧЬ 3» вместо столбца чисел.\n• У дел на карте больше нет номеров. Состояние читается знаком: галочка — дело закрыто, пульсирующий ромб — можно идти, косой крест — ветка отмерла, точка — ещё закрыто.\n• Заголовок главы тоже без дроби: ромб, название акта и пипсы по числу дел, заполненные означают пройденное.\n• Маршрут стал телом змеи: изогнутое, толще в середине и тоньше у узлов, с бликом по верхней кромке и свечением у пройденного. Отмершая ветка рвётся на штрихи и сереет.\n• Фон карты получил глубину, у главы появилась тонкая линия по верхней кромке: карта перестала быть плоской плашкой.\n• Досье дела снизу вместо строки «ДЕЛО 30 • АКТ V • ТИР VI • +45% • БОСС ~3 МИН» показывает знаки: часы с минутами, ступени тира с процентом, ромб следа. Страж остался словом — имя не рисуется знаком.\n• На пустом месте досье появилась бледная печать главы: карточка перестала выглядеть недогруженной.\n• Подписи дел больше не обрываются на полуслове у края окна: длинное название переносится на две строки, а подпись, которая не влезает целиком, не рисуется до прокрутки.\n• Прежняя карта колонками не тронута: переключатель «Карта кампании» в настройках, строка 9.",
+            "• Экран кампании считает раскладку от размера окна, а не от жёстких 1280x720: высота карты, шаг ряда, ширина досье и кнопки выводятся из размеров экрана.\n• Досье встаёт сбоку на широком окне (от 960 px) и на низком (900x520), а под картой — в портрете и в маленьком окне, где ширина дороже высоты.\n• Шаг ряда маршрута считается от высоты: на 1080p вся кампания видна целиком без прокрутки, в высоком портрете ряды расходятся до 64 px, в маленьком окне ужимаются до 40.\n• Если маршрут короче окна, он прижат к низу, но не вплотную: под актом I остаётся четверть запаса.\n• Полоса пути и печати подстраиваются под ширину: в окне уже 820 px плашка «ПЕЧАТИ СЛОМАНЫ» уступает место самим печатям, клетки дел и ромбы развилок сжимаются, «НОЧЬ N» прячется, если не влезает.\n• Сводка дела в досье больше не теряет имя стража: если в общую строку оно не влезает, ему отдаётся отдельная строка над «ЦЕЛЬю».\n• Цель в узкой колонке переносится на две строки — коробка стала выше, текст больше не вылезает за рамку.\n• Одна строка из середины брифинга больше не рисуется: если в досье влезает меньше двух строк, текст не показывается вовсе — обрыв читался как ошибка.\n• Иллюстрация дела режется по своей рамке: на низкой карточке луна и страж больше не вылезают на карту. Иллюстрация включается только там, где под неё есть место (досье от 300 px).\n• Проверено на 1920x1080, 1600x900, 1280x720, 1024x600, 900x700, 900x520, 800x600, 720x480, 1080x1920 и 720x1280."
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
