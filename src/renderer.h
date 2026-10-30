@@ -776,6 +776,30 @@ struct Renderer {
     static inline bool figureVolumeEnabled = true;
     static inline float figureVolumeGradient = 1.0f;
 
+    // ── Пружина позы (аудит §8, P2 №7–8) ─────────────────────────────────────
+    // Поза стража раньше переключалась мгновенно: пришёл замах — фигура в тот же
+    // кадр встала в позу, кончился выброс — в тот же кадр вернулась. В анимации
+    // это называется отсутствием follow-through: движение обрывается, а не
+    // догоняет. Теперь тело идёт за позой пружиной с небольшим перелётом:
+    // замах слегка отстаёт, а после выброса фигура ещё пару кадров проседает.
+    //
+    // Коэффициент демпфирования меньше критического, поэтому сигнал реально
+    // перелетает цель (до ~15 %), а не просто плавно к ней подходит.
+    struct BossSpring {
+        float pose = 0.0f, poseV = 0.0f;
+        float burst = 0.0f, burstV = 0.0f;
+        float lastT = -1.0f;
+    };
+    BossSpring bossSpring[6];
+    static inline bool bossSpringEnabled = true;
+    // Для стендов: последние сглаженные значения, которые получила фигура.
+    static inline float lastBossPose = 0.0f, lastBossBurst = 0.0f;
+    static inline void springStep(float& x, float& v, float target, float dt, float omega, float zeta) {
+        const float a = omega * omega * (target - x) - 2.0f * zeta * omega * v;
+        v += a * dt;
+        x += v * dt;
+    }
+
     // ── Материалы (аудит §8, P1 №4–6) ────────────────────────────────────────
     // Раньше проход объёма применял один приём ко всем шести стражам: металл,
     // ткань, камень и стекло получали одинаковый блик и одинаковую тень, и вся
@@ -1191,18 +1215,57 @@ struct Renderer {
         // страж поворачивается к герою, а не идёт спиной вперёд. Раньше стражи
         // не разворачивались вообще: любой из них смотрел вправо при любом
         // движении по арене.
-        const float sc = s * (1.0f - recoil * 0.05f);
+        // Squash & stretch (P2 №8). Раньше от удара фигура сжималась целиком —
+        // одинаково по обеим осям, и попадание читалось как «страж стал меньше».
+        // Теперь она приседает: по вертикали ужимается сильнее, чем по
+        // горизонтали, поэтому объём сохраняется и удар «вдавливает» стража в пол.
+        const float scX = s * (1.0f + recoil * 0.055f);
+        const float scY = s * (1.0f - recoil * 0.075f);
+        const float sc = scX;  // радиусы, толщины линий и ширина прямоугольников
         const int cyAdj = cy + (int)(recoil * 3.0f);
         // Выпад. Раньше удар стража читался только по одной детали — древку, книге,
         // перу: корпус стоял на месте, будто статуя махнула рукой. Теперь на замахе
         // страж отклоняется назад, а на выбросе подаётся всем телом к герою.
-        const float cpLean = std::max(0.0f, std::min(1.0f, castPose));
-        const float cbLean = std::max(0.0f, std::min(1.0f, castBurst));
+        const float cpLean = std::max(0.0f, std::min(1.2f, castPose));
+        const float cbLean = std::max(0.0f, std::min(1.2f, castBurst));
         const int lunge = (int)lrintf((cbLean * 13.0f - cpLean * 6.0f) * sc) * (mirror ? -1 : 1);
         cx += lunge;
+        // ── Задержка периферии (P2 №7) ───────────────────────────────────────
+        // Раньше корпус и все свисающие детали считались от одного animTime, и
+        // фигура двигалась монолитом, как картонная вырезка. В жизни периферия
+        // догоняет корпус: кисть отстаёт от плеча, подол — от пояса, кончик пера —
+        // от кисти. Здесь это сдвиг фазы: деталь считает синус от (animTime - lag),
+        // и чем дальше она от центра фигуры, тем больше lag.
+        // Величины подобраны по читаемости, а не по физике: настоящая тряпка
+        // отстаёт на 1–3 кадра (17–50 мс), и на 100-пиксельной фигуре это не
+        // видно вовсе. 60–160 мс — это 4–10 кадров, уже заметный «хвост».
+        const float T_HAND = animTime - 0.060f;   // кисти и оружие в руках
+        const float T_CLOAK = animTime - 0.110f;  // полы, ленты, страницы
+        const float T_HEM = animTime - 0.160f;    // подол, шлейф, длинные перья
+        // ── Походка (P2 №9) ─────────────────────────────────────────────────
+        // Корпус проседает в момент шага: ноги разошлись — вес ушёл вниз, ноги
+        // сошлись — корпус подбросило. Раньше корпус ходил ровно, и страж
+        // «скользил» над полом.
+        // Периферия ходит не «своей волной рядом с корпусом», а запаздывающим
+        // корпусом: тот же сигнал наклона, но снятый на lag раньше. Разница
+        // между корпусом и подолом — это и есть видимый хвост: корпус уже пошёл
+        // влево, а подол ещё висит справа.
+        auto swayLag = [&](float freq, float amp, float lag) {
+            return (int)lrintf(sinf((animTime - lag) * freq) * amp * sc);
+        };
+        auto footfall = [&](float freq) {
+            return (int)lrintf(fabsf(sinf(animTime * freq)) * 3.0f * sc);
+        };
+        // ── LOD (P2 №10) ─────────────────────────────────────────────────────
+        // Каноническая фигура — около 120 px в высоту. Ниже 60 px (s < 0.5)
+        // частицы в 1–2 px, заклёпки, звенья цепи и трещины перестают читаться и
+        // превращают силуэт в грязь: SS() отдаёт им минимум 1 px, и точка пары
+        // размером с глаз перекрывает сам глаз. Поэтому мелочь рисуется только
+        // на крупной фигуре, а силуэт и основные плоскости — всегда.
+        const bool lodSmall = (s * 120.0f) < 60.0f;
         auto MO = [&](int ax) { return mirror ? (cx - ax) : (ax - cx); };
         auto PX = [&](int ax) { return cx + (int)lrintf(MO(ax) * sc); };
-        auto PY = [&](int ay) { return cyAdj + (int)lrintf((ay - cy) * sc); };
+        auto PY = [&](int ay) { return cyAdj + (int)lrintf((ay - cy) * scY); };
         auto SS = [&](int v) { return std::max(1, (int)lrintf(v * sc)); };
         // Для прямоугольников в зеркале берём правый край как левый, иначе
         // деталь съезжает на свою же ширину.
@@ -1233,16 +1296,18 @@ struct Renderer {
             // ходит вместе с дыханием, а на замах приседает и поднимает древко.
             const uint32_t steel = tint(0xFF7A6A48), steelLit = tint(0xFFB49B62), steelDark = tint(0xFF3E3423);
             const uint32_t ember = tint(enraged ? 0xFFFF6A2A : 0xFFFFAE3C);
-            const float cp = std::max(0.0f, std::min(1.0f, castPose));
-            const float cb = std::max(0.0f, std::min(1.0f, castBurst));
+            const float cp = std::max(0.0f, std::min(1.2f, castPose));
+            const float cb = std::max(0.0f, std::min(1.2f, castBurst));
+            // Просадка корпуса на шаге: тяжесть уходит вниз, когда ноги разошлись.
+            const int gaitDip = footfall(3.4f);
             // Приседает на замахе и выпрямляется на ударе.
-            const int bodyY = (int)(cp * 5.0f) - (int)(cb * 3.0f);
+            const int bodyY = (int)(cp * 5.0f) - (int)(cb * 3.0f) + gaitDip;
             const int step = (int)(sinf(animTime * 3.4f) * 2.0f);
             // Вес: корпус переносит тяжесть с ноги на ногу, медленнее шага. Без
             // этого многотонная фигура «скользила» ровно, будто её несут.
             const int weight = (int)(sinf(animTime * 1.7f) * 2.0f);
             // Древко: в покое качается, на замахе уходит вверх и назад.
-            const int shaftX = cx + 30 + (int)(sinf(animTime * 1.7f) * 2.0f) - (int)(cp * 8.0f) + (int)(cb * 16.0f);
+            const int shaftX = cx + 30 + (int)(sinf(T_HAND * 1.7f) * 2.0f) - (int)(cp * 8.0f) + (int)(cb * 16.0f);
             const int shaftTopY = cy - 62 - (int)(cp * 16.0f) + (int)(cb * 20.0f);
             DL(shaftX, shaftTopY, cx + 22, cy + 46, steelDark, 5, alpha);
             DL(shaftX, shaftTopY, cx + 22, cy + 46, steel, 3, alpha);
@@ -1277,21 +1342,21 @@ struct Renderer {
             FR(cx + 5 + weight, cy - 58 - lift + bodyY, 4, 5, 1, steelLit, alpha);
             // Искры из щели в груди: поднимаются и гаснут. Раньше страж был
             // единственным, у кого не было ни одной живой частицы.
-            for (int i = 0; i < 5; ++i) {
+            for (int i = 0; i < 5 && !lodSmall; ++i) {
                 const float t = fmodf(animTime * 0.7f + i * 0.2f, 1.0f);
                 const int ex = cx + weight + (int)(sinf(t * 6.0f + i) * 7.0f);
                 const int ey = cy - 2 - lift + bodyY - (int)(t * 40.0f);
                 FC(ex, ey, 1 + (i % 2), ember, (int)(170 * (1.0f - t)));
             }
             // tower shield: в покое чуть качается, на замахе поднимается к груди
-            const int shieldX = cx - 44 + weight + (int)(sinf(animTime * 1.5f) * 1.0f) + (int)(cp * 6.0f);
-            const int shieldY = cy - 22 - lift + bodyY - (int)(cp * 10.0f) + (int)(sinf(animTime * 2.2f) * 1.0f);
+            const int shieldX = cx - 44 + weight + (int)(sinf(T_HAND * 1.5f) * 1.0f) + (int)(cp * 6.0f);
+            const int shieldY = cy - 22 - lift + bodyY - (int)(cp * 10.0f) + (int)(sinf(T_HAND * 2.2f) * 1.0f);
             FR(shieldX, shieldY, 30, 58, 8, steelDark, alpha);
             FR(shieldX + 4, shieldY + 4, 22, 50, 6, steel, alpha);
             FR(shieldX + 8, shieldY + 10, 14, 38, 5, steelLit, alpha);
             FR(shieldX + 11, shieldY + 24, 8, 10, 3, ember, alpha);
             // rivets
-            for (int i = 0; i < 3; ++i) FC(shieldX + 7, shieldY + 10 + i * 16, 2, steelDark, alpha);
+            for (int i = 0; i < 3 && !lodSmall; ++i) FC(shieldX + 7, shieldY + 10 + i * 16, 2, steelDark, alpha);
         } else if (id == 1) {
             // МАЛАКОР — чумной алхимик. Читается по трём вещам: клюв-респиратор,
             // горб над плечами и колба в вытянутой руке. Сгорбленный силуэт шире
@@ -1303,12 +1368,12 @@ struct Renderer {
             // при выбросе — швыряет её вперёд.
             const uint32_t robe = tint(0xFF35502A), robeLit = tint(0xFF6FA04A), robeDark = tint(0xFF141F0F);
             const uint32_t glass = tint(0xFFA8F07C), plague = tint(enraged ? 0xFFC6FF52 : 0xFF7CE04E);
-            const float poseCast = std::max(0.0f, std::min(1.0f, castPose));
-            const float poseBurst = std::max(0.0f, std::min(1.0f, castBurst));
+            const float poseCast = std::max(0.0f, std::min(1.2f, castPose));
+            const float poseBurst = std::max(0.0f, std::min(1.2f, castBurst));
             const float breathe = 0.5f + 0.5f * sinf(animTime * 2.3f);
             const int pace = (int)(sinf(animTime * 3.3f) * 3.0f);
             const int crouch = (int)(breathe * 2.0f) + (int)(poseCast * 4.0f) - (int)(poseBurst * 3.0f);
-            const int torsoY = -lift - crouch;
+            const int torsoY = -lift - crouch + footfall(3.3f);
             const int sway = pace;
             const int lean = (int)(poseCast * 4.0f);
             // Стопы выглядывают из-под подола и переступают: видно, что он идёт,
@@ -1324,10 +1389,12 @@ struct Renderer {
             FR(cx - 26 + sway, cy + 14 + torsoY, 52, 18, 9, robe, alpha);
             // Рваный край подола — плотные пряди, а не тонкие штрихи: раньше две
             // линии на тёмном фоне читались как царапины.
+            const int swayHem = swayLag(3.3f, 3.0f, 0.16f);
             for (int i = -3; i <= 3; ++i) {
-                const int hemWave = (int)(sinf(animTime * 3.6f + i * 0.9f) * 2.0f);
+                // Волна идёт от пояса к краю: крайние пряди отстают сильнее внутренних.
+                const int hemWave = (int)(sinf(T_HEM * 3.6f + i * 0.9f - std::abs(i) * 0.45f) * 2.0f);
                 const int strandH = 4 + ((i + 3) % 3) * 3;
-                FR(cx + i * 7 + sway + hemWave, cy + 30 + torsoY, 6, strandH, 2, robe, alpha);
+                FR(cx + i * 7 + swayHem + hemWave, cy + 30 + torsoY, 6, strandH, 2, robe, alpha);
             }
             FX(cx - 26 + sway, cy + 30 + torsoY, 52, 2, robeLit, 150);
             // Пояс и пара склянок на нём: видно, что перед нами алхимик.
@@ -1346,7 +1413,10 @@ struct Renderer {
             // Две тонкие линии читались как отдельный треугольник над головой.
             for (int k = 0; k < 10; ++k) {
                 const int tipW = std::max(2, 22 - k * 2);
-                const int tipX = headX - tipW / 2 + (k * 9) / 10;
+                // Кончик капюшона отстаёт тем сильнее, чем выше ряд: колпак
+                // не приклеен к голове, а запаздывает за ней.
+                const int tipTrail = (int)lrintf((float)k * 0.45f * sinf(T_HEM * 2.4f));
+                const int tipX = headX - tipW / 2 + (k * 9) / 10 + tipTrail;
                 FR(tipX, cy - 58 - k + torsoY, tipW, 2, 1, k < 2 ? robeLit : robe, alpha);
             }
             // Тёмное лицо и клюв-респиратор.
@@ -1379,7 +1449,7 @@ struct Renderer {
             }
             // Рука от плеча к колбе, всегда живая (чуть дрожит).
             const int shoulderX = cx + 16 + sway, shoulderY = cy - 14 + torsoY;
-            const int handJitter = (int)(sinf(animTime * 7.0f) * 1.0f);
+            const int handJitter = (int)(sinf(T_HAND * 7.0f) * 1.0f);
             DL(shoulderX, shoulderY, flaskX - 5 + handJitter, flaskY - 2, robeLit, 5, alpha);
             DL(shoulderX, shoulderY, flaskX - 5 + handJitter, flaskY - 2, robe, 3, alpha);
             // Ореол колбы: на замахе разгорается, после удара вспыхивает.
@@ -1399,23 +1469,23 @@ struct Renderer {
             FR(flaskX - 3, flaskY - 9, 6, 8, 3, 0xFF6FA04A, alpha);
             FR(flaskX - 8, flaskY - 15, 16, 4, 2, robeLit, alpha);
             // Кипение: пузыри идут вверх по колбе и лопаются у поверхности.
-            for (int b = 0; b < 4; ++b) {
-                const float rise = fmodf(animTime * 0.9f + b * 0.27f, 1.0f);
+            for (int b = 0; b < 4 && !lodSmall; ++b) {
+                const float rise = fmodf(T_CLOAK * 0.9f + b * 0.27f, 1.0f);
                 const int by = flaskY + 10 - (int)(rise * 16.0f);
-                const int bx = flaskX + (int)(sinf(animTime * 3.0f + b * 2.0f) * 5.0f);
+                const int bx = flaskX + (int)(sinf(T_CLOAK * 3.0f + b * 2.0f) * 5.0f);
                 const int br = rise > 0.85f ? 0 : 1 + (b % 2);
                 if (br > 0) FC(bx, by, br, plague, (int)(120 + 100 * (1.0f - rise)));
             }
             // Пары над колбой.
-            for (int w = 0; w < 3; ++w) {
+            for (int w = 0; w < 3 && !lodSmall; ++w) {
                 const float up = fmodf(animTime * 0.6f + w * 0.33f, 1.0f);
-                const int wx = flaskX + (int)(sinf(animTime * 2.2f + w) * 6.0f);
+                const int wx = flaskX + (int)(sinf(T_CLOAK * 2.2f + w) * 6.0f);
                 const int wy = flaskY - 20 - (int)(up * 20.0f);
                 FC(wx, wy, 2 + (w % 2), plague, (int)(80 * (1.0f - up)));
             }
             // Капли: в покое редкие, на замахе чаще, при выбросе — веером.
             const int drops = 3 + (int)(poseCast * 5.0f) + (int)(poseBurst * 6.0f);
-            for (int i = 0; i < drops; ++i) {
+            for (int i = 0; i < drops && !lodSmall; ++i) {
                 const float phase = fmodf(animTime * (1.1f + poseBurst * 1.6f) + i * 0.19f, 1.0f);
                 const int dxSpr = (int)((sinf(i * 2.7f) * 8.0f) * (1.0f + poseBurst * 2.2f));
                 const int dySpr = (int)(phase * (26.0f + poseBurst * 22.0f));
@@ -1427,28 +1497,33 @@ struct Renderer {
             const uint32_t paper = tint(0xFFE8DCC8), ink = tint(0xFFFF4E74);
             // Замах: он откидывается назад и поднимает перо, на выбросе — бросает
             // руку вперёд. Раньше фигура на замах не реагировала вовсе.
-            const float cp = std::max(0.0f, std::min(1.0f, castPose));
-            const float cb = std::max(0.0f, std::min(1.0f, castBurst));
+            const float cp = std::max(0.0f, std::min(1.2f, castPose));
+            const float cb = std::max(0.0f, std::min(1.2f, castBurst));
             const int lean = -(int)(cp * 7.0f) + (int)(cb * 5.0f);
+            // Корпус качается в такт шагу: раньше он не двигался боком вовсе и
+            // фигура стояла истуканом, пока ноги переступали.
+            const int gaitSway = (int)lrintf(sinf(animTime * 2.6f) * 2.0f * sc);
+            const int gaitDip = footfall(2.6f);
             const int bodyY = -(int)(cp * 4.0f) + (int)(cb * 2.0f);
             // long robe, narrow silhouette
-            FR(cx - 20 + lean, cy - 16 - lift + bodyY, 40, 62, 14, cloth, alpha);
-            FR(cx - 14 + lean, cy - 4 - lift + bodyY, 28, 48, 12, clothDark, alpha);
+            FR(cx - 20 + lean + gaitSway, cy - 16 - lift + bodyY + gaitDip, 40, 62, 14, cloth, alpha);
+            FR(cx - 14 + lean + gaitSway, cy - 4 - lift + bodyY + gaitDip, 28, 48, 12, clothDark, alpha);
+            const int swayHem = swayLag(2.6f, 2.0f, 0.16f);
             for (int i = -1; i <= 1; ++i)
-                DL(cx + i * 8 + lean, cy + 8 - lift, cx + i * 8 + lean + (int)(sinf(animTime * 2.0f + i) * 3), cy + 46, clothLit, 3, alpha);
+                DL(cx + i * 8 + lean + swayHem, cy + 8 - lift, cx + i * 8 + lean + swayHem + (int)(sinf(T_HEM * 2.0f + i) * 3), cy + 46, clothLit, 3, alpha);
             // shoulders and collar
-            FR(cx - 24 + lean, cy - 22 - lift + bodyY, 48, 16, 8, clothLit, alpha);
-            FR(cx - 12 + lean, cy - 20 - lift + bodyY, 24, 10, 5, paper, alpha);
+            FR(cx - 24 + lean + gaitSway, cy - 22 - lift + bodyY + gaitDip, 48, 16, 8, clothLit, alpha);
+            FR(cx - 12 + lean + gaitSway, cy - 20 - lift + bodyY + gaitDip, 24, 10, 5, paper, alpha);
             // porcelain mask: на замахе чуть опускает голову, будто читает строку
-            const int maskY = cy - 44 - lift + bodyY + (int)(cp * 3.0f);
-            FR(cx - 11 + lean, maskY, 22, 26, 10, paper, alpha);
-            FR(cx - 7 + lean, maskY + 8, 5, 3, 1, ink, alpha);
-            FR(cx + 2 + lean, maskY + 8, 5, 3, 1, ink, alpha);
-            FR(cx - 4 + lean, maskY + 17, 8, 2, 1, ink, alpha);
+            const int maskY = cy - 44 - lift + bodyY + gaitDip + (int)(cp * 3.0f);
+            FR(cx - 11 + lean + gaitSway, maskY, 22, 26, 10, paper, alpha);
+            FR(cx - 7 + lean + gaitSway, maskY + 8, 5, 3, 1, ink, alpha);
+            FR(cx + 2 + lean + gaitSway, maskY + 8, 5, 3, 1, ink, alpha);
+            FR(cx - 4 + lean + gaitSway, maskY + 17, 8, 2, 1, ink, alpha);
             // a crack across the mask
-            DL(cx + 2 + lean, maskY, cx - 1 + lean, maskY + 14, clothDark, 1, alpha);
+            DL(cx + 2 + lean + gaitSway, maskY, cx - 1 + lean + gaitSway, maskY + 14, clothDark, 1, alpha);
             // wide cardinal hat: покачивается, иначе фигура стоит как истукан
-            const int hatSway = (int)(sinf(animTime * 1.4f) * 2.0f) + lean;
+            const int hatSway = (int)(sinf(T_HAND * 1.4f) * 2.0f) + lean + gaitSway;
             FR(cx - 30 + hatSway, cy - 52 - lift + bodyY, 60, 6, 3, clothLit, alpha);
             FR(cx - 16 + hatSway, cy - 66 - lift + bodyY - (int)(cp * 2.0f), 32, 16, 6, cloth, alpha);
             FR(cx - 16 + hatSway, cy - 66 - lift + bodyY - (int)(cp * 2.0f), 32, 4, 2, clothLit, alpha);
@@ -1458,20 +1533,21 @@ struct Renderer {
             DL(cx - 29 + lean, bookY + 2, cx - 29 + lean, bookY + 14, clothDark, 1, alpha);
             // строки бегут: раз в 0,9 с заново — книга «пишется»
             const int lineDrift = (int)(fmodf(animTime * 6.0f, 4.0f));
-            for (int i = 0; i < 3; ++i)
+            for (int i = 0; i < 3 && !lodSmall; ++i)
                 DL(cx - 37 + lean, bookY + 4 + i * 4 - lineDrift / 2, cx - 33 + lean, bookY + 4 + i * 4 - lineDrift / 2, ink, 1, 170);
             // перо: в покое пишет мелким движением, на замахе вскинуто, на выбросе
             // уходит вперёд — видно момент удара.
-            const float write = sinf(animTime * 5.5f) * 2.0f;
+            const float write = sinf(T_HAND * 5.5f) * 2.0f;
             const int quillBaseX = cx + 24 + lean, quillBaseY = cy + 6 - lift + (int)(write);
-            const int quillTipX = cx + 36 + (int)(-cp * 16.0f + cb * 26.0f);
+            // Кончик пера отстаёт от кисти ещё на полкадра — перо не палка.
+            const int quillTipX = cx + 36 + gaitSway + (int)(-cp * 16.0f + cb * 26.0f) + (int)lrintf(sinf(T_HEM * 5.5f) * 2.0f);
             const int quillTipY = cy - 30 - lift - (int)(cp * 26.0f) + (int)(cb * 22.0f);
             DL(quillBaseX, quillBaseY, quillTipX, quillTipY, paper, 2, alpha);
             DL(quillTipX - 3, quillTipY + 6, quillTipX + 4, quillTipY - 4, paper, 1, alpha);
             FC(quillBaseX + 2, quillBaseY - 2, 2, ink, alpha);
             // seal chain hanging from the belt: подрагивает на ходу
-            for (int i = 0; i < 3; ++i)
-                CR(cx + 12 + (int)(sinf(animTime * 2.4f + i) * 1.5f), cy + 16 + i * 8 - lift, 3, 1, ink, 190, true);
+            for (int i = 0; i < 3 && !lodSmall; ++i)
+                CR(cx + 12 + gaitSway + (int)(sinf(T_HEM * 2.4f + i * 0.9f) * 1.5f), cy + 16 + i * 8 - lift, 3, 1, ink, 190, true);
         } else if (id == 3) {
             // АЗАРОТ — пепельный архивариус. Раньше это было маленькое парящее ядро с
             // кольцами: в бою оно читалось как подбираемый предмет, а не как страж.
@@ -1483,8 +1559,8 @@ struct Renderer {
             // На замахе сердце разгорается, руки разводятся шире и фигура
             // приподнимается; на выбросе — резко проседает. Раньше на замах
             // не реагировал только он один из всей линейки.
-            const float cp = std::max(0.0f, std::min(1.0f, castPose));
-            const float cb = std::max(0.0f, std::min(1.0f, castBurst));
+            const float cp = std::max(0.0f, std::min(1.2f, castPose));
+            const float cb = std::max(0.0f, std::min(1.2f, castBurst));
             const float pulse = 0.5f + 0.5f * sinf(animTime * 3.1f * (1.0f + cp * 1.2f));
             const int bob = (int)(sinf(animTime * 1.4f) * 4.0f) - (int)(cp * 5.0f) + (int)(cb * 4.0f);
             const int oy = cy + bob;
@@ -1492,8 +1568,9 @@ struct Renderer {
             // тень под парящей фигурой
             FX(cx - 40, cy + 58, 80, 9, 0xFF08060E, 90);
             // рваный подол балахона — живёт, шевелится
+            const int swayHem = swayLag(0.9f, 3.0f, 0.16f);
             for (int i = 0; i < 7; ++i) {
-                const int hx = cx - 33 + i * 11 + (int)(sinf(animTime * 1.3f + i) * 2.0f);
+                const int hx = cx - 33 + i * 11 + swayHem + (int)(sinf(T_HEM * 1.3f + i * 1.0f) * 2.0f);
                 FX(hx, cy + 40 + (i % 3) * 3, 9, 18, robeDark, alpha);
             }
             // тело-балахон
@@ -1511,8 +1588,8 @@ struct Renderer {
             for (int side = -1; side <= 1; side += 2) {
                 // Руки разводятся на замахе и вскидываются на выбросе.
                 const int spread = (int)(cp * 12.0f) - (int)(cb * 6.0f);
-                const int hx = cx + side * (40 + sway + spread) + (int)(sinf(animTime * 1.1f + side) * 3.0f);
-                const int hy = oy + 26 - (int)(cp * 14.0f) + (int)(cosf(animTime * 1.1f + side) * 3.0f);
+                const int hx = cx + side * (40 + sway + spread) + (int)(sinf(T_HAND * 1.1f + side) * 3.0f);
+                const int hy = oy + 26 - (int)(cp * 14.0f) + (int)(cosf(T_HAND * 1.1f + side) * 3.0f);
                 DL(cx + side * 26 + sway, oy - 12, hx, hy, robeDark, 6, alpha);
                 DL(cx + side * 26 + sway, oy - 12, hx, hy, robe, 4, alpha);
                 FC(hx, hy, 6, ash, alpha);
@@ -1539,14 +1616,14 @@ struct Renderer {
             // Корона — рваный гребень по краю капюшона: плотные клинья-пластины,
             // а не тонкие лучи с шариком на конце (те читались как усики).
             for (int i = -2; i <= 2; ++i) {
-                const int hgt = 7 + (int)(4.0f + 4.0f * sinf(animTime * 2.0f + i * 1.1f)) - (i % 2 ? 2 : 0);
+                const int hgt = 7 + (int)(4.0f + 4.0f * sinf(T_CLOAK * 2.0f + i * 1.1f)) - (i % 2 ? 2 : 0);
                 const int bx2 = cx + sway + i * 9 - 2;
                 FX(bx2, oy - 60 - hgt, 6, hgt + 2, ash, alpha);
                 FX(bx2 + 1, oy - 60 - hgt, 4, hgt, ashLit, alpha);
                 FX(bx2 + 2, oy - 60 - hgt, 2, 3, core, 220);
             }
             // вихрь пепла вокруг фигуры — эллипс, читается как орбита
-            for (int ring = 0; ring < 2; ++ring) {
+            for (int ring = 0; ring < 2 && !lodSmall; ++ring) {
                 const int rr = 56 + ring * 14;
                 // В ярости пепел идёт быстрее и плотнее: одна и та же фигура, но злее.
                 const float spin = animTime * ((0.7f + ring * 0.5f) * (enraged ? 1.6f : 1.0f));
@@ -1558,7 +1635,7 @@ struct Renderer {
                 }
             }
             // поднимающиеся угли
-            for (int i = 0; i < 9; ++i) {
+            for (int i = 0; i < 9 && !lodSmall; ++i) {
                 const float t2 = fmodf(animTime * 0.45f + i * 0.111f, 1.0f);
                 const int eY = cy + 46 - (int)(t2 * 118.0f);
                 const int eX = cx + (int)(sinf(t2 * 9.0f + i) * (10.0f + t2 * 26.0f));
@@ -1571,8 +1648,8 @@ struct Renderer {
             // томом перед ней: строки на страницах ползут вверх, как в живой записи.
             const uint32_t stone = tint(0xFF4A5566), stoneLit = tint(0xFF8798AD), stoneDark = tint(0xFF232B36);
             const uint32_t ink = tint(enraged ? 0xFF6AF0FF : 0xFF49C8E8);
-            const float cp = std::max(0.0f, std::min(1.0f, castPose));
-            const float cb = std::max(0.0f, std::min(1.0f, castBurst));
+            const float cp = std::max(0.0f, std::min(1.2f, castPose));
+            const float cb = std::max(0.0f, std::min(1.2f, castBurst));
             const int sway = (int)(sinf(animTime * 0.8f) * 3.0f);
             const int bob = (int)(sinf(animTime * 1.5f) * 3.0f) - (int)(cp * 3.0f);
             const int oy = cy + bob;
@@ -1615,7 +1692,7 @@ struct Renderer {
             // кисть возвращается на верхний угол тома. Между предплечьем и мантией
             // остаётся сквозной просвет — единственная дыра в силуэте стража.
             {
-                const int bend = (int)(sinf(animTime * 1.1f) * 2.0f);
+                const int bend = (int)(sinf(T_HAND * 1.1f) * 2.0f);
                 const int shY = oy - 12;              // низ наплечника
                 for (int side = -1; side <= 1; side += 2) {
                     const int sx = cx + side * 36 + sway;
@@ -1634,7 +1711,7 @@ struct Renderer {
                 // Перо в правой кисти: короткое, вверх-вправо от кисти, с кончиком,
                 // лежащим на странице. Длинное перо через полфигуры пересекало
                 // предплечье у локтя и читалось случайной светлой царапиной.
-                const float qa = animTime * 2.2f;
+                const float qa = T_HAND * 2.2f;
                 const int qt = (int)(sinf(qa) * 2.0f);
                 const int hqx = cx + 34 + sway, hqy = oy + 25;
                 DL(hqx, hqy, hqx + 11 + qt, hqy - 20, stoneLit, 2, alpha);
@@ -1649,7 +1726,7 @@ struct Renderer {
             // захлопывается и проседает — момент удара видно по книге.
             const int bookY = oy + 42 - (int)(cp * 26.0f) + (int)(cb * 8.0f);
             const int bookSpread = (int)(cp * 5.0f) - (int)(cb * 4.0f);
-            const int flutter = (int)(sinf(animTime * 5.0f) * 2.0f);
+            const int flutter = (int)(sinf(T_CLOAK * 5.0f) * 2.0f);
             FR(cx - 29, bookY - 15, 58, 32, 6, 0xFF2B2119, alpha);      // переплёт
             FR(cx - 27, bookY - 13, 54, 27, 4, 0xFF4A382A, alpha);
             for (int side = -1; side <= 1; side += 2) {
@@ -1683,12 +1760,12 @@ struct Renderer {
             FR(cx - 3, bookY - 16, 6, 34, 3, stoneLit, alpha);
             FC(cx, bookY - 20, 5, ink, 230);
             // чернильные капли падают с тома
-            for (int i = 0; i < 3; ++i) {
+            for (int i = 0; i < 3 && !lodSmall; ++i) {
                 const float t2 = fmodf(animTime * 0.6f + i * 0.33f, 1.0f);
                 FX(cx - 13 + i * 13, bookY + 16 + (int)(t2 * 24.0f), 2, 3, ink, (int)(200 * (1.0f - t2)));
             }
             // перья-перья вокруг: летят по орбите с хвостом
-            for (int i = 0; i < 4; ++i) {
+            for (int i = 0; i < 4 && !lodSmall; ++i) {
                 const float a = animTime * 1.2f + i * 1.5708f;
                 const int qx = cx + (int)(cosf(a) * 58.0f);
                 const int qy = oy - 6 + (int)(sinf(a) * 30.0f);
@@ -1706,8 +1783,8 @@ struct Renderer {
             // «просвечивает», поэтому сразу видно, кто настоящий.
             const uint32_t glass = tint(0xFF4E7C8A), glassLit = tint(0xFFB4E8F4), glassDark = tint(0xFF16242A);
             const uint32_t core = tint(enraged ? 0xFFFF5A7A : 0xFF8FF0FF);
-            const float cp = std::max(0.0f, std::min(1.0f, castPose));
-            const float cb = std::max(0.0f, std::min(1.0f, castBurst));
+            const float cp = std::max(0.0f, std::min(1.2f, castPose));
+            const float cb = std::max(0.0f, std::min(1.2f, castBurst));
             const float pulse = 0.5f + 0.5f * sinf(animTime * 3.4f);
             const int sway = (int)(sinf(animTime * 1.6f) * 3.0f);
             const int bob = (int)(sinf(animTime * 2.1f) * 3.0f);
@@ -1752,7 +1829,7 @@ struct Renderer {
                 FC(bx, by + 4, 9, glassDark, a);
                 FC(bx, by + 4, 6, core, (int)((a * (0.55f + 0.45f * pulse))));
                 // трещины
-                for (int i = 0; i < 3; ++i) {
+                for (int i = 0; i < 3 && !lodSmall; ++i) {
                     const float ang = (mirror ? -1.0f : 1.0f) * (0.7f + i * 0.9f) + animTime * 0.4f;
                     DL(bx, by + 2, bx + (int)(cosf(ang) * 22.0f), by + (int)(sinf(ang) * 26.0f), core, 1, 130);
                 }
@@ -1760,15 +1837,15 @@ struct Renderer {
             // шлейф: два запоздавших слепка, каждый бледнее предыдущего —
             // движение читается как «стекло», а не как две статичные фигурки
             for (int ghost = 2; ghost >= 1; --ghost) {
-                const int lagX = cx + 40 + sway + separation - (int)(sinf(animTime * 2.6f - ghost * 0.5f) * 5.0f) - ghost * 6;
+                const int lagX = cx + 40 + sway + separation - (int)(sinf(T_CLOAK * 2.6f - ghost * 0.5f) * 5.0f) - ghost * 6;
                 glassBody(lagX, oy - 4 + ghost, 36 - ghost * 8, true, 1.1f + ghost * 0.4f);
             }
             // двойник: та же фигура, отстаёт по фазе и просвечивает сквозь
             const int tx = cx + 46 + sway + separation;
             glassBody(tx, oy - 4, 120, true, 1.1f);
             // трос между двумя телами
-            for (int i = 0; i < 6; ++i)
-                FX(cx + 22 + i * 5, oy + 2 + (int)(sinf(animTime * 3.0f + i) * 2.0f), 2, 2, core, 170);
+            for (int i = 0; i < 6 && !lodSmall; ++i)
+                FX(cx + 22 + i * 5, oy + 2 + (int)(sinf(T_HEM * 3.0f + i * 0.7f) * 2.0f), 2, 2, core, 170);
             // настоящее тело
             glassBody(cx + sway, oy, alpha, false, 0.0f);
             // осколки на орбите
@@ -1785,6 +1862,35 @@ struct Renderer {
     void drawBossSprite(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged = false,
                         bool reinforced = false, float castPose = 0.0f, float castBurst = 0.0f,
                         bool mirror = false, float recoil = 0.0f, float fade = 1.0f) {
+        // Поза догоняется пружиной (см. BossSpring): dt берём из animTime, потому
+        // что рендерер не знает про кадровое время игры. Пауза и переход сцены
+        // дают скачок dt — тогда пружину не двигаем, иначе она «выстрелит».
+        // Пружина живёт здесь, а не в drawBossFigure: сюда приходит только живой
+        // страж (эхо-копии, карточка дела и смерть рисуют фигуру напрямую), так
+        // что один тип стража не двигает пружину дважды за кадр.
+        if (bossSpringEnabled) {
+            const int sid = ((bossType % 6) + 6) % 6;
+            BossSpring& sp = bossSpring[sid];
+            float dt = sp.lastT < 0.0f ? 0.016f : (animTime - sp.lastT);
+            if (!(dt > 0.0f) || dt > 0.25f) {
+                // Пауза, переход сцены или новый страж с тем же типом: время ушло
+                // вперёд скачком или назад. Пружину не интегрируем, а ставим в цель
+                // — иначе она «выстрелит» из старого состояния.
+                dt = 0.0f;
+                sp.pose = castPose;
+                sp.burst = castBurst;
+                sp.poseV = sp.burstV = 0.0f;
+            }
+            sp.lastT = animTime;
+            if (dt > 0.0f) {
+                springStep(sp.pose, sp.poseV, castPose, dt, 15.0f, 0.62f);
+                springStep(sp.burst, sp.burstV, castBurst, dt, 19.0f, 0.55f);
+            }
+            castPose = sp.pose;
+            castBurst = sp.burst;
+            lastBossPose = sp.pose;
+            lastBossBurst = sp.burst;
+        }
         int auraRad = 40 + (int)(sinf(animTime * 7.0f) * 5.0f);
         static const uint32_t auraPalette[6] = {0xFFFFB028, 0xFF80FF40, 0xFFFF3068, 0xFFFF6818, 0xFF49C8E8, 0xFF9EDBE8};
         const int bossId = bossType % 6;
