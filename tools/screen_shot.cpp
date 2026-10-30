@@ -74,6 +74,7 @@ int main(int argc, char** argv) {
         {"patchnotes", STATE_PATCH_NOTES}, {"hall", STATE_HALL}, {"hero", STATE_HERO_SELECT},
         {"play", STATE_PLAYING}, {"pause", STATE_PAUSED}, {"chest", STATE_CHEST},
         {"levelup", STATE_LEVELUP}, {"controls", STATE_CONTROLS_SETUP},
+        {"look", STATE_BUTTON_LOOK},
     };
     int state = strcmp(screen, "debug") == 0 ? STATE_PLAYING : STATE_SETTINGS;
     for (const Case& c : cases) if (strcmp(c.name, screen) == 0) state = c.state;

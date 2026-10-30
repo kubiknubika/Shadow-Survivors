@@ -56,6 +56,7 @@ int main(int argc, char** argv) {
         {"сундук", STATE_CHEST},
         {"прокачка", STATE_LEVELUP},
         {"управление", STATE_CONTROLS_SETUP},
+        {"вид кнопок", STATE_BUTTON_LOOK},
     };
     SCREEN_W = 1280; SCREEN_H = 720;
     for (const Case& c : cases) {

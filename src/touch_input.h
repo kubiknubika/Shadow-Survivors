@@ -69,6 +69,114 @@ inline int touchStepSize(int percent, int direction) {
     return steps[next];
 }
 
+// ── Внешний вид ─────────────────────────────────────────────────────────────
+// Форма, цвет и прозрачность — тоже настройки. Кнопки рисует одна функция
+// touchDrawButton: и в бою, и в превью настроек, поэтому карточка не может
+// разойтись с игрой.
+enum TouchButtonStyle {
+    TOUCH_STYLE_GLASS = 0,   // как было: полупрозрачная заливка и тонкая рамка
+    TOUCH_STYLE_SOLID = 1,   // плотная заливка цветом темы, рамка тонкая
+    TOUCH_STYLE_OUTLINE = 2, // без заливки: только толстая рамка и подпись
+    TOUCH_STYLE_ROUND = 3,   // круглые кнопки вместо скруглённых квадратов
+    TOUCH_STYLE_COUNT = 4
+};
+
+enum TouchTheme {
+    TOUCH_THEME_AMBER = 0,   // янтарь и лёд — прежние цвета
+    TOUCH_THEME_NEON = 1,    // розовый и мятный
+    TOUCH_THEME_MONO = 2,    // серый по чёрному: ничего не отвлекает
+    TOUCH_THEME_EMBER = 3,   // угли и сталь
+    TOUCH_THEME_COUNT = 4
+};
+
+struct TouchSkin {
+    int style = TOUCH_STYLE_GLASS;
+    int theme = TOUCH_THEME_AMBER;
+    int opacity = 100;   // 40…100: насколько залита кнопка
+};
+
+inline int touchClampStyle(int v) {
+    return v < 0 ? 0 : (v >= TOUCH_STYLE_COUNT ? TOUCH_STYLE_COUNT - 1 : v);
+}
+inline int touchClampTheme(int v) {
+    return v < 0 ? 0 : (v >= TOUCH_THEME_COUNT ? TOUCH_THEME_COUNT - 1 : v);
+}
+// Прозрачность: ниже 40 % подпись на светлом фоне боя перестаёт читаться,
+// поэтому 40 — минимум, а не «совсем прозрачно».
+inline int touchClampOpacity(int v) {
+    return v < 40 ? 40 : (v > 100 ? 100 : v);
+}
+inline int touchStepOpacity(int v, int direction) {
+    static const int steps[] = {40, 55, 70, 85, 100};
+    const int count = 5;
+    int nearest = 0;
+    for (int i = 1; i < count; ++i)
+        if (std::abs(steps[i] - v) < std::abs(steps[nearest] - v)) nearest = i;
+    int next = nearest + (direction < 0 ? -1 : 1);
+    if (next < 0) next = count - 1;
+    if (next >= count) next = 0;
+    return steps[next];
+}
+
+inline const char* touchStyleName(int style) {
+    switch (style) {
+        case TOUCH_STYLE_SOLID: return "ПЛОТНЫЕ";
+        case TOUCH_STYLE_OUTLINE: return "КОНТУР";
+        case TOUCH_STYLE_ROUND: return "КРУГ";
+        default: return "СТЕКЛО";
+    }
+}
+inline const char* touchStyleHint(int style) {
+    switch (style) {
+        case TOUCH_STYLE_SOLID: return "плотная заливка, ничего не просвечивает";
+        case TOUCH_STYLE_OUTLINE: return "без заливки: видно бой сквозь кнопку";
+        case TOUCH_STYLE_ROUND: return "круглые кнопки — не спутать с интерфейсом";
+        default: return "полупрозрачное стекло, как было";
+    }
+}
+inline const char* touchThemeName(int theme) {
+    switch (theme) {
+        case TOUCH_THEME_NEON: return "НЕОН";
+        case TOUCH_THEME_MONO: return "МОНО";
+        case TOUCH_THEME_EMBER: return "УГЛИ";
+        default: return "ЯНТАРЬ";
+    }
+}
+
+// Цвета темы одним списком: кнопки, рамка, заливка, нажатое состояние, стик.
+struct TouchPalette {
+    uint32_t ult;     // супер
+    uint32_t dash;    // рывок
+    uint32_t fill;    // заливка в покое
+    uint32_t hot;     // заливка под пальцем
+    uint32_t ink;     // подписи, стрелки крестовины
+    uint32_t ring;    // база стика и служебные кнопки
+};
+
+inline TouchPalette touchPalette(int theme) {
+    switch (touchClampTheme(theme)) {
+        case TOUCH_THEME_NEON:
+            return {0xFFFF6FD8, 0xFF7CFFB0, 0xFF23103A, 0xFF3A1E5C, 0xFFFFFFFF, 0xFFFFC8F4};
+        case TOUCH_THEME_MONO:
+            return {0xFFEDEDED, 0xFFB4B4B4, 0xFF1A1A1A, 0xFF2E2E2E, 0xFFFFFFFF, 0xFFD0D0D0};
+        case TOUCH_THEME_EMBER:
+            return {0xFFFF9A4A, 0xFF9AD8FF, 0xFF241208, 0xFF3C2410, 0xFFFFF0E0, 0xFFFFD8B0};
+        default:
+            return {0xFFFFD24A, 0xFF6FE0FF, 0xFF2A1E44, 0xFF3A2A5A, 0xFFF2ECFF, 0xFFE8DEFF};
+    }
+}
+
+// Смешивание двух цветов: нужно, чтобы «плотная» заливка была цветом темы,
+// но не светилась ярче рамки.
+inline uint32_t touchMix(uint32_t a, uint32_t b, float t) {
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    const auto ch = [&](int shift) {
+        const int av = (int)((a >> shift) & 0xFF), bv = (int)((b >> shift) & 0xFF);
+        return (uint32_t)((int)(av + (bv - av) * t) & 0xFF);
+    };
+    return (a & 0xFF000000u) | (ch(16) << 16) | (ch(8) << 8) | ch(0);
+}
+
 struct TouchRect { float x = 0, y = 0, w = 0, h = 0; };
 
 struct TouchLayout {
@@ -315,16 +423,63 @@ inline void touchUpdate(GameT& g, const TouchPointer* pointers) {
     g.keyLeft = padLeft; g.keyRight = padRight;
 }
 
+// Одна кнопка с учётом стиля, темы и прозрачности. Вызывается и из боя, и из
+// превью настроек, поэтому «как выглядит» и «как нажимается» не расходятся.
+// kind: 0 — кнопка действия, 1 — служебная (пауза, отладка), 2 — крестовина.
+inline void touchDrawButton(Renderer& r, const TouchRect& b, const char* label,
+                            uint32_t accent, const TouchPalette& pal, const TouchSkin& skin,
+                            int kind, bool hot, int fontSizeKind) {
+    const int style = touchClampStyle(skin.style);
+    const int alphaPct = touchClampOpacity(skin.opacity);
+    const int fillAlpha = (int)((float)alphaPct * 2.55f * (hot ? 0.95f : 0.7f));
+    const uint32_t fillColor = hot ? pal.hot : pal.fill;
+    // Подпись всегда светлая: на плотной заливке тёмный текст сливался с фоном
+    // кнопки (видно на листе design/touch_styles.png).
+    const uint32_t inkColor = pal.ink;
+    const bool round = style == TOUCH_STYLE_ROUND;
+    const int x = (int)b.x, y = (int)b.y, w = (int)b.w, h = (int)b.h;
+    const int radius = round ? std::max(3, std::min(w, h) / 2) : std::max(4, std::min(w, h) / 6);
+
+    if (round) {
+        const int cx = x + w / 2, cy = y + h / 2;
+        const int rad = std::min(w, h) / 2 - 1;
+        if (style != TOUCH_STYLE_OUTLINE)
+            r.fillCircle(cx, cy, rad, touchMix(fillColor, accent, 0.25f), fillAlpha);
+        r.drawCircleRing(cx, cy, rad, style == TOUCH_STYLE_OUTLINE ? 3 : 2, accent,
+                         style == TOUCH_STYLE_OUTLINE ? 235 : 200);
+        r.drawTextCentered(fontSizeKind == 1 ? FONT_MED : FONT_SMALL, cx,
+                           cy - (fontSizeKind == 1 ? 12 : 8), label, inkColor, true, 240);
+        return;
+    }
+
+    if (style == TOUCH_STYLE_SOLID) {
+        // Плотная заливка цветом темы: кнопка читается даже на светлом полу.
+        r.fillRoundedRect(x, y, w, h, radius, touchMix(fillColor, accent, 0.45f), fillAlpha);
+        r.drawRoundedRect(x, y, w, h, radius, accent, 1, 210);
+    } else if (style == TOUCH_STYLE_OUTLINE) {
+        r.fillRoundedRect(x, y, w, h, radius, fillColor, fillAlpha / 3);
+        r.drawRoundedRect(x, y, w, h, radius, accent, 3, 235);
+    } else {
+        r.fillRoundedRect(x, y, w, h, radius, fillColor, fillAlpha);
+        r.drawRoundedRect(x, y, w, h, radius, accent, 2, hot ? 235 : 175);
+    }
+    r.drawTextCentered(fontSizeKind == 1 ? FONT_MED : FONT_SMALL, x + w / 2,
+                       y + h / 2 - (fontSizeKind == 1 ? 12 : 8), label, inkColor, true, 240);
+    (void)kind;
+}
+
 // Кнопки видны всегда, стик — пока палец на экране. Рисуется в тот же кадр,
 // поэтому масштабирование на устройстве общее с игрой.
 template <typename GameT>
-inline void drawTouchOverlay(Renderer& r, GameT& g, const TouchPointer* pointers, const TouchLayout& layout) {
+inline void drawTouchOverlay(Renderer& r, GameT& g, const TouchPointer* pointers,
+                             const TouchLayout& layout, const TouchSkin& skin) {
     const bool playing = g.state == STATE_PLAYING || g.state == STATE_PAUSED ||
                          g.state == STATE_LEVELUP || g.state == STATE_CHEST ||
                          g.state == STATE_BOSS_MUSIC_TEST;
     if (!playing) return;
 
-    // Подпись не должна вылезать за кнопку: при размере 70 % «РЫВОК» шире самой
+    const TouchPalette pal = touchPalette(skin.theme);
+    // Подпись не должна вылезать за кнопку: при малом размере «РЫВОК» шире самой
     // кнопки. Тогда обе кнопки действия переходят на короткую форму сразу —
     // «СУПЕР» и «РЫВОК» рядом должны читаться одинаково.
     auto fits = [&](const TouchRect& b, const char* label) {
@@ -332,13 +487,9 @@ inline void drawTouchOverlay(Renderer& r, GameT& g, const TouchPointer* pointers
     };
     const bool fullLabels = fits(layout.ult, "СУПЕР") && fits(layout.dash, "РЫВОК");
     auto button = [&](const TouchRect& b, const char* label, const char* shortLabel,
-                      uint32_t accent, bool hot) {
-        const int x = (int)b.x, y = (int)b.y, w = (int)b.w, h = (int)b.h;
-        r.fillRoundedRect(x, y, w, h, 14, hot ? 0xFF3A2A5A : 0xFF2A1E44, hot ? 210 : 150);
-        r.drawRoundedRect(x, y, w, h, 14, accent, 2, hot ? 235 : 170);
-        r.drawTextCentered(FONT_SMALL, x + w / 2, y + h / 2 - 8,
-                           fullLabels || strcmp(label, shortLabel) == 0 ? label : shortLabel,
-                           accent, true, 235);
+                      uint32_t accent, bool hot, int kind = 0, int fontSizeKind = 0) {
+        touchDrawButton(r, b, fullLabels || strcmp(label, shortLabel) == 0 ? label : shortLabel,
+                        accent, pal, skin, kind, hot, fontSizeKind);
     };
 
     bool dashHot = false, ultHot = false;
@@ -351,24 +502,19 @@ inline void drawTouchOverlay(Renderer& r, GameT& g, const TouchPointer* pointers
         if (pointers[i].role == TOUCH_PAD_LEFT) padHot[2] = true;
         if (pointers[i].role == TOUCH_PAD_RIGHT) padHot[3] = true;
     }
-    button(layout.ult, "СУПЕР", "СУП", 0xFFFFD24A, ultHot);
-    button(layout.dash, "РЫВОК", "РЫВ", 0xFF6FE0FF, dashHot);
-    button(layout.pause, "II", "II", 0xFFC8BEDA, false);
+    button(layout.ult, "СУПЕР", "СУП", pal.ult, ultHot, 0, 1);
+    button(layout.dash, "РЫВОК", "РЫВ", pal.dash, dashHot, 0, 1);
+    button(layout.pause, "II", "II", pal.ring, false, 1);
     // «F3» — имя клавиши: на телефоне такой клавиши нет, поэтому кнопка зовётся
     // так, как её видит игрок.
-    button(layout.debug, "ОТЛ", "ОТЛ", 0xFF8FD0E8, g.debugOverlay);
+    button(layout.debug, "ОТЛ", "ОТЛ", pal.dash, g.debugOverlay, 1);
 
     if (layout.dpad()) {
         const TouchRect* pads[4] = {&layout.padUp, &layout.padDown, &layout.padLeft, &layout.padRight};
         const char* arrows[4] = {"^", "v", "<", ">"};
         for (int i = 0; i < 4; ++i) {
-            const int x = (int)pads[i]->x, y = (int)pads[i]->y;
-            const int w = (int)pads[i]->w, h = (int)pads[i]->h;
-            r.fillRoundedRect(x, y, w, h, 12, padHot[i] ? 0xFF3A2A5A : 0xFF231A38,
-                              padHot[i] ? 220 : 140);
-            r.drawRoundedRect(x, y, w, h, 12, padHot[i] ? 0xFFE8DEFF : 0xFF7868A0, 2,
-                              padHot[i] ? 240 : 160);
-            r.drawTextCentered(FONT_MED, x + w / 2, y + h / 2 - 12, arrows[i], 0xFFEDE6FF, true, 235);
+            touchDrawButton(r, *pads[i], arrows[i], padHot[i] ? pal.ink : pal.ring, pal, skin, 2,
+                            padHot[i], 1);
         }
     }
 
@@ -378,9 +524,13 @@ inline void drawTouchOverlay(Renderer& r, GameT& g, const TouchPointer* pointers
         const float dx = std::max(-maxOut, std::min(maxOut, pointers[i].x - pointers[i].baseX));
         const float dy = std::max(-maxOut, std::min(maxOut, pointers[i].y - pointers[i].baseY));
         const int ring = (int)layout.stickBase, knob = (int)layout.stickKnob;
-        r.drawCircleRing((int)pointers[i].baseX, (int)pointers[i].baseY, ring, 3, 0xFFE8DEFF, 90);
-        r.fillCircle((int)(pointers[i].baseX + dx), (int)(pointers[i].baseY + dy), knob, 0xFFB9A8E8, 190);
-        r.drawCircleRing((int)(pointers[i].baseX + dx), (int)(pointers[i].baseY + dy), knob, 2, 0xFFEDE6FF, 200);
+        const int stickAlpha = (int)((float)touchClampOpacity(skin.opacity) * 2.55f);
+        r.drawCircleRing((int)pointers[i].baseX, (int)pointers[i].baseY, ring, 3, pal.ring,
+                         stickAlpha * 40 / 100);
+        r.fillCircle((int)(pointers[i].baseX + dx), (int)(pointers[i].baseY + dy), knob,
+                     touchMix(pal.fill, pal.ult, 0.35f), stickAlpha * 75 / 100);
+        r.drawCircleRing((int)(pointers[i].baseX + dx), (int)(pointers[i].baseY + dy), knob, 2,
+                         pal.ink, stickAlpha * 80 / 100);
     }
 }
 

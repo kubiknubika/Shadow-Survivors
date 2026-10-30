@@ -224,7 +224,9 @@ build_android.bat install
 
 Схема управления нарисована на листе `design/touch_controls.png` (все три схемы:
 стик слева, стик справа, крестовина), размеры кнопок — на `design/touch_sizes.png`
-(80 / 100 / 160 %), разница ступеней графики — на `design/mobile_levels.png`.
+(80 / 100 / 160 %), стили и цвета — на `design/touch_styles.png` и
+`design/touch_themes.png`, сам экран «ВНЕШНИЙ ВИД КНОПОК» — на
+`design/touch_look.png`, разница ступеней графики — на `design/mobile_levels.png`.
 
 ---
 

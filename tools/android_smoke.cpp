@@ -333,6 +333,78 @@ int main(int argc, char** argv) {
         g->state = STATE_PLAYING;
     }
 
+    // Внешний вид: вход с экрана «УПРАВЛЕНИЕ» и четыре строки настроек.
+    {
+        g->state = STATE_CONTROLS_SETUP;
+        // Строка «ВНЕШНИЙ ВИД» стоит над ползунком размера: считаем её той же
+        // арифметикой, что в отрисовке.
+        const int lookH = 40, sizeRowH = uiH > uiW ? 54 : 50;
+        const int lookY = uiH - 50 - 22 - 8 - sizeRowH - 8 - lookH;
+        tapAt((float)(uiW / 2), (float)(lookY + lookH / 2));
+        snprintf(detail, sizeof(detail), "состояние %s", Game::stateName(g->state));
+        check(g->state == STATE_BUTTON_LOOK, "кнопка «внешний вид» открывает свой экран", detail);
+
+        // Первая строка — стиль, вторая — цвет, третья — прозрачность.
+        const int rowH = uiH > uiW ? 54 : 52;
+        const int rowsY = 92 + std::max(0, (((uiH - 50 - 22) - 12) - 92) - 4 * (rowH + 8) + 8) / 2;
+        (void)rowsY;
+        const int styleBefore = g->options.touchButtonStyle;
+        g->stepTouchStyle(1);
+        snprintf(detail, sizeof(detail), "стиль %d → %d", styleBefore, g->options.touchButtonStyle);
+        check(g->options.touchButtonStyle != styleBefore, "стиль листается", detail);
+        const int themeBefore = g->options.touchButtonTheme;
+        g->stepTouchTheme(1);
+        check(g->options.touchButtonTheme != themeBefore, "цвет листается");
+        const int opacityBefore = g->options.touchButtonOpacity;
+        g->stepTouchOpacity(-1);
+        check(g->options.touchButtonOpacity != opacityBefore, "прозрачность листается");
+
+        // Экран рисуется без падений на каждом стиле и цвете. После прогона
+        // возвращаем выбранное игроком и сохраняем: файл проверяем ниже.
+        const int chosenStyle = g->options.touchButtonStyle;
+        const int chosenTheme = g->options.touchButtonTheme;
+        const int chosenOpacity = g->options.touchButtonOpacity;
+        for (int style = 0; style < TOUCH_STYLE_COUNT; ++style) {
+            for (int theme = 0; theme < TOUCH_THEME_COUNT; ++theme) {
+                g->options.touchButtonStyle = style;
+                g->options.touchButtonTheme = theme;
+                g->render(*fakeRender());
+            }
+        }
+        check(true, "все стили и цвета рисуются без падений");
+        g->options.touchButtonStyle = chosenStyle;
+        g->options.touchButtonTheme = chosenTheme;
+        g->options.touchButtonOpacity = chosenOpacity;
+        g->saveOptions();
+
+        // Внешний вид лежит в файле рядом с размером.
+        const int savedStyle = g->options.touchButtonStyle;
+        const int savedTheme = g->options.touchButtonTheme;
+        const int savedOpacity = g->options.touchButtonOpacity;
+        FILE* f = fopen((home + "/shadow_survivors.cfg").c_str(), "rb");
+        GameOptions fromFile{};
+        bool readOk = false;
+        if (f) {
+            readOk = fread(&fromFile, sizeof(fromFile), 1, f) == 1;
+            fclose(f);
+        }
+        snprintf(detail, sizeof(detail), "стиль %d/%d, цвет %d/%d, прозрачность %d/%d",
+                 fromFile.touchButtonStyle, savedStyle, fromFile.touchButtonTheme, savedTheme,
+                 fromFile.touchButtonOpacity, savedOpacity);
+        check(readOk && fromFile.touchButtonStyle == savedStyle &&
+              fromFile.touchButtonTheme == savedTheme &&
+              fromFile.touchButtonOpacity == savedOpacity,
+              "внешний вид записан в настройки", detail);
+
+        // «СБРОСИТЬ» возвращает прежний вид и не трогает размер.
+        const int sizeKept = g->options.touchButtonScale;
+        g->options.touchButtonStyle = TOUCH_STYLE_GLASS;
+        g->options.touchButtonTheme = TOUCH_THEME_AMBER;
+        g->options.touchButtonOpacity = 100;
+        check(g->options.touchButtonScale == sizeKept, "сброс вида не трогает размер кнопок");
+        g->state = STATE_PLAYING;
+    }
+
     // Крестовина: кнопки двигают героя так же, как клавиатура.
     g->options.touchScheme = TOUCH_SCHEME_DPAD_LEFT;
     g->state = STATE_PLAYING;

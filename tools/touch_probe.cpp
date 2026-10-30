@@ -521,8 +521,9 @@ static void testOptionsFile() {
               "хвост старых настроек на месте");
         check(g.options.touchScheme == TOUCH_SCHEME_STICK_LEFT && g.options.touchSetupDone == 0,
               "новых полей в старом файле нет — схема по умолчанию и вопрос при запуске");
-        check(sizeof(GameOptions) == 72, "новые настройки занимают 72 байта");
+        check(sizeof(GameOptions) == 84, "новые настройки занимают 84 байта");
         check(sizeof(LegacyGameOptions68) == 68, "раскладка 2.10.53 осталась 68 байт");
+        check(sizeof(LegacyGameOptions72) == 72, "раскладка 2.10.54 осталась 72 байта");
         check(g.options.touchButtonScale == TOUCH_SIZE_DEFAULT,
               "в старом файле нет размера кнопок — он по умолчанию");
 
@@ -636,6 +637,94 @@ static void testButtonSize() {
                  r.textWidth(FONT_SMALL, "РЫВОК"), (int)l.dash.w);
         check(fitsFull || fitsShort, "подпись кнопки рывка всегда влезает", tag);
     }
+}
+
+// ── 8.7. Внешний вид кнопок: стиль, цвет, прозрачность ─────────────────────
+static uint32_t overlayHash(Game& g, TouchLayout& layout, TouchPointer* pointers, int style,
+                            int theme, int opacity) {
+    Renderer r;
+    r.resize(1600, 720);
+    TouchSkin skin;
+    skin.style = style;
+    skin.theme = theme;
+    skin.opacity = opacity;
+    r.clear(0xFF000000);
+    g.render(r);
+    drawTouchOverlay(r, g, pointers, layout, skin);
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < 1600 * 720; ++i) h = (h ^ r.pixels[i]) * 16777619u;
+    return h;
+}
+
+static void testButtonLook() {
+    printf("внешний вид кнопок\n");
+    Renderer r;
+    r.resize(1600, 720);
+
+    // Границы и ступени.
+    check(touchClampStyle(-5) == 0 && touchClampStyle(99) == TOUCH_STYLE_COUNT - 1,
+          "стиль упирается в границы списка");
+    check(touchClampTheme(-1) == 0 && touchClampTheme(9) == TOUCH_THEME_COUNT - 1,
+          "цвет упирается в границы списка");
+    check(touchClampOpacity(0) == 40 && touchClampOpacity(1000) == 100,
+          "прозрачность держится в 40…100 %");
+    check(touchStepOpacity(100, 1) == 40, "прозрачность листается по кругу");
+    check(touchStepOpacity(40, -1) == 100, "и в обратную сторону тоже");
+
+    // Стили и цвета — это разные слова, а не разные числа на экране.
+    bool namesDiffer = true;
+    for (int i = 0; i < TOUCH_STYLE_COUNT; ++i)
+        for (int j = i + 1; j < TOUCH_STYLE_COUNT; ++j)
+            if (strcmp(touchStyleName(i), touchStyleName(j)) == 0) namesDiffer = false;
+    check(namesDiffer, "у каждого стиля своё название");
+    namesDiffer = true;
+    for (int i = 0; i < TOUCH_THEME_COUNT; ++i)
+        for (int j = i + 1; j < TOUCH_THEME_COUNT; ++j)
+            if (touchPalette(i).ult == touchPalette(j).ult) namesDiffer = false;
+    check(namesDiffer, "у каждой темы свой цвет супера");
+
+    // Рисование: разные настройки дают разную картинку.
+    Game g;
+    freshGame(g, 1600, 720);
+    g.touchControls = true;
+    g.state = STATE_PLAYING;
+    TouchLayout layout;
+    layout.layout(1600, 720);
+    TouchPointer pointers[TOUCH_MAX_POINTERS];
+    const uint32_t glass = overlayHash(g, layout, pointers, TOUCH_STYLE_GLASS, TOUCH_THEME_AMBER, 100);
+    const uint32_t solid = overlayHash(g, layout, pointers, TOUCH_STYLE_SOLID, TOUCH_THEME_AMBER, 100);
+    const uint32_t outline = overlayHash(g, layout, pointers, TOUCH_STYLE_OUTLINE, TOUCH_THEME_AMBER, 100);
+    const uint32_t round = overlayHash(g, layout, pointers, TOUCH_STYLE_ROUND, TOUCH_THEME_AMBER, 100);
+    const uint32_t neon = overlayHash(g, layout, pointers, TOUCH_STYLE_GLASS, TOUCH_THEME_NEON, 100);
+    const uint32_t faint = overlayHash(g, layout, pointers, TOUCH_STYLE_GLASS, TOUCH_THEME_AMBER, 40);
+    check(glass != solid && glass != outline && glass != round && solid != round,
+          "каждый стиль рисуется по-своему");
+    check(glass != neon, "другая тема — другая картинка");
+    check(glass != faint, "прозрачность тоже видна");
+    check(glass == overlayHash(g, layout, pointers, TOUCH_STYLE_GLASS, TOUCH_THEME_AMBER, 100),
+          "один и тот же внешний вид рисуется одинаково (кадр детерминирован)");
+
+    // В превью и в бою одна и та же функция: превью не может разойтись с игрой.
+    // Размер рендерера совпадает с SCREEN_W/SCREEN_H: помощники рисования
+    // считают границы от глобального кадра, а не от локального.
+    Renderer p1, p2;
+    p1.resize(1600, 720);
+    p2.resize(1600, 720);
+    p1.clear(0xFF000000);
+    p2.clear(0xFF000000);
+    g.drawSchemePreview(p1, 10, 10, 400, 300, TOUCH_SCHEME_STICK_LEFT, TOUCH_SIZE_DEFAULT);
+    TouchSkin skin;
+    skin.style = TOUCH_STYLE_GLASS;
+    skin.theme = TOUCH_THEME_AMBER;
+    skin.opacity = 100;
+    g.drawSchemePreview(p2, 10, 10, 400, 300, TOUCH_SCHEME_STICK_LEFT, TOUCH_SIZE_DEFAULT, &skin);
+    bool same = true;
+    for (int i = 0; i < 1600 * 720; ++i) if (p1.pixels[i] != p2.pixels[i]) same = false;
+    check(same, "превью с явным внешним видом совпадает с превью по настройкам");
+
+    // Настройки: файл 84 байта, прежний 72-байтный читается, внешний вид по умолчанию.
+    check(sizeof(GameOptions) == 84, "настройки с внешним видом занимают 84 байта");
+    check(sizeof(LegacyGameOptions72) == 72, "раскладка 2.10.54 осталась 72 байта");
 }
 
 // ── 9. Прокрутка списков пальцем (колеса на телефоне нет) ───────────────────
@@ -763,6 +852,7 @@ int main(int argc, char** argv) {
     testOptionsFile();
     testNoStickInMenus();
     testButtonSize();
+    testButtonLook();
     testSwipeScroll();
     testTouchUi();
     printf("\nитого: %d проверок, провалов %d\n", g_passed + g_failed, g_failed);

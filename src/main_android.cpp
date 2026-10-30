@@ -563,7 +563,7 @@ static void gameThread() {
         const double workStart = nowSeconds();
         g_game.update(dt);
         g_game.render(g_renderer);
-        drawTouchOverlay(g_renderer, g_game, g_pointer, g_touchLayout);
+        drawTouchOverlay(g_renderer, g_game, g_pointer, g_touchLayout, g_game.touchSkin());
         const double workEnd = nowSeconds();
         // Ступень графики в АВТО двигается по времени работы, как на Windows.
         g_game.observeFrameTime((float)((workEnd - workStart) * 1000.0));
