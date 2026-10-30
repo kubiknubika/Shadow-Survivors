@@ -1158,7 +1158,13 @@ struct Renderer {
         auto FC = [&](int x, int y, int r, uint32_t c, int a = 255) { fillCircle(PX(x), PY(y), SS(r), c, a); };
         auto FX = [&](int x, int y, int w, int h, uint32_t c, int a = 255) { fillRect(RX(x, w), PY(y), SS(w), SS(h), c, a); };
         auto DL = [&](int x0, int y0, int x1, int y1, uint32_t c, int th = 1, int a = 255, bool add = false) {
-            drawLine(PX(x0), PY(y0), PX(x1), PY(y1), std::max(1, (int)lrintf(th * sc)), c, a, add);
+            // Порядок аргументов у drawLine: (col, thickness, alpha, additive).
+            // Раньше здесь цвет и толщина стояли наоборот: в цвет попадало число
+            // толщины (почти чёрный 0x0000000A без альфы), а в толщину — упакованный
+            // цвет, который как int отрицателен, поэтому rad <= 0 и линия вырождалась
+            // в цепочку одиночных пикселей. Из-за этого все DL-детали фигур (руки,
+            // посохи, перья) были невидимы, а силуэт читался обрубком.
+            drawLine(PX(x0), PY(y0), PX(x1), PY(y1), c, std::max(1, (int)lrintf(th * sc)), a, add);
         };
         auto CR = [&](int x, int y, int r, int th, uint32_t c, int a = 255, bool add = false) {
             drawCircleRing(PX(x), PY(y), SS(r), std::max(1, (int)lrintf(th * sc)), c, a, add);
@@ -1203,9 +1209,17 @@ struct Renderer {
             // pauldrons
             FR(cx - 36 + weight, cy - 30 - lift + bodyY, 18, 20, 8, steelLit, alpha);
             FR(cx + 18 + weight, cy - 30 - lift + bodyY, 18, 20, 8, steelLit, alpha);
-            // helmet with slit
-            FR(cx - 13 + weight, cy - 46 - lift + bodyY, 26, 24, 8, steel, alpha);
-            FR(cx - 9 + weight, cy - 38 - lift + bodyY, 18, 4, 2, ember, alpha);
+            // Голова и гребень. Шею с просветом пробовал дважды: на приземистом
+            // торсе она читалась то тонкой палкой, то горлышком бутылки, а рога по
+            // краям шлема — висящими в воздухе точками. Для стража-башни сплошная
+            // масса — намеренная часть образа (квадрат = надёжность), поэтому голова
+            // остаётся на плечах, а верхнюю линию ломает гребень, вросший в шлем.
+            // Он же даёт опознание в миниатюре: единственная ступенька на макушке.
+            FR(cx - 13 + weight, cy - 47 - lift + bodyY, 26, 24, 8, steel, alpha);
+            FR(cx - 9 + weight, cy - 39 - lift + bodyY, 18, 4, 2, ember, alpha);
+            FR(cx - 5 + weight, cy - 51 - lift + bodyY, 14, 5, 2, steel, alpha);
+            FR(cx + 1 + weight, cy - 55 - lift + bodyY, 9, 6, 2, steelLit, alpha);
+            FR(cx + 5 + weight, cy - 58 - lift + bodyY, 4, 5, 1, steelLit, alpha);
             // Искры из щели в груди: поднимаются и гаснут. Раньше страж был
             // единственным, у кого не было ни одной живой частицы.
             for (int i = 0; i < 5; ++i) {
@@ -1517,11 +1531,15 @@ struct Renderer {
             FR(cx - 44 + sway, oy - 34, 88, 18, 8, stoneLit, alpha);
             FR(cx - 40 + sway, oy - 31, 80, 7, 4, stone, alpha);
             for (int i = 0; i < 4; ++i) FC(cx - 31 + i * 21 + sway, oy - 27, 2, ink, 200);
+            // Шея: капюшон поднят, между ним и наплечником виден просвет.
+            // Раньше капюшон лежал на плечах вплотную, и в силуэте не было ни
+            // одного промежутка — страж читался плитой (аудит §3: 0 дыр).
+            FR(cx - 7 + sway, oy - 42, 14, 12, 4, stoneDark, alpha);
             // капюшон и скрижаль-лицо с прорезью чернил
-            FR(cx - 22 + sway, oy - 78, 44, 48, 14, stoneDark, alpha);
-            FR(cx - 16 + sway, oy - 70, 32, 32, 8, 0xFF0E1219, alpha);
+            FR(cx - 22 + sway, oy - 84, 44, 48, 14, stoneDark, alpha);
+            FR(cx - 16 + sway, oy - 76, 32, 32, 8, 0xFF0E1219, alpha);
             for (int ln = 0; ln < 3; ++ln) {
-                const int ly = oy - 64 + ln * 9;
+                const int ly = oy - 70 + ln * 9;
                 const int lw = 20 - ln * 4;
                 const float glow = 0.5f + 0.5f * sinf(animTime * 4.0f - ln * 1.2f);
                 FX(cx - 8 + sway, ly, lw, 2, ink, (int)(110 + 140 * glow));
@@ -1534,17 +1552,40 @@ struct Renderer {
                     // Развёртка идёт вниз по скрижали, как сканирующая строка: поперёк
                     // лица двигать нельзя — получался крест на всю голову.
                     const int dy = (int)(tick / 0.35f * 28.0f);
-                    FX(cx - 15 + sway, oy - 70 + dy, 30, 2, 0xFFDFF6FF, 190);
+                    FX(cx - 15 + sway, oy - 76 + dy, 30, 2, 0xFFDFF6FF, 190);
                 }
             }
-            // рука с пером
+            // Руки. Ширину силуэта держит наплечник, поэтому кисти не выходят за
+            // него: плечо уходит под наплечник, локоть чуть наружу мантии (34),
+            // кисть возвращается на верхний угол тома. Между предплечьем и мантией
+            // остаётся сквозной просвет — единственная дыра в силуэте стража.
             {
-                const int ax = cx - 46 + sway, ay = oy - 6;
-                DL(cx - 26 + sway, oy - 18, ax, ay, stone, 6, alpha);
-                DL(cx - 26 + sway, oy - 18, ax, ay, stoneLit, 3, alpha);
+                const int bend = (int)(sinf(animTime * 1.1f) * 2.0f);
+                const int shY = oy - 12;              // низ наплечника
+                for (int side = -1; side <= 1; side += 2) {
+                    const int sx = cx + side * 36 + sway;
+                    const int ex = cx + side * 54 + sway, ey = oy + 2 + bend;
+                    const int hx = cx + side * 34 + sway, hy = oy + 26;
+                    // Объём: тело руки камнем, блик — тонкой линией по верхне-левой
+                    // стороне. Раньше блик шёл по центру трубы, и рука светилась
+                    // целиком, как пластиковая.
+                    DL(sx, shY, ex, ey, stoneDark, 10, alpha);
+                    DL(sx - 2, shY - 2, ex - 2, ey - 2, stone, 3, alpha);
+                    DL(ex, ey, hx, hy, stoneDark, 9, alpha);
+                    DL(ex - 2, ey - 2, hx - 2, hy - 2, stone, 3, alpha);
+                    FC(hx, hy + 1, 5, stoneDark, alpha);
+                    FC(hx - 1, hy, 3, stone, alpha);
+                }
+                // Перо в правой кисти: короткое, вверх-вправо от кисти, с кончиком,
+                // лежащим на странице. Длинное перо через полфигуры пересекало
+                // предплечье у локтя и читалось случайной светлой царапиной.
                 const float qa = animTime * 2.2f;
-                DL(ax, ay, ax - 10 + (int)(sinf(qa) * 6.0f), ay - 26, stoneLit, 2, alpha);
-                FC(ax - 10 + (int)(sinf(qa) * 6.0f), ay - 28, 3, ink, 230);
+                const int qt = (int)(sinf(qa) * 2.0f);
+                const int hqx = cx + 34 + sway, hqy = oy + 25;
+                DL(hqx, hqy, hqx + 11 + qt, hqy - 20, stoneLit, 2, alpha);
+                DL(hqx + 11 + qt, hqy - 20, hqx + 6 + qt, hqy - 27, ink, 1, 220);
+                FC(hqx + 6 + qt, hqy - 28, 2, ink, 230);
+                DL(hqx, hqy, hqx - 9, hqy + 6, ink, 2, 210);   // кончик по странице
             }
             // большой том перед фигурой: страницы дышат, строки ползут вверх
             // Том держим ниже и уже: на арене (s≈1.1) прежний размер закрывал
@@ -1643,11 +1684,15 @@ struct Renderer {
                 FC(bx, by - 42, 8, glassDark, (a * 3) / 4);
                 FC(bx - 4, by - 43, 3, core, a);
                 FC(bx + 4, by - 43, 3, core, a);
-                // руки, слегка в стороны
-                DL(bx - 20, by - 8, bx - 30, by + 16, glassLit, 5, a);
-                DL(bx + 20, by - 8, bx + 30, by + 16, glassLit, 5, a);
-                DL(bx - 30, by + 16, bx - 28, by + 26, glass, 4, a);
-                DL(bx + 30, by + 16, bx + 28, by + 26, glass, 4, a);
+                // руки, слегка в стороны. Тело руки — стекло, блик тонкой линией
+                // по внешней стороне: раньше вся рука была glassLit, и после
+                // починки drawLine они читались белыми палками, ярче головы.
+                DL(bx - 20, by - 8, bx - 30, by + 16, glass, 6, a);
+                DL(bx + 20, by - 8, bx + 30, by + 16, glass, 6, a);
+                DL(bx - 22, by - 8, bx - 32, by + 16, glassLit, 2, a);
+                DL(bx + 22, by - 8, bx + 32, by + 16, glassLit, 2, a);
+                DL(bx - 30, by + 16, bx - 28, by + 26, glassDark, 5, a);
+                DL(bx + 30, by + 16, bx + 28, by + 26, glassDark, 5, a);
                 // ядро в груди
                 FC(bx, by + 4, 9, glassDark, a);
                 FC(bx, by + 4, 6, core, (int)((a * (0.55f + 0.45f * pulse))));
