@@ -183,7 +183,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 130;
+static constexpr int PATCH_NOTES_COUNT = 131;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -350,6 +350,152 @@ static const MetaUpgradeDef ENEMY_OATHS[ENEMY_OATH_COUNT] = {
 
 struct PendingMatryoshkaSplit { float x, y; };
 
+// ── Ближний бой разумного моба ───────────────────────────────────────────────
+// «Разумность» раньше включалась только на дистанции: упреждение, увёртка от
+// снаряда, стрельба с 700 px. В упор все три тактики превращались в обычного
+// моба — лезли в контакт и давили телом, а стрелок ещё и бил в лицо без времени
+// на реакцию. Теперь у каждой тактики есть свой приём вблизи, и у каждого приёма
+// есть замах, по которому его видно:
+//
+//   * стрелок (0): держит зазор 168 px и пятится по диагонали; если его всё-таки
+//     прижали ближе 104 px — не стреляет в упор, а выскальзывает вбок рывком
+//     1.5× на 0.32 с (перезарядка 1.1 с);
+//   * перехватчик (1): отходит на полшага, замахивается 0.26 с и бьёт рывком
+//     2.8× по прямой; из рывка можно выйти шагом в сторону;
+//   * увёртливый (2): кружит вокруг героя на кольце ~150 px, меняет сторону раз
+//     в 1.6 с и раз в 2.6 с «ныряет» к герою на 0.65 с, чтобы не быть мебелью.
+struct SmartCloseState {
+    bool retreating = false;   // стрелок пятится (гистерезис 168/208)
+    float windup = 0.0f;       // замах перехватчика
+    float lunge = 0.0f;        // остаток рывка
+    float lungeCd = 0.0f;      // перезарядка рывка
+    float lungeX = 0.0f, lungeY = 0.0f;
+    float slip = 0.0f;         // остаток выскальзывания стрелка
+    float slipCd = 0.0f;
+    float slipX = 0.0f, slipY = 0.0f;
+    float dive = 0.0f;         // остаток нырка увёртливого
+    float diveCd = 0.0f;
+    float orbitSign = 1.0f;
+    float orbitTimer = 0.0f;
+};
+
+struct SmartCloseSteer {
+    bool active = false;      // тактика ведёт моба сама
+    float x = 0.0f, y = 0.0f; // направление (не нормализовано)
+    float speedMul = 1.0f;
+    bool holdFire = false;    // стрелку нельзя стрелять в этот кадр
+};
+
+static SmartCloseSteer smartCloseSteer(SmartCloseState& st, int tactic, float dx, float dy, float dist,
+                                       float playerVX, float playerVY, float dt) {
+    SmartCloseSteer out;
+    st.lungeCd = std::max(0.0f, st.lungeCd - dt);
+    st.slipCd = std::max(0.0f, st.slipCd - dt);
+    st.diveCd = std::max(0.0f, st.diveCd - dt);
+    st.orbitTimer -= dt;
+    const float len = std::max(0.001f, dist);
+    const float toX = dx / len, toY = dy / len;   // от моба к герою
+    const float sideX = -toY, sideY = toX;
+
+    if (tactic == 0) {
+        // Стрелок: зазор важнее всего. Гистерезис 168/208 — иначе он дёргался бы
+        // на границе туда-сюда каждый кадр.
+        if (st.slip > 0.0f) {
+            st.slip -= dt;
+            out.active = true;
+            out.x = st.slipX; out.y = st.slipY;
+            out.speedMul = 1.5f;
+            out.holdFire = true;   // выскальзывает, а не стреляет
+            return out;
+        }
+        if (st.retreating) { if (dist > 208.0f) st.retreating = false; }
+        else if (dist < 168.0f) st.retreating = true;
+        // Прижали к себе — вбок, а не в грудь герою: назад он всё равно не
+        // уйдёт, а сбоку появляется зазор для выстрела.
+        if (dist < 104.0f && st.slipCd <= 0.0f) {
+            st.slipCd = 1.1f;
+            st.slip = 0.32f;
+            // Уходит в ту сторону, куда герой не бежит: сбоку зазор живёт дольше.
+            const float sign = (playerVX * sideX + playerVY * sideY) >= 0.0f ? -1.0f : 1.0f;
+            st.slipX = sideX * sign - toX * 0.35f;
+            st.slipY = sideY * sign - toY * 0.35f;
+            out.active = true;
+            out.x = st.slipX; out.y = st.slipY;
+            out.speedMul = 1.5f;
+            out.holdFire = true;
+            return out;
+        }
+        if (st.retreating) {
+            // Отход по диагонали: прямая спина читалась как выход из боя.
+            out.active = true;
+            out.x = -toX + sideX * 0.40f;
+            out.y = -toY + sideY * 0.40f;
+            out.speedMul = 0.92f;
+            // В упор не стреляет: залп без времени на реакцию — не умный бой.
+            out.holdFire = dist < 104.0f;
+        }
+    } else if (tactic == 1) {
+        if (st.lunge > 0.0f) {
+            st.lunge -= dt;
+            out.active = true;
+            out.x = st.lungeX; out.y = st.lungeY;
+            out.speedMul = 2.8f;
+        } else if (st.windup > 0.0f) {
+            st.windup -= dt;
+            // На замахе перехватчик отходит на полшага: рывку нужен разбег, и
+            // у героя появляется время увидеть линию удара.
+            out.active = true;
+            out.x = -toX; out.y = -toY;
+            out.speedMul = 0.55f;
+            st.lungeX = toX; st.lungeY = toY;
+            if (st.windup <= 0.0f) { st.lunge = 0.24f; }
+        } else if (dist < 190.0f && st.lungeCd <= 0.0f) {
+            st.windup = 0.26f;
+            st.lungeCd = 1.7f;
+            st.lungeX = toX; st.lungeY = toY;
+            out.active = true;
+            out.x = toX; out.y = toY;
+            out.speedMul = 0.5f;
+        } else if (dist < 320.0f) {
+            // Средняя дистанция — перехват с упреждением, как раньше.
+            out.active = true;
+            const float interceptTime = std::min(0.72f, dist / 190.0f);
+            float leadX = playerVX * interceptTime, leadY = playerVY * interceptTime;
+            const float leadLen = sqrtf(leadX * leadX + leadY * leadY);
+            if (leadLen > 190.0f) { leadX *= 190.0f / leadLen; leadY *= 190.0f / leadLen; }
+            out.x = dx + leadX;
+            out.y = dy + leadY;
+        }
+    } else if (tactic == 2) {
+        // Увёртливый не лезет напролом: обходит героя по кольцу, меняет сторону
+        // раз в 1.6 с, а раз в 2.6 с ныряет к нему — иначе он просто кружит
+        // рядом и никогда не угрожает.
+        if (dist < 200.0f) {
+            if (st.orbitTimer <= 0.0f) {
+                st.orbitSign = -st.orbitSign;
+                st.orbitTimer = 1.6f;
+            }
+            if (st.dive <= 0.0f && st.diveCd <= 0.0f && dist > 60.0f) {
+                st.dive = 0.80f;
+                st.diveCd = 3.0f;
+            }
+            out.active = true;
+            if (st.dive > 0.0f) {
+                st.dive -= dt;
+                out.x = toX;
+                out.y = toY;
+                out.speedMul = 1.35f;
+            } else {
+                const float radial = dist < 128.0f ? -0.55f : 0.25f;
+                out.x = sideX * st.orbitSign + toX * radial;
+                out.y = sideY * st.orbitSign + toY * radial;
+                out.speedMul = 0.95f;
+            }
+        }
+    }
+    return out;
+}
+
 struct Monster {
     int uniqueId;
     float x, y;
@@ -391,6 +537,7 @@ struct Monster {
     float smartDodgeTimer = 0.0f;
     float smartThinkTimer = 0.0f;
     float smartDodgeX = 0.0f, smartDodgeY = 0.0f;
+    SmartCloseState smartClose; // ближний бой разумного: отход, замах, рывок, круг
     float specialTimer = 0.0f;
     float abilityTimer = 0.0f;
     float abilityWindup = 0.0f;
@@ -409,6 +556,7 @@ struct Monster {
     // проседает и рассыпается (см. renderer drawBossDeath).
     float deathTimer = 0.0f;
 };
+
 
 struct Projectile {
     float x, y;
@@ -2845,6 +2993,7 @@ struct Game {
         m.smartDodgeTimer = 0.0f;
         m.smartThinkTimer = 0.0f;
         m.smartDodgeX = m.smartDodgeY = 0.0f;
+        m.smartClose = SmartCloseState();
         m.hitFlashTimer = 0.0f;
         m.freezeTimer = 0.0f;
         m.shootTimer = m.isSmart && m.smartTactic == 0 ? 0.75f : (1.3f + (rand() % 150) / 100.0f);
@@ -5004,32 +5153,47 @@ struct Game {
             }
 
             float moveX = dx, moveY = dy;
-            if (m.isSmart && m.smartTactic == 1) {
-                // Intercept where the player is moving, with a bounded lead so dashes do not create huge jumps.
-                float interceptTime = std::min(0.72f, dist / std::max(110.0f, m.speed + 80.0f));
-                float leadX = playerVelocityX * interceptTime;
-                float leadY = playerVelocityY * interceptTime;
-                float leadLen = sqrtf(leadX*leadX + leadY*leadY);
-                if (leadLen > 190.0f) { leadX *= 190.0f / leadLen; leadY *= 190.0f / leadLen; }
-                moveX += leadX; moveY += leadY;
-            } else if (m.isSmart && m.smartTactic == 2 && m.smartDodgeTimer > 0.0f) {
-                moveX = m.smartDodgeX; moveY = m.smartDodgeY;
+            float closeSpeedMul = 1.0f;
+            bool smartHoldFire = false;
+            if (m.isSmart) {
+                // Вблизи тактика ведёт моба сама (см. smartCloseSteer): стрелок
+                // держит зазор, перехватчик бьёт рывком с замахом, увёртливый
+                // кружит. Дальше 320 px решатель молчит и остаётся обычный ход.
+                const SmartCloseSteer steer = smartCloseSteer(m.smartClose, m.smartTactic, dx, dy, dist,
+                                                              playerVelocityX, playerVelocityY, dt);
+                if (steer.active) {
+                    moveX = steer.x; moveY = steer.y;
+                    closeSpeedMul = steer.speedMul;
+                }
+                smartHoldFire = steer.holdFire;
+                // Увёртка от снаряда важнее дистанции: снаряд убивает сейчас.
+                if (m.smartTactic == 2 && m.smartDodgeTimer > 0.0f) {
+                    moveX = m.smartDodgeX; moveY = m.smartDodgeY;
+                    closeSpeedMul = 1.0f;
+                }
             }
             const float bossPhaseSpeed = m.isBoss ? (m.bossPhase == 1 ? 1.0f : (m.bossPhase == 2 ? 1.10f : 1.20f)) : 1.0f;
-            float currentSpeed = m.speed * spdMult * bossPhaseSpeed;
+            float currentSpeed = m.speed * spdMult * bossPhaseSpeed * closeSpeedMul;
             if (m.isBoss && m.bossType == 2 && m.abilityActive > 0.0f) {
                 moveX = m.abilityDirX; moveY = m.abilityDirY;
                 currentSpeed *= 3.2f;
             }
             float moveLen = sqrtf(moveX*moveX + moveY*moveY);
-            if (moveLen > 1.0f) {
+            // Порог 0.01, а не 1.0: тактика отдаёт уже нормализованное направление,
+            // и его длина при float-округлении бывала 0.9999999 — моб с «единичным»
+            // вектором не двигался вообще (рывок перехватчика не срабатывал).
+            if (moveLen > 0.01f) {
                 m.x += (moveX / moveLen) * currentSpeed * dt;
                 m.y += (moveY / moveLen) * currentSpeed * dt;
             }
 
             // Ranged attacks for Cultist/Bosses, plus rare predictive sharpshooters.
             bool smartShooter = m.isSmart && m.smartTactic == 0;
-            if (((m.type == 3 || m.type == 8 || m.type == 9 || m.isBoss) || smartShooter) && dist < (smartShooter ? 700.0f : 500.0f)) {
+            if (smartShooter && smartHoldFire) {
+                // В упор стрелок не бьёт: залп без времени на реакцию — не умный
+                // бой, а нечестный. Он отходит и стреляет, когда появился зазор.
+                m.shootTimer = std::max(m.shootTimer, 0.2f);
+            } else if (((m.type == 3 || m.type == 8 || m.type == 9 || m.isBoss) || smartShooter) && dist < (smartShooter ? 700.0f : 500.0f)) {
                 m.shootTimer -= dt;
                 if (m.shootTimer <= 0.0f) {
                     m.shootTimer = smartShooter ? 1.85f : (m.isBoss ? std::max(0.72f, 1.35f - m.bossType * 0.12f - 0.18f * (m.bossPhase - 1)) : (m.type == 9 ? 2.7f : 3.4f));
@@ -5923,6 +6087,37 @@ struct Game {
                     r.addGlow(sx, sy, (int)m.radius + 12, smartColor, 125);
                     r.drawCircleRing(sx, sy, (int)m.radius + 7 + pulse, 2, smartColor, 220, true);
                     r.drawTextCentered(FONT_SMALL, sx, sy - (int)m.radius - 19, "!", smartColor);
+                    // Приёмы вблизи должны читаться до удара, как у стражей.
+                    const float smartDirX = m.smartClose.lungeX, smartDirY = m.smartClose.lungeY;
+                    if (m.smartTactic == 1 && m.smartClose.windup > 0.0f) {
+                        // Замах рывка: линия удара растёт к концу замаха, на конце
+                        // мишень. Телеграф должен читаться на бегу, поэтому он
+                        // толстый и почти непрозрачный, а не «намёк».
+                        const float charge = 1.0f - std::max(0.0f, m.smartClose.windup) / 0.26f;
+                        const int reach = (int)m.radius + 26 + (int)(46.0f * charge);
+                        const int ex = sx + (int)(smartDirX * reach), ey = sy + (int)(smartDirY * reach);
+                        r.drawLine(sx, sy, ex, ey, smartColor, 3, 70 + (int)(120.0f * charge), true);
+                        r.drawCircleRing(ex, ey, 6 + (int)(4.0f * charge), 2, smartColor, 235, true);
+                        r.drawCircleRing(sx, sy, (int)m.radius + 14, 2, smartColor, 120 + (int)(110.0f * charge), true);
+                    } else if (m.smartTactic == 1 && m.smartClose.lunge > 0.0f) {
+                        // Сам рывок: плотный след, видно, что это бросок, а не шаг.
+                        r.drawLine(sx, sy, sx - (int)(smartDirX * 30), sy - (int)(smartDirY * 30),
+                                   smartColor, 5, 90, true);
+                        r.drawLine(sx, sy, sx - (int)(smartDirX * 16), sy - (int)(smartDirY * 16),
+                                   smartColor, 3, 170, true);
+                    } else if (m.smartTactic == 0 && m.smartClose.slip > 0.0f) {
+                        // Выскальзывание вбок: пунктир туда, куда он уходит.
+                        for (int k = 1; k <= 3; ++k) {
+                            const float from = 0.35f * k, to = 0.35f * k + 0.22f;
+                            r.drawLine(sx + (int)(m.smartClose.slipX * 44 * from), sy + (int)(m.smartClose.slipY * 44 * from),
+                                       sx + (int)(m.smartClose.slipX * 44 * to), sy + (int)(m.smartClose.slipY * 44 * to),
+                                       smartColor, 3, 230 - k * 45, true);
+                        }
+                    } else if (m.smartTactic == 2 && m.smartClose.dive > 0.0f) {
+                        // Нырок: две дуги по бокам, чтобы был виден рывок к герою.
+                        r.drawCircleRing(sx, sy, (int)m.radius + 10, 2, smartColor, 230, true);
+                        r.drawCircleRing(sx, sy, (int)m.radius + 16, 1, smartColor, 120, true);
+                    }
                 }
                 if (m.freezeTimer > 0.0f) {
                     r.fillRoundedRect(sx - 11, sy - 14, 22, 26, 4, 0xFF40E8FF, 95);
@@ -9743,6 +9938,7 @@ struct Game {
             "2.10.34 • КАМПАНИЯ: РАЗВИЛКА В КАЖДОМ АКТЕ И КАРТА-ЗМЕЙКА",
             "2.10.35 • КАМПАНИЯ БЕЗ АРИФМЕТИКИ: ЗНАКИ ВМЕСТО СЧЁТЧИКОВ",
             "2.10.36 • КАМПАНИЯ: РАСКЛАДКА ПОД ЛЮБОЙ ФОРМАТ ЭКРАНА",
+            "2.10.37 • РАЗУМНЫЕ МОБЫ БЛИЖНЕГО БОЯ: ЗАМАХ, РЫВОК, КРУГ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -9874,7 +10070,8 @@ struct Game {
             "Четвёртый пункт аудита моделей: анимация стражей. Периферия теперь отстаёт от корпуса по фазе: подол, полы мантии, ленты, перья и кисти считаются от времени, снятого на 60-160 мс раньше, поэтому корпус уже пошёл, а подол ещё висит.\nПоза замаха и выброса догоняется пружиной с перелётом вместо мгновенной ступеньки: перелёт до 1,012, после удара проседание до -0,057, успокоение 16 кадров.\nОтдача от попадания стала приседанием: по вертикали фигура ужимается сильнее, чем по горизонтали, и объём сохраняется. Кардинал качается в такт шагу.\nНиже 60 px мелкие частицы, заклёпки и трещины не рисуются - силуэт остаётся чистым.\nЗамеры: расхождение подол/корпус 1,24 -> 2,82 px, W/H при ударе 0,63 -> 0,71, ход корпуса Кардинала 0,1 -> 4,2 px, одиночных пикселей у Азарота 26 -> 0. Три стража на кадр: 1,30 -> 1,27 мс.",
             "• Кампания больше не держится на одной развилке: выбор спрашивают на входе в каждый акт II–V, и каждый раз он меняет четверть прохождения. Выбор в акте V теперь виден как выбор, а не как два дела подряд.\n• Новый экран «ЗМЕЙКА»: маршрут растёт снизу вверх, камера стартует у акта I, пройденное светится зелёным, непройденное серое, по колесу мыши маршрут прокручивается, а камера сама подъезжает к выбранному делу.\n• Развилка нарисована как две головы змеи: глаза со зрачками и раздвоенный язык. Клик по голове выбирает ветку: вторая гаснет, её голова получает крестики вместо глаз, полоса сереет, связи рвутся на штрихи.\n• Первый клик по голове показывает дело в досье, второй — идёт в бой (или Enter), поэтому выбор нельзя сделать случайно.\n• В настройках появился переключатель «Карта кампании»: ЗМЕЙКА или КАРТА. Прежняя карта колонками осталась целиком — новый интерфейс не вместо старого.\n• Сейв v9: выбор хранится по каждой развилке отдельно (campaignFork[4]). Старый сейв мигрирует: прежний «след» переносится в акты II–IV, а выбор акта V восстанавливается по тому, какое дело было закрыто.\n• Счётчики актов считают одно прохождение: в акте с развилкой в счёт идёт одна голова, поэтому «3/6» в акте V больше не появится.\n• setClip теперь режет и заливки, а не только текст: прокручиваемый маршрут не рисует дела поверх кнопок внизу экрана.\n• Дерево кампании перестроено в tools/campaign.py: у дел 009, 011, 019, 022 по два пререквизита — головы акта III открываются с любой полосы акта II, и то же для акта IV.\n• Проверено на 1920x1080, 1600x900, 1280x720, 1080x1920 и 800x600. Листы — design/campaign_snake.png и design/campaign_snake_old.png, разбор — design/campaign_map_snake.md.",
             "• Экран кампании перестал быть ведомостью. Строка «ДЕЛА 17 / 30 • ВЕТОК ВЫБРАНО 3 ИЗ 4» заменена полосой пути: одна клетка — одно дело этой ночи, зелёная клетка пройдена, золотая ждёт, справа четыре ромба развилок, выбранная светится цветом своей ветки.\n• Рядом с полосой осталась только ночь, и то если она не первая: «НОЧЬ 3» вместо столбца чисел.\n• У дел на карте больше нет номеров. Состояние читается знаком: галочка — дело закрыто, пульсирующий ромб — можно идти, косой крест — ветка отмерла, точка — ещё закрыто.\n• Заголовок главы тоже без дроби: ромб, название акта и пипсы по числу дел, заполненные означают пройденное.\n• Маршрут стал телом змеи: изогнутое, толще в середине и тоньше у узлов, с бликом по верхней кромке и свечением у пройденного. Отмершая ветка рвётся на штрихи и сереет.\n• Фон карты получил глубину, у главы появилась тонкая линия по верхней кромке: карта перестала быть плоской плашкой.\n• Досье дела снизу вместо строки «ДЕЛО 30 • АКТ V • ТИР VI • +45% • БОСС ~3 МИН» показывает знаки: часы с минутами, ступени тира с процентом, ромб следа. Страж остался словом — имя не рисуется знаком.\n• На пустом месте досье появилась бледная печать главы: карточка перестала выглядеть недогруженной.\n• Подписи дел больше не обрываются на полуслове у края окна: длинное название переносится на две строки, а подпись, которая не влезает целиком, не рисуется до прокрутки.\n• Прежняя карта колонками не тронута: переключатель «Карта кампании» в настройках, строка 9.",
-            "• Экран кампании считает раскладку от размера окна, а не от жёстких 1280x720: высота карты, шаг ряда, ширина досье и кнопки выводятся из размеров экрана.\n• Досье встаёт сбоку на широком окне (от 960 px) и на низком (900x520), а под картой — в портрете и в маленьком окне, где ширина дороже высоты.\n• Шаг ряда маршрута считается от высоты: на 1080p вся кампания видна целиком без прокрутки, в высоком портрете ряды расходятся до 64 px, в маленьком окне ужимаются до 40.\n• Если маршрут короче окна, он прижат к низу, но не вплотную: под актом I остаётся четверть запаса.\n• Полоса пути и печати подстраиваются под ширину: в окне уже 820 px плашка «ПЕЧАТИ СЛОМАНЫ» уступает место самим печатям, клетки дел и ромбы развилок сжимаются, «НОЧЬ N» прячется, если не влезает.\n• Сводка дела в досье больше не теряет имя стража: если в общую строку оно не влезает, ему отдаётся отдельная строка над «ЦЕЛЬю».\n• Цель в узкой колонке переносится на две строки — коробка стала выше, текст больше не вылезает за рамку.\n• Одна строка из середины брифинга больше не рисуется: если в досье влезает меньше двух строк, текст не показывается вовсе — обрыв читался как ошибка.\n• Иллюстрация дела режется по своей рамке: на низкой карточке луна и страж больше не вылезают на карту. Иллюстрация включается только там, где под неё есть место (досье от 300 px).\n• Проверено на 1920x1080, 1600x900, 1280x720, 1024x600, 900x700, 900x520, 800x600, 720x480, 1080x1920 и 720x1280."
+            "• Экран кампании считает раскладку от размера окна, а не от жёстких 1280x720: высота карты, шаг ряда, ширина досье и кнопки выводятся из размеров экрана.\n• Досье встаёт сбоку на широком окне (от 960 px) и на низком (900x520), а под картой — в портрете и в маленьком окне, где ширина дороже высоты.\n• Шаг ряда маршрута считается от высоты: на 1080p вся кампания видна целиком без прокрутки, в высоком портрете ряды расходятся до 64 px, в маленьком окне ужимаются до 40.\n• Если маршрут короче окна, он прижат к низу, но не вплотную: под актом I остаётся четверть запаса.\n• Полоса пути и печати подстраиваются под ширину: в окне уже 820 px плашка «ПЕЧАТИ СЛОМАНЫ» уступает место самим печатям, клетки дел и ромбы развилок сжимаются, «НОЧЬ N» прячется, если не влезает.\n• Сводка дела в досье больше не теряет имя стража: если в общую строку оно не влезает, ему отдаётся отдельная строка над «ЦЕЛЬю».\n• Цель в узкой колонке переносится на две строки — коробка стала выше, текст больше не вылезает за рамку.\n• Одна строка из середины брифинга больше не рисуется: если в досье влезает меньше двух строк, текст не показывается вовсе — обрыв читался как ошибка.\n• Иллюстрация дела режется по своей рамке: на низкой карточке луна и страж больше не вылезают на карту. Иллюстрация включается только там, где под неё есть место (досье от 300 px).\n• Проверено на 1920x1080, 1600x900, 1280x720, 1024x600, 900x700, 900x520, 800x600, 720x480, 1080x1920 и 720x1280.",
+            "• Разумные мобы (1% обычных врагов, метка «!») раньше были умными только на дистанции: упреждение, увёртка от снаряда, выстрел с 700 px. В упор все три тактики превращались в обычного моба — лезли в контакт и давили телом. Теперь у каждой тактики свой приём вблизи.\n• Стрелок держит зазор 168 px и пятится по диагонали; если его прижали ближе 104 px, он не стреляет в упор, а выскальзывает вбок рывком 1.5× на треть секунды (перезарядка 1.1 с) — залп без времени на реакцию был не умным боем, а нечестным.\n• Перехватчик отходит на полшага, замахивается 0.26 с и бьёт рывком 2.8× по прямой: линия удара и кольцо видны заранее, из рывка уходят шагом в сторону. Перезарядка 1.7 с.\n• Увёртливый кружит вокруг героя на кольце ~150 px, меняет сторону раз в 1.6 с и раз в 3 с ныряет к герою, чтобы не быть мебелью. Увёртка от снаряда осталась и по-прежнему важнее всего.\n• У каждого приёма есть телеграф: линия замаха со вспышкой, след рывка, дуга выскальзывания, кольцо нырка.\n• Попутно починен порог движения врага: тактика отдаёт нормализованное направление, и при float-округлении его длина бывала 0.9999999 — враг с «единичным» вектором не двигался вообще, поэтому рывок перехватчика не срабатывал.\n• Мерил симуляцией на 14 секунд: раньше все три тактики стояли в контакте 10,7–12,5 секунд из 14. Теперь стрелок не входит в контакт вообще (167–208 px, 7 с на кольце), перехватчик бьёт рывком 8 раз, увёртливый касается героя 0,4–0,6 с с пятью нырками. Разбор — design/smart_mobs_close.md, кадры приёмов — design/smart_mobs_close.png."
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
