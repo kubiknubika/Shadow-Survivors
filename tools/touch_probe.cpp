@@ -521,7 +521,10 @@ static void testOptionsFile() {
               "хвост старых настроек на месте");
         check(g.options.touchScheme == TOUCH_SCHEME_STICK_LEFT && g.options.touchSetupDone == 0,
               "новых полей в старом файле нет — схема по умолчанию и вопрос при запуске");
-        check(sizeof(GameOptions) == 68, "новые настройки занимают 68 байт");
+        check(sizeof(GameOptions) == 72, "новые настройки занимают 72 байта");
+        check(sizeof(LegacyGameOptions68) == 68, "раскладка 2.10.53 осталась 68 байт");
+        check(g.options.touchButtonScale == TOUCH_SIZE_DEFAULT,
+              "в старом файле нет размера кнопок — он по умолчанию");
 
         // Запись и чтение нового файла: выбор схемы переживает перезапуск.
         g.options.touchScheme = TOUCH_SCHEME_DPAD_LEFT;
@@ -567,6 +570,72 @@ static void testNoStickInMenus() {
     touchBegin(p, g, l, 91, 300.0f, 420.0f);
     check(p[0].role == TOUCH_STICK, "в бою та же точка — стик");
     touchEnd(p, g, 91);
+}
+
+// ── 8.6. Размер кнопок: настройка, страховка экрана и подписи ───────────────
+static void testButtonSize() {
+    printf("размер кнопок\n");
+    Renderer r;
+    r.resize(1600, 720);
+
+    // Ступени: по кругу, без пропусков и без выхода за границы.
+    check(touchClampSize(10) == TOUCH_SIZE_MIN, "меньше минимума ужимается до минимума");
+    check(touchClampSize(500) == TOUCH_SIZE_MAX, "больше максимума упирается в максимум");
+    int walked[16], n = 0, v = TOUCH_SIZE_DEFAULT;
+    do { walked[n++] = v; v = touchStepSize(v, 1); } while (v != TOUCH_SIZE_DEFAULT && n < 16);
+    check(v == TOUCH_SIZE_DEFAULT && n >= 4, "полный круг возвращает к 100 %, а не к мусору");
+    // Туда и обратно: минус после плюса даёт прежний размер.
+    check(touchStepSize(touchStepSize(TOUCH_SIZE_DEFAULT, 1), -1) == TOUCH_SIZE_DEFAULT,
+          "ступень вверх и обратно — тот же размер");
+    // Один круг — от 100 % вверх до максимума, потом снова с минимума: так
+    // настройка обходится по кругу, а не упирается в край.
+    int seen = 0;
+    while (seen < 15 && walked[seen] < walked[seen + 1]) ++seen;
+    check(walked[seen] == TOUCH_SIZE_MAX, "по кругу размер доходит до максимума");
+    check(walked[seen + 1] == TOUCH_SIZE_MIN, "и с максимума перескакивает на минимум");
+
+    // Геометрия: кнопка растёт вместе с процентом и не выходит за экран.
+    for (int percent = TOUCH_SIZE_MIN; percent <= TOUCH_SIZE_MAX; percent += 10) {
+        TouchLayout l;
+        l.layout(1600, 720, TOUCH_SCHEME_STICK_LEFT, percent);
+        char tag[64];
+        snprintf(tag, sizeof(tag), "%d %%", percent);
+        const bool inside = l.dash.x >= 0 && l.dash.y >= 0 && l.ult.x >= 0 &&
+                            l.dash.x + l.dash.w <= 1600 && l.ult.x + l.ult.w <= 1600 &&
+                            l.dash.y + l.dash.h <= 720;
+        check(inside, "кнопки внутри экрана при любом размере", tag);
+        const bool apart = l.dash.x >= l.ult.x + l.ult.w - 0.5f;
+        check(apart, "СУПЕР и РЫВОК не наезжают друг на друга", tag);
+        check(l.sizePercent >= TOUCH_SIZE_MIN, "итоговый размер не ниже минимума", tag);
+    }
+    // Больше — значит действительно больше.
+    TouchLayout small, big;
+    small.layout(1600, 720, TOUCH_SCHEME_STICK_LEFT, 80);
+    big.layout(1600, 720, TOUCH_SCHEME_STICK_LEFT, 160);
+    check(big.dash.w > small.dash.w * 1.5f, "160 % заметно крупнее 80 %");
+    check(big.stickBase > small.stickBase, "вместе с кнопками растёт и стик");
+
+    // Страховка: на очень узком кадре (окно в сплите — логический кадр вроде
+    // 320x568) большой процент не выталкивает кнопки за левый край и не
+    // сваливает их друг на друга. Без страховки при 160 % они уже не влезают.
+    TouchLayout narrow;
+    narrow.layout(320, 568, TOUCH_SCHEME_STICK_LEFT, TOUCH_SIZE_MAX);
+    check(narrow.dash.x >= 0 && narrow.ult.x >= 0 &&
+          narrow.ult.x + narrow.ult.w <= narrow.dash.x + 0.5f &&
+          narrow.dash.x + narrow.dash.w <= 320, "на узком кадре кнопки остаются в кадре");
+    check(narrow.sizePercent < TOUCH_SIZE_MAX, "и размер честно ужимается, а не рисуется как просили");
+
+    // Подписи: на маленьком размере обе кнопки переходят на короткую форму.
+    for (int percent : {TOUCH_SIZE_MIN, TOUCH_SIZE_DEFAULT, TOUCH_SIZE_MAX}) {
+        TouchLayout l;
+        l.layout(1600, 720, TOUCH_SCHEME_STICK_LEFT, percent);
+        const bool fitsFull = r.textWidth(FONT_SMALL, "РЫВОК") <= (int)l.dash.w - 10;
+        const bool fitsShort = r.textWidth(FONT_SMALL, "РЫВ") <= (int)l.dash.w - 10;
+        char tag[64];
+        snprintf(tag, sizeof(tag), "%d %%: «РЫВОК» %d px, кнопка %d px", percent,
+                 r.textWidth(FONT_SMALL, "РЫВОК"), (int)l.dash.w);
+        check(fitsFull || fitsShort, "подпись кнопки рывка всегда влезает", tag);
+    }
 }
 
 // ── 9. Прокрутка списков пальцем (колеса на телефоне нет) ───────────────────
@@ -693,6 +762,7 @@ int main(int argc, char** argv) {
     testSchemes();
     testOptionsFile();
     testNoStickInMenus();
+    testButtonSize();
     testSwipeScroll();
     testTouchUi();
     printf("\nитого: %d проверок, провалов %d\n", g_passed + g_failed, g_failed);

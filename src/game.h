@@ -190,7 +190,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 147;
+static constexpr int PATCH_NOTES_COUNT = 148;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -711,6 +711,9 @@ struct GameOptions {
     // 0 — выбор схемы ещё не показан: при первом запуске на Android игра сама
     // предложит три варианта, вместо того чтобы молча включить первый.
     int touchSetupDone = 0;
+    // 2.10.54: размер кнопок касания в процентах (70…160). Разные руки и разные
+    // экраны: у кого-то 92 px — это «мелко и не попасть», у кого-то «пол-экрана».
+    int touchButtonScale = TOUCH_SIZE_DEFAULT;
 };
 
 // Предыдущая раскладка настроек (без строки «Графика»): файл на 56 байт должен
@@ -736,7 +739,20 @@ struct LegacyGameOptions60 {
     int graphicsLevel;
 };
 static_assert(sizeof(LegacyGameOptions60) == 60, "2.10.52 options layout changed unexpectedly");
-static_assert(sizeof(GameOptions) == 68, "2.10.53 options layout changed unexpectedly");
+// Раскладка 2.10.53 (68 байт): схема движения и отметка «выбор показан», но без
+// размера кнопок. Файл, сохранённый предыдущей сборкой, обязан читаться.
+struct LegacyGameOptions68 {
+    uint32_t magic;
+    int sfxEnabled, musicEnabled, hitEffectsEnabled, screenShakeEnabled, advisorEnabled, hardModeEnabled;
+    uint32_t patchNotesHiddenVersion;
+    int projectileTrailsEnabled;
+    float sfxVolume, musicVolume;
+    int messageSpeechEnabled, skillIconStyle, campaignSnakeMap;
+    int graphicsLevel;
+    int touchScheme, touchSetupDone;
+};
+static_assert(sizeof(LegacyGameOptions68) == 68, "2.10.53 options layout changed unexpectedly");
+static_assert(sizeof(GameOptions) == 72, "2.10.54 options layout changed unexpectedly");
 
 struct SaveData {
     uint32_t magic = 0x53484457; // 'SHDW'
@@ -1151,6 +1167,7 @@ struct Game {
         // получает стик, о котором не просил, и ищет настройки сам.
         if (touchControls) {
             options.touchScheme = std::max(0, std::min(TOUCH_SCHEME_COUNT - 1, options.touchScheme));
+            options.touchButtonScale = touchClampSize(options.touchButtonScale);
             if (!options.touchSetupDone) {
                 controlsReturnState = state;
                 state = STATE_CONTROLS_SETUP;
@@ -1238,6 +1255,26 @@ struct Game {
             } else if (n == (long)sizeof(GameOptions)) {
                 GameOptions saved{};
                 if (fread(&saved, sizeof(saved), 1, f) == 1 && saved.magic == 0x53484346) options = saved;
+            } else if (n == (long)sizeof(LegacyGameOptions68)) {
+                LegacyGameOptions68 old{};
+                if (fread(&old, sizeof(old), 1, f) == 1 && old.magic == 0x53484346) {
+                    options = GameOptions{};
+                    options.sfxEnabled = old.sfxEnabled; options.musicEnabled = old.musicEnabled;
+                    options.hitEffectsEnabled = old.hitEffectsEnabled;
+                    options.screenShakeEnabled = old.screenShakeEnabled;
+                    options.advisorEnabled = old.advisorEnabled; options.hardModeEnabled = old.hardModeEnabled;
+                    options.patchNotesHiddenVersion = old.patchNotesHiddenVersion;
+                    options.projectileTrailsEnabled = old.projectileTrailsEnabled;
+                    options.sfxVolume = old.sfxVolume; options.musicVolume = old.musicVolume;
+                    options.messageSpeechEnabled = old.messageSpeechEnabled;
+                    options.skillIconStyle = old.skillIconStyle;
+                    options.campaignSnakeMap = old.campaignSnakeMap;
+                    options.graphicsLevel = old.graphicsLevel;
+                    options.touchScheme = old.touchScheme;
+                    options.touchSetupDone = old.touchSetupDone;
+                    // Размер кнопок — новое поле: у прежней сборки он был 100 %.
+                    options.touchButtonScale = TOUCH_SIZE_DEFAULT;
+                }
             } else if (n == (long)sizeof(LegacyGameOptions60)) {
                 LegacyGameOptions60 old{};
                 if (fread(&old, sizeof(old), 1, f) == 1 && old.magic == 0x53484346) {
@@ -1257,6 +1294,7 @@ struct Game {
                     // про неё будет задан при первом запуске на Android.
                     options.touchScheme = 0;
                     options.touchSetupDone = 0;
+                    options.touchButtonScale = TOUCH_SIZE_DEFAULT;
                 }
             } else if (n == (long)sizeof(LegacyOptionsCurrent)) {
                 LegacyOptionsCurrent old{};
@@ -1315,6 +1353,7 @@ struct Game {
         options.messageSpeechEnabled = options.messageSpeechEnabled != 0 ? 1 : 0;
         options.skillIconStyle = std::max(0, std::min(2, options.skillIconStyle));
         options.touchScheme = std::max(0, std::min(TOUCH_SCHEME_COUNT - 1, options.touchScheme));
+        options.touchButtonScale = touchClampSize(options.touchButtonScale);
         sound.musicVariant.store(0, std::memory_order_relaxed);
         sound.enabled.store(options.sfxEnabled != 0, std::memory_order_relaxed);
         sound.musicEnabled.store(options.musicEnabled != 0, std::memory_order_relaxed);
@@ -10480,6 +10519,10 @@ struct Game {
             graphicsTier = std::max(1, options.graphicsLevel);
             qualityEma = 0.0f; qualityCooldown = 0.0f;
         }
+        else if (optionId == 11) {
+            // Размер кнопок касания: строка есть только на Android, где кнопки и есть.
+            options.touchButtonScale = touchStepSize(options.touchButtonScale, 1);
+        }
         else if (optionId == 8) {
             options.messageSpeechEnabled = options.messageSpeechEnabled != 0 ? 0 : 1;
             sound.setVoiceEnabled(options.messageSpeechEnabled != 0);
@@ -10509,27 +10552,34 @@ struct Game {
         if ((int)globalTime != lastRefreshSecond) { lastRefreshSecond = (int)globalTime; refreshVoiceStats(); }
         renderSubmenuFrame(r, "НАСТРОЙКИ", "shadow_survivors.cfg • звук • эффекты • графика • стиль иконок • карта кампании");
 
-        const char* labels[10] = {
+        // Одиннадцатая строка — размер кнопок касания. На Windows кнопок касания
+        // нет, поэтому там строк десять и раскладка прежняя: настройка, которой
+        // нечего менять, только сбивает с толку.
+        const int rowCount = touchControls ? 11 : 10;
+        const char* labels[11] = {
             "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
             "Советник по сборке (ИИ)", "БЕЗДНА — давление выше; пауэрапы только с умных", "Следы снарядов",
             "Стиль иконок предметов", "Озвучка сообщений в бою",
             "Карта кампании: змейка снизу вверх или карта актами",
-            "Графика: авто держит 60 fps и снижает эффекты само"
+            "Графика: авто держит 60 fps и снижает эффекты само",
+            "Размер кнопок касания: крупный палец или маленький экран"
         };
         // Narrow portraits need shorter labels: the ВКЛ/ВЫКЛ value is right-aligned on the row.
-        static const char* labelsPortrait[10] = {
+        static const char* labelsPortrait[11] = {
             "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
             "Советник по сборке (ИИ)", "БЕЗДНА — сложнее", "Следы снарядов",
             "Стиль иконок предметов", "Озвучка сообщений в бою",
             "Карта кампании",
-            "Графика"
+            "Графика",
+            "Размер кнопок"
         };
-        const bool values[10] = {
+        const bool values[11] = {
             sound.enabled.load(std::memory_order_relaxed), options.hitEffectsEnabled != 0,
             options.screenShakeEnabled != 0, options.advisorEnabled != 0,
             options.hardModeEnabled != 0, options.projectileTrailsEnabled != 0, options.skillIconStyle != 0,
             options.messageSpeechEnabled != 0, options.campaignSnakeMap != 0,
-            options.graphicsLevel != 0
+            options.graphicsLevel != 0,
+            options.touchButtonScale != TOUCH_SIZE_DEFAULT   // зелёный только если не по умолчанию
         };
         const bool portraitLayout = SCREEN_W < SCREEN_H;
         const char* const* rowLabels = portraitLayout ? labelsPortrait : labels;
@@ -10539,9 +10589,22 @@ struct Game {
         // строки уезжают под кнопку «назад».
         // Десять строк вместо девяти: под них в альбоме ужат шаг, иначе нижняя
         // строка уезжала под ползунки громкости.
-        const int h = portraitLayout ? 40 : 34, startY = portraitLayout ? 146 : 88, gap = portraitLayout ? 4 : 2;
+        // Одиннадцать строк на телефоне: в альбоме строки на 2 px ниже — иначе
+        // ползунки громкости уезжают под кнопку «назад». В портрете наоборот:
+        // высоты экрана много, и шаг строк растягивается под неё, иначе
+        // настройки жмутся к шапке, а под ними — пустое поле.
+        const int startY = portraitLayout ? 146 : 88;
+        const int gap = portraitLayout ? 8 : 2;
+        int h = touchControls ? 32 : 34;
+        if (portraitLayout) {
+            // Резерв снизу: отступ, два ползунка громкости и три строки справки.
+            const int bottomLimit = SCREEN_H - 76 - 8;
+            const int reserve = 20 + 2 * (52 + 6) + 3 * FONT_SMALL.lineHeight + 12;
+            const int avail = std::max(0, bottomLimit - startY - reserve - rowCount * gap);
+            h = std::max(34, std::min(58, avail / rowCount));
+        }
         char stateText[28];
-        for (int i = 0; i < 10; ++i) {
+        for (int i = 0; i < rowCount; ++i) {
             int y = startY + i * (h + gap);
             bool hov = mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h;
             uint32_t border = hov ? 0xFFFFD848 : (values[i] ? 0xFF68DDA0 : 0xFF685878);
@@ -10553,6 +10616,7 @@ struct Game {
             }
             else if (i == 8) snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ЗМЕЙКА" : "КАРТА");
             else if (i == 9) snprintf(stateText, sizeof(stateText), "%s", graphicsLevelName(options.graphicsLevel));
+            else if (i == 10) snprintf(stateText, sizeof(stateText), "%d%%", options.touchButtonScale);
             else snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ВКЛ" : "ВЫКЛ");
             // Подпись ужимается под правый столбец значений: на 960×720 (такой
             // кадр рисуется в окне 800×600 и на телефоне) длинная строка про
@@ -10564,9 +10628,9 @@ struct Game {
             if (mouseClicked && hov) toggleOption(i + 1);
         }
 
-        const int volumeY = startY + 10 * (h + gap) + 20;
+        const int volumeY = startY + rowCount * (h + gap) + 20;
         auto drawVolume = [&](int channel, int y, const char* label, float value) {
-            const int rowX = x, rowW = w, rowH = portraitLayout ? 44 : 38;
+            const int rowX = x, rowW = w, rowH = portraitLayout ? 52 : 38;
             const int trackW = std::min(310, rowW * 38 / 100);
             const int trackX = rowX + rowW * 43 / 100, trackY = y + rowH / 2;
             const bool focused = settingsVolumeFocus == channel;
@@ -10586,7 +10650,7 @@ struct Game {
                 sound.play(SFX_CLICK, 0.015f);
             }
         };
-        const int volumeRowH = portraitLayout ? 44 : 38;
+        const int volumeRowH = portraitLayout ? 52 : 38;
         drawVolume(0, volumeY, "УРОВЕНЬ ЭФФЕКТОВ", sound.sfxVolume.load(std::memory_order_relaxed));
         drawVolume(1, volumeY + volumeRowH + 6, "УРОВЕНЬ МУЗЫКИ", sound.musicVolume.load(std::memory_order_relaxed));
 
@@ -10610,7 +10674,12 @@ struct Game {
             snprintf(voiceLine, sizeof(voiceLine), "ОЗВУЧКА: ВСЕ %d ФРАЗ НА МЕСТЕ — audio/voice/", voiceClips);
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + infoShift + 20, voiceLine, voiceMissing > 0 ? 0xFFFFC98A : 0xFF8CD8B0);
         if (portraitLayout) {
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + infoShift + 40, keyHint("[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] И [0] ГРАФИКА — ПЕРЕКЛЮЧАТЕЛИ"), 0xFFAAA0C8);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + infoShift + 40,
+                               keyHint(touchControls
+                                   ? (portraitLayout ? "КОСНИТЕСЬ СТРОКИ — ПЕРЕКЛЮЧАТЕЛЬ"
+                                                     : "КОСНИТЕСЬ СТРОКИ — ПЕРЕКЛЮЧАТЕЛЬ • «РАЗМЕР КНОПОК» — ПОД ПАЛЕЦ")
+                                   : "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] И [0] ГРАФИКА — ПЕРЕКЛЮЧАТЕЛИ"),
+                               0xFFAAA0C8);
         } else {
             // Подсказки ниже счётчиков считаются от infoY: с девятой строкой
             // настроек фиксированный y=574 наезжал на строку про музыку.
@@ -10662,6 +10731,13 @@ struct Game {
         sound.play(SFX_CLICK, 0.02f);
     }
 
+    // Размер кнопок меняется и здесь, и в настройках: одна и та же настройка.
+    void stepTouchButtonSize(int direction) {
+        options.touchButtonScale = touchStepSize(options.touchButtonScale, direction);
+        saveOptions();
+        sound.play(SFX_CLICK, 0.02f);
+    }
+
     void finishControlsSetup() {
         options.touchSetupDone = 1;
         saveOptions();
@@ -10672,7 +10748,8 @@ struct Game {
     // Мини-схема телефона: где палец, где кнопки. Рисуется той же геометрией,
     // что и настоящее управление, — это уменьшенная копия, а не отдельная
     // картинка, поэтому карточка не может разойтись с игрой.
-    void drawSchemePreview(Renderer& r, int x, int y, int w, int h, int scheme) {
+    void drawSchemePreview(Renderer& r, int x, int y, int w, int h, int scheme,
+                           int sizePercent = TOUCH_SIZE_DEFAULT) {
         const uint32_t skin = 0xFF0E0A18, frame = 0xFF4B3D62;
         r.fillRoundedRect(x, y, w, h, 9, skin, 245);
         r.drawRoundedRect(x, y, w, h, 9, frame, 1);
@@ -10680,13 +10757,17 @@ struct Game {
         const bool dpad = scheme == TOUCH_SCHEME_DPAD_LEFT;
         // Размеры кнопок в превью берутся от высоты: в широкой карточке от
         // min(w,h) они получались точками, и схема читалась как пустая рамка.
-        const int side = std::max(12, std::min(h / 4, w / 9));
+        // Процент размера из настроек масштабирует их так же, как масштабирует
+        // настоящие кнопки: карточка показывает выбранный размер, а не «как-то».
+        const int sideBase = std::max(9, std::min(h / 4, w / 9));
+        const int side = std::max(6, std::min(std::min(h / 3, w / 5),
+                                              sideBase * touchClampSize(sizePercent) / 100));
         const int pad = std::max(8, std::min(h, w) / 14);
         // Кнопки действия — на стороне, свободной от движения.
-        const int bigX = mirror ? x + pad : x + w - pad - side * 2 - 4;
+        const int bigX = mirror ? x + pad : x + w - pad - side * 2 - std::max(3, side / 6);
         const int bigY = y + h - pad - side;
         r.fillRoundedRect(bigX, bigY, side, side, 4, 0xFFFFD24A, 210);
-        r.fillRoundedRect(bigX + side + 4, bigY, side, side, 4, 0xFF6FE0FF, 210);
+        r.fillRoundedRect(bigX + side + std::max(3, side / 6), bigY, side, side, 4, 0xFF6FE0FF, 210);
         // Движение — с другой стороны.
         const int mx = mirror ? x + w - pad - side : x + pad + side;
         const int my = y + h - pad - side;
@@ -10700,7 +10781,7 @@ struct Game {
         } else {
             // Стик и есть низ прямоугольника: так палец на телефоне лежит там же,
             // а текст названия схемы в строке остаётся чистым.
-            const int ring = std::max(10, std::min(side, w / 8));
+            const int ring = std::max(7, std::min(side, w / 8));
             r.drawCircleRing(mx, my, ring, 2, 0xFFE8DEFF, 210);
             r.fillCircle(mx, my, std::max(4, ring / 3), 0xFFB9A8E8, 230);
         }
@@ -10709,8 +10790,8 @@ struct Game {
         // Прицельная точка — у своего верхнего угла, а не там, где сейчас мышь:
         // на стенде и на телефоне палец может оказаться где угодно.
         const int aimY = y + h / 3;
-        r.fillCircle(aimX, aimY, std::max(3, side / 3), 0xFF8FD0E8, 230);
-        r.drawCircleRing(aimX, aimY, std::max(6, side), 1, 0xFF8FD0E8, 120);
+        r.fillCircle(aimX, aimY, std::max(2, side / 3), 0xFF8FD0E8, 230);
+        r.drawCircleRing(aimX, aimY, std::max(5, side), 1, 0xFF8FD0E8, 120);
     }
 
     void renderControlsSetup(Renderer& r) {
@@ -10722,7 +10803,12 @@ struct Game {
         const int margin = std::min(16, std::max(8, SCREEN_W / 24));
         const int top = 92;
         const int buttonH = portrait ? 52 : 50;
-        const int bottom = SCREEN_H - buttonH - 34;
+        // Нижняя полоса: ползунок размера кнопок, подпись выбора и кнопка дальше.
+        const int sizeRowH = portrait ? 54 : 50;
+        const int buttonY = SCREEN_H - buttonH - 22;
+        const int sizeY = buttonY - 8 - sizeRowH;
+        const int nowLineY = sizeY - FONT_SMALL.lineHeight - 8;
+        const int bottom = nowLineY - 10;
         const int gap = compact ? 10 : 16;
 
         static const char* descriptions[TOUCH_SCHEME_COUNT] = {
@@ -10747,7 +10833,8 @@ struct Game {
                                   active ? 0xFFFFD878 : (hov ? 0xFFB9A8E8 : 0xFF4B3D62),
                                   active ? 3 : (hov ? 2 : 1));
                 const int previewH = std::min(cardH / 3, 150);
-                drawSchemePreview(r, x + 16, cardY + 16, cardW - 32, previewH, i);
+                drawSchemePreview(r, x + 16, cardY + 16, cardW - 32, previewH, i,
+                                  options.touchButtonScale);
                 r.drawTextCentered(FONT_MED, x + cardW / 2, cardY + previewH + 30,
                                    touchSchemeName(i), active ? 0xFFFFE28A : 0xFFEAE4F8);
                 const int textX = x + 20, textW = cardW - 40;
@@ -10794,7 +10881,8 @@ struct Game {
                                   active ? 0xFFFFD878 : (hov ? 0xFFB9A8E8 : 0xFF4B3D62),
                                   active ? 3 : (hov ? 2 : 1));
                 const int prevW = std::min(rowH - 20, 190);
-                drawSchemePreview(r, margin + 10, y + 10, prevW, rowH - 20, i);
+                drawSchemePreview(r, margin + 10, y + 10, prevW, rowH - 20, i,
+                                  options.touchButtonScale);
                 const int textX = margin + 20 + prevW;
                 const int textW = SCREEN_W - margin * 2 - prevW - 40;
                 r.drawText(FONT_MED, textX, y + 12, touchSchemeName(i),
@@ -10815,11 +10903,41 @@ struct Game {
         char nowLine[96];
         snprintf(nowLine, sizeof(nowLine), "ВЫБРАНО: %s  •  СМЕНИТЬ МОЖНО В НАСТРОЙКАХ",
                  touchSchemeName(options.touchScheme));
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - buttonH - 46,
-                           nowLine, 0xFF9C93B8);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, nowLineY, nowLine, 0xFF9C93B8);
+
+        // ── Размер кнопок: тот же процент, что в бою, превью выше уже его показывает
+        {
+            const int rowW = std::min(430, SCREEN_W - 2 * margin);
+            const int rowX = (SCREEN_W - rowW) / 2;
+            const int minusW = sizeRowH, plusW = sizeRowH;
+            const int labelW = rowW - minusW - plusW - 16;
+            r.fillRoundedRect(rowX, sizeY, rowW, sizeRowH, 10, 0xFF1B2A3C, 220);
+            r.drawRoundedRect(rowX, sizeY, rowW, sizeRowH, 10, 0xFF8FD0E8, 1, 200);
+            const bool minusHov = mouseX >= rowX && mouseX <= rowX + minusW &&
+                                  mouseY >= sizeY && mouseY <= sizeY + sizeRowH;
+            const bool plusHov = mouseX >= rowX + rowW - plusW && mouseX <= rowX + rowW &&
+                                 mouseY >= sizeY && mouseY <= sizeY + sizeRowH;
+            r.fillRoundedRect(rowX, sizeY, minusW, sizeRowH, 10,
+                              minusHov ? 0xFF2C4A6A : 0xFF22303F, 240);
+            r.fillRoundedRect(rowX + rowW - plusW, sizeY, plusW, sizeRowH, 10,
+                              plusHov ? 0xFF2C4A6A : 0xFF22303F, 240);
+            r.drawTextCentered(FONT_MED, rowX + minusW / 2, sizeY + sizeRowH / 2 - 12,
+                               "−", 0xFFD6EEFF);
+            r.drawTextCentered(FONT_MED, rowX + rowW - plusW / 2, sizeY + sizeRowH / 2 - 12,
+                               "+", 0xFFD6EEFF);
+            char sizeLine[48];
+            snprintf(sizeLine, sizeof(sizeLine), "РАЗМЕР КНОПОК: %d%%", options.touchButtonScale);
+            r.drawTextCentered(FONT_SMALL, rowX + minusW + labelW / 2, sizeY + 8, sizeLine, 0xFFE8F6FF);
+            r.drawTextCentered(FONT_SMALL, rowX + minusW + labelW / 2, sizeY + 26,
+                               options.touchButtonScale < 100 ? "МЕЛЬЧЕ ОБЫЧНОГО"
+                               : (options.touchButtonScale > 100 ? "КРУПНЕЕ ОБЫЧНОГО" : "КАК ОБЫЧНО"),
+                               0xFF8FD0E8);
+            if (mouseClicked && minusHov) stepTouchButtonSize(-1);
+            if (mouseClicked && plusHov) stepTouchButtonSize(1);
+        }
 
         const int bw = std::min(340, SCREEN_W - 2 * margin), bh = buttonH;
-        const int bx = (SCREEN_W - bw) / 2, by = SCREEN_H - bh - 22;
+        const int bx = (SCREEN_W - bw) / 2, by = buttonY;
         const bool hov = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
         r.fillRoundedRect(bx, by, bw, bh, 10, hov ? 0xFF483480 : 0xFF281C48);
         r.drawRoundedRect(bx, by, bw, bh, 10, 0xFFFFD858, 2);
@@ -10961,6 +11079,7 @@ struct Game {
             "2.10.51 • ПРОВЕРКА ANDROID-СБОРКИ: ЧТО НАЙДЕНО И ИСПРАВЛЕНО",
             "2.10.52 • ANDROID-СЛОЙ ЗАПУСТИЛСЯ БЕЗ ТЕЛЕФОНА: НАЙДЕНА МЁРТВАЯ КЛАВИАТУРА",
             "2.10.53 • ANDROID СПРАШИВАЕТ, ЧЕМ ДВИГАТЬСЯ, И ПРЯЧЕТ КЛАВИШИ",
+            "2.10.54 • РАЗМЕР КНОПОК КАСАНИЯ В НАСТРОЙКАХ",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -11110,6 +11229,7 @@ struct Game {
             "Проверка Android-сборки без телефона: что прогнано, что нашлось.\n• 2.10.51: прогнано всё, что можно прогнать без Windows, JDK, SDK и NDK. Стенды: десять экранов на одном, двух и четырёх потоках растеризации и на всех четырёх ступенях графики — кадр совпал бит-в-бит, то есть полосы и ступени не ломают картинку. perf_bench: 5.9 мс на кадр 1280x720 в два потока, 4.8 мс на портрете 720x1280. check_android.sh: main_android.cpp компилируется против заглушек NDK, ядро игры собирается без Windows.\n• Найдено и исправлено в build_android.bat: версия Java читалась командой внутри for /f в кавычках, а путь JDK из Android Studio («C:\\Program Files\\...») содержит пробелы — команда разваливалась на «C:\\Program», и вместо версии оставалось unknown. Теперь java -version пишется в файл, а из файла читается версия: пробелы в пути больше ни на что не влияют.\n• Там же: хвост журнала печатался PowerShell без указания кодировки — Windows PowerShell 5.1 берёт ANSI, и кириллица из журнала превращалась в мусор; добавлено -Encoding UTF8. Путь к adb собирался со слэшами вперёд — теперь зовётся обычным путём Windows. При ошибке батник возвращает код 1 (двойной щелчок по-прежнему ждёт клавишу). Добавлены предупреждения, если в SDK нет NDK или platform-tools: раньше это вылезало позже и непонятнее.\n• Новый стенд tools/check_android_bat.py: проверяет батник (UTF-8, CRLF, метки и переходы, баланс скобок в блоках if, кавычки в set, объявленность каждой !переменной!, отсутствие команды в кавычках внутри for /f), проект (lib_name в манифесте против имени CMake-цели, глубину ../ до src/, applicationId, ndkVersion, minSdk, targetSdk, abiFilters) и инструкцию (версия и versionCode по умолчанию в android/app/build.gradle против src/version.h, существование каждого названного файла).\n• Чекер проверен мутациями: в батник и проект по одному вносились 12 настоящих поломок (битая метка, незакрытый блок, LF вместо CRLF, чужая версия в gradle, lib_name не тот, CMake ищет src не на той глубине, инструкция ссылается на удалённый файл и прочее) — пойманы все 12. Заодно он поймал мою же правку: перевод строки LF в середине батника.\n• Лист design/touch_controls.png сверен с тем, что код рисует сейчас: 0 отличающихся пикселей из 1085440 — нарисованная схема управления не разошлась с кодом.\n• Честно: APK по-прежнему не собирался — в этой среде нет Windows, JDK, SDK и NDK. Десктопный .exe тоже не компилировался: нет mingw, а main_win32.cpp без windows.h не собрать. Проверено то, что проверяется файлами и стендами; первый настоящий прогон батника — на вашей машине, ответ на любую неудачу целиком в build\\android_build.log.",
             "Android-слой теперь не только компилируется, но и исполняется без телефона.\n• 2.10.52: появился стенд tools/android_smoke.cpp и поддельный NDK tools/android_host/ — около 60 функций EGL, GLES2, AAudio, ALooper, AInputQueue, ANativeWindow и ассетов, реализованных по-настоящему. Заголовки те же, что в проверке типов, поэтому исполняется именно src/main_android.cpp, а не его модель.\n• Стенд поднимает активность, отдаёт окно 2400x1080, шлёт касания и клавиши, уводит в паузу и возвращает, меняет размер окна и закрывает приложение. 27 проверок: кадры доходят до eglSwapBuffers, логический кадр 20:9 равен 1600x720, окно 1920x1000 даёт кадр 1376x720 с полями по краям, касание двигает героя, кнопка паузы ставит паузу, AKEYCODE_D ставит keyD, звук идёт и замолкает на паузе, ассеты копируются из assets/audio, сейв пишется на паузе и на выходе.\n• Найдено и исправлено: touchUpdate каждый кадр обнулял keyW/A/S/D, если палец не на стике. На телефоне это значит, что физическая клавиатура (планшет, Chromebook, Android TV с геймпадом) работала ровно один кадр: AKEYCODE_D ставил флаг, следующий touchUpdate его снимал. Сброс убран — отпускание пальца снимает флаги само (touchEnd), зависший палец закрывается ACTION_CANCEL.\n• Новый стенд tools/touch_probe.cpp: 51 проверка схемы касаний против настоящей игры — стик и мёртвая зона 14 px, кнопки рывка, супера, паузы и F3, прицел, два пальца одновременно, тап вместо клика в меню (через отрисовку зала славы) и три минуты забега под управлением пальца без падений.\n• check_android.sh стал прогоном из трёх ступеней: синтаксис против заглушек, чекер батника и проекта, затем оба исполняющих стенда. Есть --quick для быстрого прогона без исполнения.\n• check_android_bat.py дополнительно проверяет ресурсы: манифест и strings.xml разбираются как XML, все пять иконок mipmap-* на месте и ровно нужного размера, ссылки из манифеста существуют. В проверку ссылок добавлен README.md — инструкция не может сослаться на удалённый файл.\n• Оба новых стенда проверены мутациями: 6 поломок схемы касаний и 7 поломок Android-слоя пойманы все. Проверка сейва при выходе специально удаляет файл перед закрытием — иначе проходил бы сейв, оставшийся от паузы.\n• README.md в корне: что нужно поставить на Windows и на Android, как собрать и запустить, ключи --threads и --graphics, управление, где лежат сейв, настройки и музыка, update.bat, список стендов и честный раздел о том, что проверено, а что нет.\n• Честно: APK по-прежнему не собирался — нет Windows, JDK, SDK и NDK; на живом телефоне игра не запускалась. Поддельный NDK идеален там, где телефон бывает неправ: драйверы GPU, задержка AAudio, поведение системы при нехватке памяти. Первый настоящий запуск — ваш.",
             "Android больше не решает за игрока, чем двигаться.\n• При первом запуске APK открывается экран «УПРАВЛЕНИЕ»: три схемы на выбор — стик слева (как было), стик справа для левши и крестовина из четырёх кнопок. Каждая нарисована так же, как будет выглядеть на экране боя, поэтому выбираешь руками, а не по названию. Выбор запоминается, второй раз экран не появляется.\n• Сменить схему можно когда угодно: в настройках рядом с «НАЗАД» теперь кнопка «УПРАВЛЕНИЕ» с названием текущей схемы.\n• На Android из интерфейса убраны названия клавиш: «НАЗАД [ESC]» стало «НАЗАД», «ПРОДОЛЖИТЬ [ESC]» — «ПРОДОЛЖИТЬ», подсказка боя «WASD • ДВИЖЕНИЕ SPACE • РЫВОК Q • СУПЕР» заменена на «СТИК — ДВИЖЕНИЕ • РЫВОК — КНОПКА • СУПЕР — КНОПКА», а строка про записанную озвучку и F3 на телефоне не показывается вовсе. На Windows всё осталось как было: те же подсказки с клавишами.\n• Кнопка отладки на телефоне называется «ОТЛ», а не «F3»: такой клавиши там нет.\n• Списки (справка, патчноуты, выбор дела) листаются пальцем: жест вверх-вниз прокручивает на щелчок колеса каждые 22 px, дрожание пальца на 5 px не листает.\n• Найдено и исправлено: в меню касание в нижней левой четверти превращалось в невидимый стик, и строка настроек под пальцем не нажималась. Стик теперь живёт только в бою и только в двух схемах из трёх; в крестовине пальцы двигают кнопками.\n• Файл настроек вырос с 60 до 68 байт. Старый файл читается как есть: схема и отметка «выбор показан» дописаны в хвост, остальные переключатели не сбрасываются.\n• Стенды: touch_probe вырос с 51 до 109 проверок (три схемы, крестовина и диагональ, зеркало, прокрутка пальцем, чтение и запись файла настроек), android_smoke — с 27 до 38 (первый запуск показывает выбор, касание карточки выбирает, «ДАЛЬШЕ» пишет схему в файл, крестовина двигает героя). Новые проверки прогнаны мутациями: стик в верхней половине экрана, стик в меню и «отпускание одной кнопки снимает все» ловятся.\n• Честно: APK по-прежнему не собирался и на телефоне не запускался — здесь нет Windows, JDK, SDK и NDK. Настоящий размер кнопок под большой палец проверяется только на устройстве.",
+            "Размер кнопок на телефоне теперь настройка, а не удача экрана.\n• В настройках появилась строка «Размер кнопок касания»: 80, 90, 100, 110, 125, 140 и 160 %. Касание листает ступени по кругу, на клавиатуре с Android работают + и −.\n• Меняется всё сразу и одной пропорцией: кнопки СУПЕР и РЫВОК, крестовина, стик, его шайба и служебные кнопки паузы и отладки. На 160 % кнопка рывка 147 px, на 80 % — 74 px.\n• Размер можно выбрать не только в настройках: на экране «УПРАВЛЕНИЕ» под карточками схем есть ползунок «РАЗМЕР КНОПОК» с «−» и «+», и превью схем сверху сразу рисуется выбранным размером.\n• Превью в карточках схем тоже масштабируется: видно, каким станет управление, а не «как-нибудь».\n• Кнопка не может вырасти во вред: если кадр узкий (окно в сплите), размер ужимается по экрану, и оверлей рисует ровно ту же кнопку, которая нажимается, — цифра в настройках остаётся вашей, а фактический процент виден в раскладке.\n• Подписи не вылезают за кнопку: если «РЫВОК» шире кнопки, обе кнопки действия переходят на короткую форму («СУП», «РЫВ»), а не обрезаются по одной.\n• Файл настроек вырос с 68 до 72 байт; прежний читается как есть, размер в нём считается обычным (100 %).\n• Стенды: touch_probe — 151 проверка (ступени по кругу, кнопки в кадре на любом проценте, стик растёт вместе с кнопками, узкий кадр ужимает размер, подпись всегда влезает), android_smoke — 41 (строка настроек меняет размер, раскладка боя следует за настройкой, новое значение ложится в файл). Мутации: раскладка игнорирует настройку, нет страховки узкого экрана, строка ничего не делает — пойманы все три.\n• На Windows строки про размер кнопок нет: там нет кнопок касания, и настройка, которой нечего менять, только путает. Экран настроек десктопа совпал с 2.10.53 до пикселя.\n• Честно: APK не собирался, на телефоне не запускался. Размер под большой палец окончательно подбирается только на устройстве.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
@@ -12466,6 +12586,8 @@ struct Game {
             // Экран есть только на Android, но клавиши обрабатываются всегда:
             // так его можно пройти и стендом, и на телефоне с клавиатурой.
             if (key >= '1' && key <= '3') setTouchScheme(key - '1');
+            else if (key == '-' || key == '_') stepTouchButtonSize(-1);
+            else if (key == '+' || key == '=') stepTouchButtonSize(1);
             else if (key == 27 || key == 13 || key == 32) finishControlsSetup();
         } else if (state == STATE_HERO_SELECT) {
             if (key == 27) state = STATE_MENU;
@@ -12552,6 +12674,13 @@ struct Game {
         } else if (state == STATE_SETTINGS) {
             if (key >= '1' && key <= '9') toggleOption(key - '0');
             else if (key == '0') toggleOption(10);
+            // Размер кнопок — клавишами + и −: на телефоне с клавиатурой тоже нужно.
+            else if (touchControls && (key == '+' || key == '=')) toggleOption(11);
+            else if (touchControls && (key == '-' || key == '_')) {
+                options.touchButtonScale = touchStepSize(options.touchButtonScale, -1);
+                saveOptions();
+                sound.play(SFX_CLICK, 0.02f);
+            }
             else if (key == 9) settingsVolumeFocus = (settingsVolumeFocus + 1) % 2;
             else if (key == 37 || key == 39) adjustSoundVolume(key == 37 ? -1 : 1);
             else if (key == 27) state = settingsReturnState;

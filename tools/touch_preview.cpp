@@ -8,6 +8,8 @@
 //     build/touch 1600x720 phone.bmp     # экран телефона 20:9
 //     build/touch 1280x720 desktop.bmp
 //     build/touch 1280x720 sheet.bmp 1   # лист с тремя схемами движения
+//     build/touch 1280x720 sheet.bmp 1 140   # то же при размере кнопок 140 %
+//     build/touch 1280x720 sizes.bmp sizes   # лист размеров: 70 / 100 / 160 %
 //
 // Второй номер (третий аргумент) включает режим листа: два кадра рядом, как в
 // design/touch_controls.png.
@@ -50,7 +52,8 @@ static bool parseSize(const char* s, int& w, int& h) {
 }
 
 // Один кадр боя с нажатым стиком и пальцем на цели.
-static void renderScene(int w, int h, int graphics, int scheme, std::vector<uint32_t>& out) {
+static void renderScene(int w, int h, int graphics, int scheme, std::vector<uint32_t>& out,
+                        int sizePercent = TOUCH_SIZE_DEFAULT) {
     SCREEN_W = w; SCREEN_H = h;
     Renderer r;
     r.resize(w, h);
@@ -72,7 +75,7 @@ static void renderScene(int w, int h, int graphics, int scheme, std::vector<uint
     }
 
     TouchLayout layout;
-    layout.layout(w, h, scheme);            // та же функция, что в игре
+    layout.layout(w, h, scheme, sizePercent);   // та же функция, что в игре
     TouchPointer pointers[TOUCH_MAX_POINTERS];
     if (layout.dpad()) {
         // Крестовина: два пальца — вправо и вверх, то есть диагональ.
@@ -104,12 +107,15 @@ int main(int argc, char** argv) {
     int w = 1600, h = 720;
     if (argc > 1) parseSize(argv[1], w, h);
     const char* path = argc > 2 ? argv[2] : "/tmp/touch.bmp";
-    const bool sheet = argc > 3 && atoi(argv[3]) != 0;
+    const bool sheet = argc > 3 && strcmp(argv[3], "sizes") == 0 ? false : (argc > 3 && atoi(argv[3]) != 0);
+    // Режим «sizes»: одна схема в трёх размерах кнопок — видно, что даёт настройка.
+    const bool sizeSheet = argc > 3 && strcmp(argv[3], "sizes") == 0;
 
-    if (!sheet) {
+    if (!sheet && !sizeSheet) {
         std::vector<uint32_t> frame;
         const int scheme = argc > 4 ? atoi(argv[4]) : 0;
-        renderScene(w, h, 1, scheme, frame);
+        const int sizePercent = argc > 5 ? atoi(argv[5]) : TOUCH_SIZE_DEFAULT;
+        renderScene(w, h, 1, scheme, frame, sizePercent);
         writeBmp(path, frame.data(), w, h);
         printf("%s  %dx%d\n", path, w, h);
         return 0;
@@ -138,15 +144,41 @@ int main(int argc, char** argv) {
         return x0;
     };
 
+    if (sizeSheet) {
+        const int sizes[] = {TOUCH_SIZE_MIN, TOUCH_SIZE_DEFAULT, TOUCH_SIZE_MAX};
+        const int rows = 3;
+        const int sheetH = pad + rows * (labelH + outCellH + pad);
+        SCREEN_H = sheetH;
+        canvas.resize(outW, sheetH);
+        for (int i = 0; i < outW * sheetH; ++i) canvas.pixels[i] = 0xFF0B0912;
+        char caption[128];
+        int sy = pad;
+        for (int i = 0; i < rows; ++i) {
+            std::vector<uint32_t> frame;
+            renderScene(cellW, cellH, 1, TOUCH_SCHEME_STICK_LEFT, frame, sizes[i]);
+            snprintf(caption, sizeof(caption),
+                     "РАЗМЕР КНОПОК %d%% — кнопки, крестовина и стик одной пропорцией",
+                     sizes[i]);
+            canvas.drawText(FONT_SMALL, 12, sy + 6, caption, 0xFFE8E0F8);
+            sy += labelH;
+            place(frame, cellW, cellH, scale, outCellH, sy);
+            sy += outCellH + pad;
+        }
+        writeBmp(path, canvas.pixels, outW, sheetH);
+        printf("%s  %dx%d\n", path, outW, sheetH);
+        return 0;
+    }
+
     const char* captions[TOUCH_SCHEME_COUNT] = {
         "1 СТИК СЛЕВА — движение левым большим пальцем, прицел и кнопки справа",
         "2 СТИК СПРАВА — то же зеркально, для левшей: движение правой рукой",
         "3 КРЕСТОВИНА — четыре кнопки-стрелки, диагональ двумя пальцами",
     };
+    const int sheetSize = argc > 5 ? atoi(argv[5]) : TOUCH_SIZE_DEFAULT;
     int y = pad;
     for (int scheme = 0; scheme < TOUCH_SCHEME_COUNT; ++scheme) {
         std::vector<uint32_t> frame;
-        renderScene(cellW, cellH, 1, scheme, frame);
+        renderScene(cellW, cellH, 1, scheme, frame, sheetSize);
         canvas.drawText(FONT_SMALL, 12, y + 6, captions[scheme], 0xFFE8E0F8);
         y += labelH;
         place(frame, cellW, cellH, scale, outCellH, y);

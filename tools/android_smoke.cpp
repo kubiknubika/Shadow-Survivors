@@ -295,6 +295,44 @@ int main(int argc, char** argv) {
               "в файле лежит выбранная схема и отметка «спросили»", detail);
     }
 
+    // Размер кнопок: строка в настройках и та же цифра в раскладке боя.
+    {
+        const int before = g->options.touchButtonScale;
+        g->state = STATE_SETTINGS;
+        // Строка «Размер кнопок» — одиннадцатая: та же арифметика, что в отрисовке.
+        const int rowH = uiH > uiW ? 40 : 32;
+        const int rowGap = uiH > uiW ? 8 : 2;
+        const int rowY = 88 + 10 * (rowH + rowGap) + rowH / 2;
+        tapAt((float)(uiW / 2), (float)rowY);
+        snprintf(detail, sizeof(detail), "было %d%%, стало %d%%", before, g->options.touchButtonScale);
+        check(g->options.touchButtonScale > before, "строка «размер кнопок» увеличивает кнопки", detail);
+
+        // Раскладка берёт размер из настроек: кнопка становится больше.
+        layoutButtons();
+        const float dashW = g_touchLayout.dash.w;
+        const int scaledPercent = g_touchLayout.sizePercent;
+        // Доводим размер до максимума теми же касаниями, что делает игрок.
+        for (int i = 0; i < 8 && g->options.touchButtonScale < TOUCH_SIZE_MAX; ++i) tapAt((float)(uiW / 2), (float)rowY);
+        layoutButtons();
+        snprintf(detail, sizeof(detail), "при %d%% рывок %.0f px, при %d%% — %.0f px",
+                 scaledPercent, dashW, TOUCH_SIZE_MAX, g_touchLayout.dash.w);
+        check(g_touchLayout.dash.w > dashW, "кнопка выросла вслед за настройкой", detail);
+
+        // И размер лежит в файле рядом со схемой.
+        FILE* f = fopen((home + "/shadow_survivors.cfg").c_str(), "rb");
+        int savedScale = 0;
+        if (f) {
+            fseek(f, (long)offsetof(GameOptions, touchButtonScale), SEEK_SET);
+            if (fread(&savedScale, sizeof(int), 1, f) != 1) savedScale = 0;
+            fclose(f);
+        }
+        snprintf(detail, sizeof(detail), "в файле %d%%", savedScale);
+        check(savedScale == TOUCH_SIZE_MAX, "новый размер записан в настройки", detail);
+        g->options.touchButtonScale = TOUCH_SIZE_DEFAULT;
+        layoutButtons();
+        g->state = STATE_PLAYING;
+    }
+
     // Крестовина: кнопки двигают героя так же, как клавиатура.
     g->options.touchScheme = TOUCH_SCHEME_DPAD_LEFT;
     g->state = STATE_PLAYING;

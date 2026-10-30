@@ -61,7 +61,13 @@ int main(int argc, char** argv) {
     // Любой аргумент «touch» включает телефонный интерфейс: подсказки без
     // названий клавиш и экран выбора схемы движения.
     bool touchUi = false;
-    for (int i = 1; i < argc; ++i) if (strcmp(argv[i], "touch") == 0) touchUi = true;
+    int buttonScale = TOUCH_SIZE_DEFAULT;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "touch") == 0) touchUi = true;
+        // size140 — тот же экран с размером кнопок 140 %: так видно, что настройка
+        // двигает геометрию, а не только цифру в строке.
+        else if (strncmp(argv[i], "size", 4) == 0) buttonScale = atoi(argv[i] + 4);
+    }
 
     struct Case { const char* name; int state; } cases[] = {
         {"menu", STATE_MENU}, {"settings", STATE_SETTINGS}, {"help", STATE_HELP},
@@ -84,6 +90,7 @@ int main(int argc, char** argv) {
     g.runTime = 240.0f;
     g.cheatGodMode = true;
     g.options.graphicsLevel = graphics;
+    g.options.touchButtonScale = touchClampSize(buttonScale);
     g.renderThreads = threads;
     for (int i = 0; i < 5; ++i) g.itemLevels[i] = 3;
     g.state = (GameState)state;

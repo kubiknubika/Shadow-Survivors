@@ -314,7 +314,9 @@ static TouchLayout g_touchLayout;
 // Схему движения выбирает игрок (экран «УПРАВЛЕНИЕ»): раскладка пересчитывается
 // на кадр, поэтому смена схемы видна сразу, без перезапуска.
 static void layoutButtons() {
-    g_touchLayout.layout(SCREEN_W, SCREEN_H, g_game.options.touchScheme);
+    // Схема и размер кнопок — из настроек: оба меняются на ходу, без перезапуска.
+    g_touchLayout.layout(SCREEN_W, SCREEN_H, g_game.options.touchScheme,
+                         g_game.options.touchButtonScale);
 }
 
 // Экранные координаты -> логический кадр (обратное к viewRect).

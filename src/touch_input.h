@@ -15,6 +15,7 @@
 //   * крестовина  — четыре кнопки-стрелки слева, диагональ двумя пальцами.
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <stdint.h>
 #include "renderer.h"
 
@@ -39,22 +40,71 @@ enum TouchRole {
     TOUCH_PAD_RIGHT
 };
 
+// Размер кнопок — настройка, а не константа: на пятидюймовом телефоне 92 px
+// ложатся под палец, на планшете теряются, а рука с крупным пальцем просит
+// больше. Границы: ниже 80 % кнопка (74 px логического кадра) становится
+// меньше пальца, а подпись «РЫВОК» в неё уже не влезает; выше 160 % пара
+// кнопок перестаёт помещаться в нижнюю четверть экрана.
+static constexpr int TOUCH_SIZE_MIN = 80;
+static constexpr int TOUCH_SIZE_MAX = 160;
+static constexpr int TOUCH_SIZE_DEFAULT = 100;
+
+inline int touchClampSize(int percent) {
+    return percent < TOUCH_SIZE_MIN ? TOUCH_SIZE_MIN
+                                    : (percent > TOUCH_SIZE_MAX ? TOUCH_SIZE_MAX : percent);
+}
+
+// Ступени настройки: игрок жмёт строку в настройках и перебирает их по кругу.
+// Шаг нелинейный: от 100 % к 110 % видно на глаз, а 100 → 105 — нет.
+inline int touchStepSize(int percent, int direction) {
+    static const int steps[] = {TOUCH_SIZE_MIN, 90, TOUCH_SIZE_DEFAULT, 110, 125, 140, TOUCH_SIZE_MAX};
+    const int count = (int)(sizeof(steps) / sizeof(steps[0]));
+    int nearest = 0;
+    for (int i = 1; i < count; ++i)
+        if (std::fabs((float)steps[i] - (float)percent) < std::fabs((float)steps[nearest] - (float)percent))
+            nearest = i;
+    int next = nearest + (direction < 0 ? -1 : 1);
+    if (next < 0) next = count - 1;
+    if (next >= count) next = 0;
+    return steps[next];
+}
+
 struct TouchRect { float x = 0, y = 0, w = 0, h = 0; };
 
 struct TouchLayout {
     TouchRect dash, ult, pause, debug;
     TouchRect padUp, padDown, padLeft, padRight;
     int scheme = TOUCH_SCHEME_STICK_LEFT;
+    // Размер кнопок в процентах, каким он реально получился: если экран мал,
+    // верхняя граница настройки ужимается, и оверлей рисует то же, что и зона
+    // касания. Иначе нарисованная кнопка и кнопка, которая нажимается, — разные.
+    int sizePercent = TOUCH_SIZE_DEFAULT;
+    float stickBase = 58.0f;   // радиус базы стика
+    float stickKnob = 26.0f;   // шайба под пальцем
+    float stickMax = 60.0f;    // на сколько шайба отходит от базы
 
     bool mirrored() const { return scheme == TOUCH_SCHEME_STICK_RIGHT; }
     bool dpad() const { return scheme == TOUCH_SCHEME_DPAD_LEFT; }
 
     // Пересчитывается на кадр: экран бывает разным (телефон, планшет, эмулятор).
-    void layout(int screenW, int screenH, int schemeIndex = TOUCH_SCHEME_STICK_LEFT) {
+    void layout(int screenW, int screenH, int schemeIndex = TOUCH_SCHEME_STICK_LEFT,
+                int requestedPercent = TOUCH_SIZE_DEFAULT) {
         scheme = schemeIndex < 0 || schemeIndex >= TOUCH_SCHEME_COUNT ? TOUCH_SCHEME_STICK_LEFT
                                                                      : schemeIndex;
         const bool mirror = mirrored();
-        const float pad = 18.0f, big = 92.0f, small = 46.0f;
+        float scale = (float)touchClampSize(requestedPercent) / 100.0f;
+        // Экранная страховка: кнопка не может занимать больше четверти меньшей
+        // стороны, а пара кнопок — больше половины ширины. На узком окне
+        // настройка 160 % иначе вытолкнула бы кнопки за край или друг на друга.
+        const float shortest = (float)(screenW < screenH ? screenW : screenH);
+        const float byHeight = std::min(scale, shortest * 0.26f / 92.0f);
+        const float byWidth = std::min(byHeight, (float)screenW * 0.55f / (2.0f * 92.0f + 3.0f * 18.0f));
+        scale = std::max(0.4f, std::min(scale, byWidth));
+        sizePercent = (int)std::lround(scale * 100.0f);
+        stickBase = 58.0f * scale;
+        stickKnob = 26.0f * scale;
+        stickMax = 60.0f * scale;
+        const float pad = 18.0f * scale, big = 92.0f * scale, small = 46.0f * scale;
         const float bottom = (float)screenH - pad - big;
         // Кнопки действия стоят под большим пальцем свободной руки.
         if (mirror) {
@@ -78,7 +128,7 @@ struct TouchLayout {
         // Крестовина: четыре кнопки вокруг точки в нижнем углу. Расстояние между
         // центрами 68 px при кнопке 62 px — между ними остаётся зазор, и палец
         // не задевает соседнюю кнопку, когда ведёт по кругу.
-        const float s = 62.0f, step = 68.0f;
+        const float s = 62.0f * scale, step = 68.0f * scale;
         const float cx = pad + step + s * 0.5f;
         const float cy = (float)screenH - pad - step - s * 0.5f;
         padUp = { cx - s * 0.5f, cy - step - s * 0.5f, s, s };
@@ -274,11 +324,21 @@ inline void drawTouchOverlay(Renderer& r, GameT& g, const TouchPointer* pointers
                          g.state == STATE_BOSS_MUSIC_TEST;
     if (!playing) return;
 
-    auto button = [&](const TouchRect& b, const char* label, uint32_t accent, bool hot) {
+    // Подпись не должна вылезать за кнопку: при размере 70 % «РЫВОК» шире самой
+    // кнопки. Тогда обе кнопки действия переходят на короткую форму сразу —
+    // «СУПЕР» и «РЫВОК» рядом должны читаться одинаково.
+    auto fits = [&](const TouchRect& b, const char* label) {
+        return r.textWidth(FONT_SMALL, label) <= (int)b.w - 10;
+    };
+    const bool fullLabels = fits(layout.ult, "СУПЕР") && fits(layout.dash, "РЫВОК");
+    auto button = [&](const TouchRect& b, const char* label, const char* shortLabel,
+                      uint32_t accent, bool hot) {
         const int x = (int)b.x, y = (int)b.y, w = (int)b.w, h = (int)b.h;
         r.fillRoundedRect(x, y, w, h, 14, hot ? 0xFF3A2A5A : 0xFF2A1E44, hot ? 210 : 150);
         r.drawRoundedRect(x, y, w, h, 14, accent, 2, hot ? 235 : 170);
-        r.drawTextCentered(FONT_SMALL, x + w / 2, y + h / 2 - 8, label, accent, true, 235);
+        r.drawTextCentered(FONT_SMALL, x + w / 2, y + h / 2 - 8,
+                           fullLabels || strcmp(label, shortLabel) == 0 ? label : shortLabel,
+                           accent, true, 235);
     };
 
     bool dashHot = false, ultHot = false;
@@ -291,12 +351,12 @@ inline void drawTouchOverlay(Renderer& r, GameT& g, const TouchPointer* pointers
         if (pointers[i].role == TOUCH_PAD_LEFT) padHot[2] = true;
         if (pointers[i].role == TOUCH_PAD_RIGHT) padHot[3] = true;
     }
-    button(layout.ult, "СУПЕР", 0xFFFFD24A, ultHot);
-    button(layout.dash, "РЫВОК", 0xFF6FE0FF, dashHot);
-    button(layout.pause, "II", 0xFFC8BEDA, false);
+    button(layout.ult, "СУПЕР", "СУП", 0xFFFFD24A, ultHot);
+    button(layout.dash, "РЫВОК", "РЫВ", 0xFF6FE0FF, dashHot);
+    button(layout.pause, "II", "II", 0xFFC8BEDA, false);
     // «F3» — имя клавиши: на телефоне такой клавиши нет, поэтому кнопка зовётся
     // так, как её видит игрок.
-    button(layout.debug, "ОТЛ", 0xFF8FD0E8, g.debugOverlay);
+    button(layout.debug, "ОТЛ", "ОТЛ", 0xFF8FD0E8, g.debugOverlay);
 
     if (layout.dpad()) {
         const TouchRect* pads[4] = {&layout.padUp, &layout.padDown, &layout.padLeft, &layout.padRight};
@@ -314,11 +374,13 @@ inline void drawTouchOverlay(Renderer& r, GameT& g, const TouchPointer* pointers
 
     for (int i = 0; i < TOUCH_MAX_POINTERS; ++i) {
         if (pointers[i].role != TOUCH_STICK) continue;
-        const float dx = std::max(-60.0f, std::min(60.0f, pointers[i].x - pointers[i].baseX));
-        const float dy = std::max(-60.0f, std::min(60.0f, pointers[i].y - pointers[i].baseY));
-        r.drawCircleRing((int)pointers[i].baseX, (int)pointers[i].baseY, 58, 3, 0xFFE8DEFF, 90);
-        r.fillCircle((int)(pointers[i].baseX + dx), (int)(pointers[i].baseY + dy), 26, 0xFFB9A8E8, 190);
-        r.drawCircleRing((int)(pointers[i].baseX + dx), (int)(pointers[i].baseY + dy), 26, 2, 0xFFEDE6FF, 200);
+        const float maxOut = layout.stickMax;
+        const float dx = std::max(-maxOut, std::min(maxOut, pointers[i].x - pointers[i].baseX));
+        const float dy = std::max(-maxOut, std::min(maxOut, pointers[i].y - pointers[i].baseY));
+        const int ring = (int)layout.stickBase, knob = (int)layout.stickKnob;
+        r.drawCircleRing((int)pointers[i].baseX, (int)pointers[i].baseY, ring, 3, 0xFFE8DEFF, 90);
+        r.fillCircle((int)(pointers[i].baseX + dx), (int)(pointers[i].baseY + dy), knob, 0xFFB9A8E8, 190);
+        r.drawCircleRing((int)(pointers[i].baseX + dx), (int)(pointers[i].baseY + dy), knob, 2, 0xFFEDE6FF, 200);
     }
 }
 
