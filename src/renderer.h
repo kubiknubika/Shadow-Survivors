@@ -769,19 +769,39 @@ struct Renderer {
     // разных игр. Направление задаётся здесь один раз и одинаково для всех.
     static constexpr int FIG_LIGHT_DX = -1;
     static constexpr int FIG_LIGHT_DY = -1;
-    static constexpr int FIG_RIM_DEPTH = 3;    // толщина подсветки края, px
-    static constexpr int FIG_CORE_DEPTH = 4;   // толщина собственной тени, px
-    // Сила прохода вынесена в поля, чтобы её можно было перебрать стендом:
-    // «слишком мало» и «слишком много» здесь отличаются на десятую.
-    static inline float FIG_RIM_STRENGTH = 0.46f;
-    static inline float FIG_CORE_STRENGTH = 0.30f;
-    static inline float FIG_INTERNAL = 0.45f;   // вес стыка деталей против силуэта
-    static inline float FIG_GRAD_LIGHT = 0.18f;
-    static inline float FIG_GRAD_DARK = 0.22f;
+    // Толщины и силы блика, тени и стыка переехали в FigMaterial: с 2.10.32 они
+    // зависят от материала, и одной константы на всех больше нет.
     // Выключатель нужен стендам: свет сравнивается «до и после» на одном кадре,
     // иначе цифры смешивают разные палитры стражей.
     static inline bool figureVolumeEnabled = true;
     static inline float figureVolumeGradient = 1.0f;
+
+    // ── Материалы (аудит §8, P1 №4–6) ────────────────────────────────────────
+    // Раньше проход объёма применял один приём ко всем шести стражам: металл,
+    // ткань, камень и стекло получали одинаковый блик и одинаковую тень, и вся
+    // линейка выглядела отлитой из одного материала. Теперь у материала своя
+    // рампа: металл — узкий резкий блик и короткая жёсткая тень, ткань и плоть —
+    // широкий мягкий переход, стекло — яркий край почти без тени, пергамент и
+    // кость блика не получают вовсе.
+    struct FigMaterial {
+        int rimDepth, coreDepth;      // толщина блика и тени, px
+        float rimK, coreK;            // сила блика и тени на силуэте
+        float internalK;              // блик на стыке деталей (тень стыка — отдельно)
+        float rampLight, rampDark;    // тональная рампа: свет и тень по корпусу
+    };
+    // Тип стража: 0 металл, 1 плоть/плесень, 2 ткань, 3–4 камень, 5 стекло.
+    static FigMaterial figMaterial(int bossId) {
+        switch (bossId) {
+            case 0:  return {2, 3, 0.62f, 0.44f, 0.30f, 0.20f, 0.26f};
+            case 1:  return {4, 5, 0.34f, 0.26f, 0.00f, 0.11f, 0.16f};
+            case 2:  return {4, 5, 0.30f, 0.24f, 0.00f, 0.10f, 0.16f};
+            case 3:  return {3, 4, 0.44f, 0.32f, 0.28f, 0.15f, 0.20f};
+            case 4:  return {3, 4, 0.40f, 0.30f, 0.28f, 0.14f, 0.20f};
+            default: return {2, 2, 0.70f, 0.10f, 0.24f, 0.26f, 0.06f};
+        }
+    }
+    // Пергамент, страницы книг, кость, маска: блик на них читается как пластик.
+    static FigMaterial figMaterialParchment() { return {3, 3, 0.10f, 0.12f, 0.00f, 0.06f, 0.10f}; }
 
     // Снимок области кадра ДО отрисовки фигуры. Ореол, знак на полу и осколки
     // уже нарисованы, поэтому в маску объёма они не попадут.
@@ -805,7 +825,7 @@ struct Renderer {
     // Стык даёт вполовину более слабый эффект — иначе фигура выглядит не
     // объёмной, а тиснёной, с двойными контурами у каждой детали.
     void applyFigureVolume(int x0, int y0, int w, int h, float strength = 1.0f, float gradient = 0.0f,
-                           int bodyCx = 0, int bodyCy = 0) {
+                           int bodyCx = 0, int bodyCy = 0, int matId = -1) {
         if (strength <= 0.01f || w <= 0 || h <= 0) return;
         const int W = std::min(SCREEN_W, width), H = std::min(SCREEN_H, height);
         if ((int)figureScratch.size() != w * h) return;
@@ -845,9 +865,10 @@ struct Renderer {
             if (i < 0 || j < 0 || i >= w || j >= h) return false;
             return figureMask[(size_t)j * w + i] != 0;
         };
-        // Ищет ближайшую границу в заданном направлении и говорит, силуэт это
-        // или стык деталей (по цвету соседа).
-        auto boundaryToward = [&](int i, int j, int dx, int dy, int depth, bool& silhouette) {
+        // Ищет ближайшую границу в заданном направлении. Возвращает расстояние и
+        // говорит, силуэт это или стык деталей. У стыка деталей толщина ограничена
+        // (internalMax): контактная тень — это кант в 2 px, а не размытое пятно.
+        auto boundaryToward = [&](int i, int j, int dx, int dy, int depth, int internalMax, bool& silhouette) {
             silhouette = false;
             const int c0 = figureColor[(size_t)j * w + i];
             const int r0 = (c0 >> 10) & 0x1F, g0 = (c0 >> 5) & 0x1F, b0 = c0 & 0x1F;
@@ -858,7 +879,7 @@ struct Renderer {
                 const int dr = std::abs(r0 - ((c1 >> 10) & 0x1F));
                 const int dg = std::abs(g0 - ((c1 >> 5) & 0x1F));
                 const int db = std::abs(b0 - (c1 & 0x1F));
-                if (dr + dg + db > 4) return d;
+                if (dr + dg + db > 4) return d <= internalMax ? d : 0;
             }
             return 0;
         };
@@ -868,27 +889,61 @@ struct Renderer {
                 const int sx = x0 + i, sy = y0 + j;
                 if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
                 uint32_t c = pixels[(size_t)sy * W + sx];
-                // Мягкий градиент: вся фигура чуть светлее со стороны света и
-                // чуть темнее с обратной. В 3D это ambient по нормалям; без него
-                // объём читался бы только по кромке, как у наклейки.
+                // Материал по цвету детали: пергамент, страницы и кость узнаются
+                // по высокой светлоте при низкой насыщенности, остальное — по типу
+                // стража. Один и тот же приём для стали и для ткани — это и была
+                // причина, по которой линейка читалась отлитой из одного металла.
+                const uint16_t key = figureColor[(size_t)j * w + i];
+                const int r5 = (key >> 10) & 0x1F, g5 = (key >> 5) & 0x1F, b5 = key & 0x1F;
+                const int lum8 = ((r5 * 77 + g5 * 150 + b5 * 29) >> 8) * 8;
+                // Тёплое и светлое — пергамент, страницы, кость, маска. Камень
+                // Протоколиста тоже светлый, но холодный (синего больше красного),
+                // поэтому одним порогом насыщенности их не разделить.
+                const int chroma = std::max(r5, std::max(g5, b5)) - std::min(r5, std::min(g5, b5));
+                const bool parchment = (lum8 > 150) && (chroma <= 6) && (r5 > b5 + 2);
+                const FigMaterial mat = parchment ? figMaterialParchment() : figMaterial(matId);
+                // Тональная рампа по материалу. Ступенчатую (три тона по осям
+                // кадра) пробовал: на крупном теле она даёт прямой диагональный
+                // шов через всю фигуру — у Азарота балахон делился на светлую и
+                // тёмную половину ровной линией. Тона даёт не порог по координате,
+                // а сама форма: блик у края, кольцо собственной тени внутри и
+                // контактный кант на стыке деталей. Здесь — только сила рампи,
+                // своя для каждого материала.
                 if (gradient > 0.001f) {
                     const float nx = (i - gc) / ghw, ny = (j - gr) / ghh;
                     const float dot = (nx * FIG_LIGHT_DX + ny * FIG_LIGHT_DY) * 0.70710678f;
-                    if (dot > 0.0f) c = lerpColor(c, 0xFFFFE8C0, dot * FIG_GRAD_LIGHT * gradient * k);
-                    else c = lerpColor(c, 0xFF0A0714, -dot * FIG_GRAD_DARK * gradient * k);
+                    if (dot > 0.0f) c = lerpColor(c, 0xFFFFE8C0, dot * mat.rampLight * gradient * k);
+                    else c = lerpColor(c, 0xFF0A0714, -dot * mat.rampDark * gradient * k);
                 }
                 bool rimSil = false, coreSil = false;
-                const int rimD = boundaryToward(i, j, FIG_LIGHT_DX, FIG_LIGHT_DY, FIG_RIM_DEPTH, rimSil);
+                const int rimD = boundaryToward(i, j, FIG_LIGHT_DX, FIG_LIGHT_DY, mat.rimDepth, 2, rimSil);
                 const int coreD = rimD ? 0
-                    : boundaryToward(i, j, -FIG_LIGHT_DX, -FIG_LIGHT_DY, FIG_CORE_DEPTH, coreSil);
+                    : boundaryToward(i, j, -FIG_LIGHT_DX, -FIG_LIGHT_DY, mat.coreDepth, 2, coreSil);
                 if (rimD) {
-                    const float edge = 1.0f - (rimD - 1) / (float)FIG_RIM_DEPTH;
-                    const float t = edge * FIG_RIM_STRENGTH * (rimSil ? 1.0f : FIG_INTERNAL) * k;
+                    const float edge = 1.0f - (rimD - 1) / (float)mat.rimDepth;
+                    const float t = edge * mat.rimK * (rimSil ? 1.0f : mat.internalK) * k;
                     c = lerpColor(c, 0xFFFFF4D6, t);
                 } else if (coreD) {
-                    const float edge = 1.0f - (coreD - 1) / (float)FIG_CORE_DEPTH;
-                    const float t = edge * FIG_CORE_STRENGTH * (coreSil ? 1.0f : FIG_INTERNAL) * k;
-                    c = lerpColor(c, 0xFF06040C, t);
+                    const float edge = 1.0f - (coreD - 1) / (float)mat.coreDepth;
+                    // Контактная тень между деталями: кант в 2 px, в полтора раза
+                    // сильнее обычной тени силуэта. Раньше стык шёл на 45 % от
+                    // силуэта и детали сливались в одно пятно (средний контраст
+                    // стыка 21 против 34 у плоской заливки).
+                    const float boost = coreSil ? 1.0f : 1.5f;
+                    const float t = edge * mat.coreK * boost * k;
+                    c = lerpColor(c, 0xFF06040C, std::min(0.75f, t));
+                } else {
+                    // Кольцо собственной тени: полоса в 4–7 px внутри от тёмного
+                    // края. Это третий тон рампы, и он идёт по форме, а не по
+                    // координате кадра, поэтому читается как объём, а не как
+                    // половина, залитая краской.
+                    bool ringSil = false;
+                    const int ringD = boundaryToward(i, j, -FIG_LIGHT_DX, -FIG_LIGHT_DY,
+                                                    mat.coreDepth + 6, 0, ringSil);
+                    if (ringD > mat.coreDepth) {
+                        const float t = (1.0f - (ringD - mat.coreDepth) / 6.0f) * mat.coreK * 0.55f * k;
+                        c = lerpColor(c, 0xFF0A0714, t);
+                    }
                 }
                 // AO у земли: последние 14 px фигуры темнеют — фигура стоит на
                 // полу, а не лежит на нём картинкой.
@@ -1843,7 +1898,7 @@ struct Renderer {
         captureFigureRegion(lx, ly, lw, lh);
         drawBossFigure(cx, cy, bossType, animTime, hitFlash, enraged, false, 1.12f, castPose, castBurst,
                        mirror, recoil, fade);
-        if (figureVolumeEnabled) applyFigureVolume(lx, ly, lw, lh, std::min(1.0f, fade), figureVolumeGradient, cx, cy);
+        if (figureVolumeEnabled) applyFigureVolume(lx, ly, lw, lh, std::min(1.0f, fade), figureVolumeGradient, cx, cy, bossType);
     }
 
     // Смерть стража. Раньше босс исчезал между кадрами: попадал последний удар —
@@ -1883,7 +1938,7 @@ struct Renderer {
         captureFigureRegion(lx, ly, lw, lh);
         drawBossFigure(cx, cy + sink, bossType, animTime, p < 0.3f, true, false, shrink,
                        0.0f, p * 0.85f, false, p * 0.7f, 1.0f - p * 0.85f);
-        if (figureVolumeEnabled) applyFigureVolume(lx, ly, lw, lh, 1.0f - p * 0.8f, figureVolumeGradient, cx, cy);
+        if (figureVolumeEnabled) applyFigureVolume(lx, ly, lw, lh, 1.0f - p * 0.8f, figureVolumeGradient, cx, cy, bossType);
         (void)fadeA;
     }
 
