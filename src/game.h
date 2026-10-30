@@ -183,7 +183,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 133;
+static constexpr int PATCH_NOTES_COUNT = 134;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -561,6 +561,8 @@ struct Monster {
     float smartThinkTimer = 0.0f;
     float bossPressTimer = 0.0f; // страж идёт на игрока после приёма: окно натиска
     float bossOpenTimer = 0.0f;  // страж открыт после приёма: окно наказания
+    float bossSummonWindup = 0.0f; // замах вызова свиты: круг на полу до появления
+    bool isRetinue = false;        // призван стражем: умирает вместе с хозяином
     float smartDodgeX = 0.0f, smartDodgeY = 0.0f;
     float lastMoveX = 0.0f, lastMoveY = 0.0f; // фактическое направление шага: для отладочных меток
     SmartCloseState smartClose; // ближний бой разумного: отход, замах, рывок, круг
@@ -992,6 +994,8 @@ struct Game {
     float spawnAccumulator = 0.0f;
     int pendingSummons = 0;
     int pendingSummonType = 1;
+    int pendingSummonElite = 0;
+    float pendingSummonX = 0.0f, pendingSummonY = 0.0f, pendingSummonAngle = 0.0f;
     int nextBossIndex = 0;
     float bossWarningTimer = 0.0f;
     std::string bossWarningName;
@@ -2218,6 +2222,24 @@ struct Game {
         const float tighten = 8.0f * (float)(phase - 1);
         minD = std::max(40.0f, minD - tighten);
         maxD = std::max(minD + 24.0f, maxD - tighten);
+    }
+
+    // Свита: сколько живых страж держит при себе и сколько зовёт за раз.
+    // Раньше предела не было — на стенде за 30 с фазы набиралось 3–11 мобов
+    // одновременно, а после смерти стража 0–5 призванных оставались на арене
+    // без хозяина. Разбор с цифрами — design/boss_retinue.md.
+    static int bossRetinueCap(int bossType, int phase, bool reinforced) {
+        (void)bossType;
+        int cap = 2 + std::max(1, std::min(3, phase));   // 3 / 4 / 5
+        if (reinforced) ++cap;
+        return cap;
+    }
+    static int bossRetinueWave(int phase) { return std::max(1, std::min(4, phase + 1)); } // 2 / 3 / 4
+
+    int countBossRetinue() const {
+        int live = 0;
+        for (const Monster& m : monsters) if (m.isRetinue && m.hp > 0.0f) ++live;
+        return live;
     }
 
     static int bossPhaseForHealth(float hp, float maxHp) {
@@ -4034,6 +4056,20 @@ struct Game {
                 chest.magnetized = false;
                 pickups.push_back(chest);
                 addFloatingText(m.x, m.y - 30, "СУНДУК БОССА!", 0xFFFFD838, true);
+                // Свита без хозяина не остаётся: на стенде после убийства стража
+                // на арене висело 8–23 призванных моба, и добивать их было нечем —
+                // награда за них уже не падала.
+                bool anotherBossAlive = false;
+                for (const Monster& other : monsters)
+                    if (&other != &m && other.isBoss && other.hp > 0.0f) { anotherBossAlive = true; break; }
+                if (!anotherBossAlive) {
+                    for (Monster& r : monsters) {
+                        if (!r.isRetinue || r.hp <= 0.0f) continue;
+                        r.hp = 0.0f;
+                        spawnParticles(r.x, r.y, 12, 0xFFB9A4FF, 130.0f, 3, false);
+                        addShockwave(r.x, r.y, 34.0f, 0xFFB9A4FF, 0.28f);
+                    }
+                }
             } else {
                 Pickup p;
                 p.x = m.x;
@@ -4913,25 +4949,63 @@ struct Game {
             if (m.isBoss) {
                 handleBossPhaseTransition(m);
                 m.specialTimer -= dt;
-                if (m.specialTimer <= 0.0f) {
+                if (m.bossSummonWindup > 0.0f) {
+                    // Замах вызова: 0.8 с круг на полу, и только потом из него
+                    // поднимаются призванные. Раньше мобы возникали за краем
+                    // экрана без предупреждения и «приходили» сами.
+                    m.bossSummonWindup = std::max(0.0f, m.bossSummonWindup - dt);
+                    if (m.bossSummonWindup <= 0.0f) {
+                        const int cap = bossRetinueCap(m.bossType, m.bossPhase, m.bossReinforced);
+                        const int room = std::max(0, cap - countBossRetinue());
+                        const int count = std::min(room, bossRetinueWave(m.bossPhase));
+                        if (count > 0) {
+                            pendingSummonType = 1;
+                            switch (m.bossType % 6) {
+                                case 0: pendingSummonType = 4; break;
+                                case 1: pendingSummonType = 2; break;
+                                case 2: pendingSummonType = 8; break;
+                                case 4: pendingSummonType = 3; break;
+                                case 5: pendingSummonType = 6; break;
+                                default: pendingSummonType = 7; break;
+                            }
+                            pendingSummons = count;
+                            pendingSummonElite = (m.bossPhase >= 3 && count >= 3) ? 1 : 0;
+                            pendingSummonX = m.x;
+                            pendingSummonY = m.y;
+                            // Полукруг с дальней от героя стороны: свита встаёт за
+                            // хозяином, а не между ним и игроком.
+                            pendingSummonAngle = atan2f(m.y - playerY, m.x - playerX);
+                        }
+                    }
+                } else if (m.specialTimer <= 0.0f) {
                     // Each guardian calls a different kind of help, on its own cadence:
                     // Morgar walls himself in with shield bearers, Malakor floods the floor
                     // with plagued slimes, the Cardinal posts archers, Azaroth raises two
                     // heavy archive guards.
-                    int summonType = 1, summonCount = 3;
                     float summonInterval = 6.2f;
                     switch (m.bossType % 6) {
-                        case 0: summonType = 4; summonCount = 2; summonInterval = 7.4f; break;
-                        case 1: summonType = 2; summonCount = 4; summonInterval = 5.2f; break;
-                        case 2: summonType = 8; summonCount = 3; summonInterval = 6.4f; break;
-                        case 4: summonType = 3; summonCount = 4; summonInterval = 5.8f; break;
-                        case 5: summonType = 6; summonCount = 3; summonInterval = 6.1f; break;
-                        default: summonType = 7; summonCount = 2; summonInterval = 6.9f; break;
+                        case 0: summonInterval = 7.4f; break;
+                        case 1: summonInterval = 5.2f; break;
+                        case 2: summonInterval = 6.4f; break;
+                        case 4: summonInterval = 5.8f; break;
+                        case 5: summonInterval = 6.1f; break;
+                        default: summonInterval = 6.9f; break;
                     }
-                    m.specialTimer = std::max(3.6f, summonInterval - 0.9f * (m.bossPhase - 1));
-                    pendingSummonType = summonType;
-                    pendingSummons = std::max(pendingSummons, summonCount + (m.hp < m.maxHp * 0.5f ? 1 : 0) +
-                                                                       (m.bossReinforced ? 2 : 0));
+                    const int cap = bossRetinueCap(m.bossType, m.bossPhase, m.bossReinforced);
+                    if (m.abilityWindup > 0.0f || m.abilityActive > 0.0f) {
+                        // Замах приёма важнее: два телеграфа в один момент не читаются.
+                        // Отсрочка короткая и не съедает интервал: иначе вызов
+                        // прилипал к концу каждого приёма и шёл вдвое чаще задуманного.
+                        m.specialTimer = 0.6f;
+                    } else if (countBossRetinue() >= cap) {
+                        // Свита уже на арене: сначала её надо проредить. Пауза 2,6 с,
+                        // а не мгновенный добор: иначе место павшего занимает новый
+                        // моб через 1,4 с и бой превращается в конвейер.
+                        m.specialTimer = 2.6f;
+                    } else {
+                        m.specialTimer = std::max(3.6f, summonInterval - 0.9f * (m.bossPhase - 1));
+                        m.bossSummonWindup = 0.8f;
+                    }
                     static const char* summonLines[6] = {
                         "МОРГАР: ВЫЗОВ СТРАЖИ ВОРОТ!",
                         "МАЛАКОР: ПРИЗЫВ ЧУМНОЙ СТАИ!",
@@ -5264,9 +5338,10 @@ struct Game {
                     // значит секунда покоя — это честная награда за чтение.
                     moveX = 0.0f; moveY = 0.0f;
                     closeSpeedMul = 0.0f;
-                } else if (m.abilityWindup > 0.0f) {
+                } else if (m.abilityWindup > 0.0f || m.bossSummonWindup > 0.0f) {
                     // На замахе страж стоит: приём должен читаться, а не ехать на
                     // игрока. Иначе телеграф бесполезен — удар приходит из-под ног.
+                    // То же для вызова свиты: круг на полу должен оставаться на месте.
                     moveX = 0.0f; moveY = 0.0f;
                     closeSpeedMul = 0.0f;
                 } else if (dist < minD) {
@@ -5310,7 +5385,7 @@ struct Game {
                 // между кадрами таймер успевал дойти до нуля в тот же кадр, когда
                 // моб только начал отходить (на стенде — 1 выстрел в упор на 2281).
                 m.shootTimer = std::max(m.shootTimer, 0.2f);
-            } else if (m.isBoss && (m.abilityWindup > 0.0f || [&] {
+            } else if (m.isBoss && (m.abilityWindup > 0.0f || m.bossSummonWindup > 0.0f || [&] {
                            // Стреляет страж только с дистанции натиска и дальше.
                            // Ближе — залп приходит из-под силуэта, читать нечего.
                            float minD = 0.0f, maxD = 0.0f;
@@ -5443,7 +5518,33 @@ struct Game {
         if (pendingSummons > 0) {
             int count = pendingSummons;
             pendingSummons = 0;
-            for (int n = 0; n < count; ++n) spawnMonster(pendingSummonType, n == 0, false);
+            // Свита поднимается из круга вокруг хозяина, а не приходит из-за края:
+            // игрок видит, откуда сейчас полезут, и не ловит моба из пустоты.
+            for (int n = 0; n < count; ++n) {
+                const float spread = 0.62f;
+                const float a = pendingSummonAngle + (n - (count - 1) * 0.5f) * spread;
+                const float radius = 152.0f + 16.0f * (n % 2);
+                const size_t before = monsters.size();
+                spawnMonster(pendingSummonType, pendingSummonElite > 0 && n == 0, false);
+                if (monsters.size() == before) continue;   // мира не хватило — не трогаем чужого моба
+                Monster& r = monsters.back();
+                r.isRetinue = true;
+                // Свита стража — не рядовая волна: иначе её сносит первый же залп
+                // (на стенде при пределе 3–5 живых было в среднем 0,6–2,2), и предел
+                // работал только на бумаге. Живучесть ×1,5 держит отряд на арене
+                // 3–5 с, а урон игрока в свиту в замере не выходит за треть для
+                // обычной волны (элита считается отдельно).
+                r.maxHp *= 1.5f;
+                r.hp = r.maxHp;
+                r.damage *= 1.12f;
+                r.speed *= 0.94f;
+                r.x = pendingSummonX + cosf(a) * radius;
+                r.y = pendingSummonY + sinf(a) * radius;
+                clampWorldPointToPlayfield(r.x, r.y, 70.0f);
+                spawnParticles(r.x, r.y, 14, 0xFFE8D8FF, 120.0f, 3, true);
+                addShockwave(r.x, r.y, 46.0f, 0xFFE8D8FF, 0.30f);
+            }
+            pendingSummonElite = 0;
         }
         bool bossMusic = bossWarningTimer > 0.0f;
         for (const Monster& m : monsters) if (m.isBoss && m.hp > 0.0f) { bossMusic = true; break; }
@@ -6166,6 +6267,32 @@ struct Game {
                     r.drawCircleRing(tx, ty, rad, 1, tellColor, 110, true);
                 }
             }
+            if (m.isBoss && m.bossSummonWindup > 0.0f) {
+                // Телеграф вызова свиты. Круг пунктирный и медленно вращается: сплошное
+                // кольцо уже занято ударом (у Моргара это тот же круг радиусом 150–190),
+                // и два одинаковых знака читались бы как один приём.
+                static const uint32_t summonPalette[6] = {0xFFFFC64A, 0xFF70E85F, 0xFFFF4E78, 0xFFFF7948, 0xFF62D8F0, 0xFFB6E8F4};
+                const uint32_t sumColor = summonPalette[m.bossType % 6];
+                const float prog = std::max(0.0f, std::min(1.0f, 1.0f - m.bossSummonWindup / 0.8f));
+                const int ringR = 152 + (int)(16.0f * prog);
+                const float spin = globalTime * 0.55f;
+                r.fillCircle(sx, sy, ringR, sumColor, 12 + (int)(10.0f * prog));
+                for (int seg = 0; seg < 24; seg += 3) {
+                    const float a = spin + seg * 6.2831853f / 24.0f;
+                    const int px = sx + (int)(cosf(a) * ringR), py = sy + (int)(sinf(a) * ringR);
+                    r.fillCircle(px, py, 2 + (int)(1.0f * prog), sumColor, 140 + (int)(90.0f * prog));
+                }
+                // Четыре прорези со стороны, дальней от героя: из них и поднимется свита.
+                const float baseAngle = atan2f(m.y - playerY, m.x - playerX);
+                for (int k = 0; k < 4; ++k) {
+                    const float a = baseAngle + (k - 1.5f) * 0.62f;
+                    const int px = sx + (int)(cosf(a) * ringR), py = sy + (int)(sinf(a) * ringR);
+                    const int rise = (int)(14.0f * prog);
+                    r.addGlow(px, py - rise, 11, sumColor, 80 + (int)(70.0f * prog));
+                    r.fillCircle(px, py - rise, 3 + (int)(2.0f * prog), sumColor, 150 + (int)(90.0f * prog));
+                    r.drawLine(px, py + 10, px, py - 4 - rise, sumColor, 2, 120 + (int)(90.0f * prog), true);
+                }
+            }
             if (m.isBoss) {
                 if (m.phaseInvulnTimer > 0.0f) {
                     const float lockPulse = 0.5f + 0.5f * sinf(globalTime * 36.0f + m.animOffset);
@@ -6206,7 +6333,8 @@ struct Game {
                     const float bdx = m.x - playerX, bdy = m.y - playerY;
                     const float bdist = sqrtf(bdx * bdx + bdy * bdy);
                     const char* stateWord = "ДЕРЖИТ";
-                    if (m.abilityWindup > 0.0f) stateWord = "ЗАМАХ";
+                    if (m.bossSummonWindup > 0.0f) stateWord = "ВЫЗОВ";
+                    else if (m.abilityWindup > 0.0f) stateWord = "ЗАМАХ";
                     else if (m.bossOpenTimer > 0.0f) stateWord = "ОТКРЫТ";
                     else if (m.bossPressTimer > 0.0f) stateWord = "НАТИСК";
                     else if (bdist < minD) stateWord = "ОТХОДИТ";
@@ -6631,9 +6759,11 @@ struct Game {
             else if (bdist < minD) stateWord = "ОТХОДИТ";
             else if (bdist > maxD) stateWord = "СБЛИЖАЕТСЯ";
             static const char* const phaseMarks[3] = {"I", "II", "III"};
-            snprintf(line, sizeof(line), "%s • ФАЗА %s • %s %d PX • ПРИЁМ %.1f С",
+            snprintf(line, sizeof(line), "%s • ФАЗА %s • %s %d PX • ПРИЁМ %.1f • СВИТА %d/%d",
                      "СТРАЖ", phaseMarks[std::max(0, std::min(2, debugBoss->bossPhase - 1))],
-                     stateWord, (int)bdist, std::max(0.0f, debugBoss->abilityTimer));
+                     stateWord, (int)bdist, std::max(0.0f, debugBoss->abilityTimer),
+                     countBossRetinue(),
+                     bossRetinueCap(debugBoss->bossType, debugBoss->bossPhase, debugBoss->bossReinforced));
             put(16, "СТРАЖ", line, 0xFFFFC878);
         }
         const int msgRow = 16 + (hasBossRow ? 1 : 0);
@@ -10069,7 +10199,8 @@ struct Game {
         r.fillGradientV(panelX, panelY, panelW, panelH, 0xFF211637, 0xFF100B1E, 250);
         r.drawRoundedRect(panelX, panelY, panelW, panelH, 16, 0xFFFFD058, 3);
         const std::string chronicleTitle = std::string("ХРОНИКА ОБНОВЛЕНИЙ • 2.2–") + GAME_VERSION;
-        r.drawTextCentered(FONT_LARGE, SCREEN_W / 2, panelY + 20, chronicleTitle.c_str(), 0xFFFFE068);
+        const BakedFont& titleFont = r.textWidth(FONT_LARGE, chronicleTitle.c_str()) > panelW - 16 ? FONT_MED : FONT_LARGE;
+        r.drawTextCentered(titleFont, SCREEN_W / 2, panelY + 20, chronicleTitle.c_str(), 0xFFFFE068);
                 // Chronicle: one entry per release, newest last. Arrays are unsized on purpose:
         // a version without a note is a compile error instead of an empty page.
                 // Chronicle: one entry per release, newest last. Arrays are unsized on purpose:
@@ -10161,6 +10292,7 @@ struct Game {
             "2.10.37 • РАЗУМНЫЕ МОБЫ БЛИЖНЕГО БОЯ: ЗАМАХ, РЫВОК, КРУГ",
             "2.10.38 • ИИ ВИДНО И ПРОВЕРЯЕМО: СТЕНД, МЕТКИ, ФЛАНГ",
             "2.10.39 • СТРАЖИ ДЕРЖАТ ДИСТАНЦИЮ: КОРИДОР, НАТИСК, ОКНО ПОСЛЕ ПРИЁМА",
+            "2.10.40 • СВИТА СТРАЖА: ПРЕДЕЛ, ЗАМАХ, СМЕРТЬ ВМЕСТЕ С ХОЗЯИНОМ",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -10295,7 +10427,8 @@ struct Game {
             "• Экран кампании считает раскладку от размера окна, а не от жёстких 1280x720: высота карты, шаг ряда, ширина досье и кнопки выводятся из размеров экрана.\n• Досье встаёт сбоку на широком окне (от 960 px) и на низком (900x520), а под картой — в портрете и в маленьком окне, где ширина дороже высоты.\n• Шаг ряда маршрута считается от высоты: на 1080p вся кампания видна целиком без прокрутки, в высоком портрете ряды расходятся до 64 px, в маленьком окне ужимаются до 40.\n• Если маршрут короче окна, он прижат к низу, но не вплотную: под актом I остаётся четверть запаса.\n• Полоса пути и печати подстраиваются под ширину: в окне уже 820 px плашка «ПЕЧАТИ СЛОМАНЫ» уступает место самим печатям, клетки дел и ромбы развилок сжимаются, «НОЧЬ N» прячется, если не влезает.\n• Сводка дела в досье больше не теряет имя стража: если в общую строку оно не влезает, ему отдаётся отдельная строка над «ЦЕЛЬю».\n• Цель в узкой колонке переносится на две строки — коробка стала выше, текст больше не вылезает за рамку.\n• Одна строка из середины брифинга больше не рисуется: если в досье влезает меньше двух строк, текст не показывается вовсе — обрыв читался как ошибка.\n• Иллюстрация дела режется по своей рамке: на низкой карточке луна и страж больше не вылезают на карту. Иллюстрация включается только там, где под неё есть место (досье от 300 px).\n• Проверено на 1920x1080, 1600x900, 1280x720, 1024x600, 900x700, 900x520, 800x600, 720x480, 1080x1920 и 720x1280.",
             "• Разумные мобы (1% обычных врагов, метка «!») раньше были умными только на дистанции: упреждение, увёртка от снаряда, выстрел с 700 px. В упор все три тактики превращались в обычного моба — лезли в контакт и давили телом. Теперь у каждой тактики свой приём вблизи.\n• Стрелок держит зазор 168 px и пятится по диагонали; если его прижали ближе 104 px, он не стреляет в упор, а выскальзывает вбок рывком 1.5× на треть секунды (перезарядка 1.1 с) — залп без времени на реакцию был не умным боем, а нечестным.\n• Перехватчик отходит на полшага, замахивается 0.26 с и бьёт рывком 2.8× по прямой: линия удара и кольцо видны заранее, из рывка уходят шагом в сторону. Перезарядка 1.7 с.\n• Увёртливый кружит вокруг героя на кольце ~150 px, меняет сторону раз в 1.6 с и раз в 3 с ныряет к герою, чтобы не быть мебелью. Увёртка от снаряда осталась и по-прежнему важнее всего.\n• У каждого приёма есть телеграф: линия замаха со вспышкой, след рывка, дуга выскальзывания, кольцо нырка.\n• Попутно починен порог движения врага: тактика отдаёт нормализованное направление, и при float-округлении его длина бывала 0.9999999 — враг с «единичным» вектором не двигался вообще, поэтому рывок перехватчика не срабатывал.\n• Мерил симуляцией на 14 секунд: раньше все три тактики стояли в контакте 10,7–12,5 секунд из 14. Теперь стрелок не входит в контакт вообще (167–208 px, 7 с на кольце), перехватчик бьёт рывком 8 раз, увёртливый касается героя 0,4–0,6 с с пятью нырками. Разбор — design/smart_mobs_close.md, кадры приёмов — design/smart_mobs_close.png.",
             "• ИИ игры можно было проверить только глазами: разумный моб выпадал в 1 % спавнов, то есть раз в две минуты, а нужная тактика — раз в шесть. Теперь в игре есть стенд: F9 → 14 ставит культиста, скелета и бегуна на кольца 150/190/230 px вокруг героя, F9 → 15 включает метки решений. Секретных кодов не нужно — это те же пункты дебаг-меню, что и остальные.\n• Над каждым разумным мобом видно, что он решил: «ВЫСКОЛЬЗНУЛ / ДЕРЖИТ ЗАЗОР / СБЛИЖАЕТСЯ», «РЫВОК / ЗАМАХ / ПЕРЕХВАТ», «НЫРОК / КРУГ» и дистанция до героя. Отрезок показывает фактический шаг, а не направление на героя.\n• В F3 появилась строка «ИИ»: сколько сейчас на арене разумных по тактикам, сколько элит и стрелков.\n• Перехватчик больше не приезжает в героя и не стоит в нём: после рывка он 0.55 с отходит, а вплотную без готового рывка идёт по касательной. Замах снова что-то решает: время в контакте 39–44 % → 7 %.\n• Три разумных моба больше не ходят одной стеной: сторона фланга берётся от чётности номера, половина стаи обходит слева, половина справа.\n• Стрелок не стреляет с 132 px и ближе, даже если решил отходить в этом же кадре: на замере было 1 попадание в упор на 2281 выстрел, стало 0.\n• Шанс разумного поднят с 1 % до 2 % на тактику: около 6 % спавнов вместо 3 %, разумный моб встречается не раз в две минуты, а примерно раз в десять секунд.\n• В tools/ лежат два стенда: ai_probe.cpp — бой без окна (доли времени в контакте, число приёмов, выстрелы в упор, мс на кадр) и advisor_probe.cpp — шесть проверок советника прокачки и таблицы сложности героев, с кодом возврата 1 при провале.\n• Меню отладки на 800×600 больше не обрезало последнюю строку: шаг строки считается от высоты окна.\n• Разбор с цифрами и честным списком слабых мест — design/ai_testing.md, кадры — design/ai_stand.png и design/ai_debug_menu.png.",
-            "• Стражи перестали стоять в герое: замер на стенде показывал 66–96 % времени боя в контакте, среднюю дистанцию 11–76 px и 113–137 попаданий по игроку в минуту. Теперь у каждого стража свой коридор дистанции, и он его соблюдает.\n• Коридоры разные, потому что стражи разные: Моргар давит вплотную (78–112 px, он бьёт волной вокруг себя), Малакор бросает склянки с 190–250, Кардинал разбегается для рывка с 250–330, Азарот кружит кольцо с 150–200, Протоколист пишет строку с 230–300, Двойник меняется местами с 180–240. К третьей фазе каждый подходит на 16 px ближе (оба края коридора сдвигаются на 8 px за фазу).\n• У боя появился ритм: после приёма страж на секунду замирает — это окно наказания, удар должен быть наказуем; затем 1–3 секунды идёт на игрока (окно натиска) и только потом возвращается в коридор. Без окон Кардинал с рывком и Двойник с обменом местами уходили из-под каждого залпа, и бой не заканчивался даже за 90 секунд.\n• Во время замаха способности страж больше не стреляет и не двигается: раньше в 1–4 % кадров замаха одновременно шёл залп, и телеграф приёма тонул в снарядах. Теперь — 0 %.\n• Залп из-под силуэта убран: страж стреляет только с дистанции натиска и дальше. Выстрелов в упор было 30–59 в минуту, стало 0 (у Моргара остались 23–33 — его коридор сам по себе ближе 90 px).\n• F3 показывает строку «СТРАЖ»: фаза, решение (ЗАМАХ, ОТКРЫТ, НАТИСК, ДЕРЖИТ, ОТХОДИТ, СБЛИЖАЕТСЯ), дистанция и время до приёма. F9 → 15 рисует ту же метку над фигурой.\n• F9 → 16 призывает стража сразу в третьей фазе (осталось 24 % здоровья) — до этого ярость приходилось выбивать вручную, а именно в ней стражи ведут себя иначе.\n• Стенд tools/boss_probe.cpp меряет шесть стражей в трёх фазах: время в контакте, дистанцию, залпы и приёмы (и сколько из них вплотную), одновременность замаха с залпом, попадания по герою, кадры вне видимости, а также время до убийства обычным билдом.\n• Для игрока, который идёт на стража, бой удлинился на 10–30 % (Кардинал 23.5 → 29.4 с, Двойник 34.1 → 44.8 с). Для стоящего на месте — в разы: стража теперь нужно догонять, и это осознанное следствие правки.\n• Разбор с цифрами и списком слабых мест — design/boss_ai.md, кадр — design/boss_ai.png."
+            "• Стражи перестали стоять в герое: замер на стенде показывал 66–96 % времени боя в контакте, среднюю дистанцию 11–76 px и 113–137 попаданий по игроку в минуту. Теперь у каждого стража свой коридор дистанции, и он его соблюдает.\n• Коридоры разные, потому что стражи разные: Моргар давит вплотную (78–112 px, он бьёт волной вокруг себя), Малакор бросает склянки с 190–250, Кардинал разбегается для рывка с 250–330, Азарот кружит кольцо с 150–200, Протоколист пишет строку с 230–300, Двойник меняется местами с 180–240. К третьей фазе каждый подходит на 16 px ближе (оба края коридора сдвигаются на 8 px за фазу).\n• У боя появился ритм: после приёма страж на секунду замирает — это окно наказания, удар должен быть наказуем; затем 1–3 секунды идёт на игрока (окно натиска) и только потом возвращается в коридор. Без окон Кардинал с рывком и Двойник с обменом местами уходили из-под каждого залпа, и бой не заканчивался даже за 90 секунд.\n• Во время замаха способности страж больше не стреляет и не двигается: раньше в 1–4 % кадров замаха одновременно шёл залп, и телеграф приёма тонул в снарядах. Теперь — 0 %.\n• Залп из-под силуэта убран: страж стреляет только с дистанции натиска и дальше. Выстрелов в упор было 30–59 в минуту, стало 0 (у Моргара остались 23–33 — его коридор сам по себе ближе 90 px).\n• F3 показывает строку «СТРАЖ»: фаза, решение (ЗАМАХ, ОТКРЫТ, НАТИСК, ДЕРЖИТ, ОТХОДИТ, СБЛИЖАЕТСЯ), дистанция и время до приёма. F9 → 15 рисует ту же метку над фигурой.\n• F9 → 16 призывает стража сразу в третьей фазе (осталось 24 % здоровья) — до этого ярость приходилось выбивать вручную, а именно в ней стражи ведут себя иначе.\n• Стенд tools/boss_probe.cpp меряет шесть стражей в трёх фазах: время в контакте, дистанцию, залпы и приёмы (и сколько из них вплотную), одновременность замаха с залпом, попадания по герою, кадры вне видимости, а также время до убийства обычным билдом.\n• Для игрока, который идёт на стража, бой удлинился на 10–30 % (Кардинал 23.5 → 29.4 с, Двойник 34.1 → 44.8 с). Для стоящего на месте — в разы: стража теперь нужно догонять, и это осознанное следствие правки.\n• Разбор с цифрами и списком слабых мест — design/boss_ai.md, кадр — design/boss_ai.png.",
+            "• У свиты стража не было предела: за 30 секунд одной фазы стенд насчитывал 3–11 мобов одновременно, а после смерти стража на арене оставалось 0–5 его призванных — добивать их было некому, награда за них уже не падала.\n• Теперь предел есть и зависит от фазы: 3 моба в первой, 4 во второй, 5 в третьей, плюс один, если страж вернулся на арену. Волна — 2/3/4 моба и только на свободные места, поэтому призыв не может обогнать предел: ни в одном из 18 прогонов живых не было больше предела.\n• Свита больше не приходит из-за края экрана. Страж держит замах 0,8 с: на полу пунктирный круг радиусом 152–168 px и четыре прорези со стороны, дальней от героя, — из них и поднимаются призванные. Всё это время свиты ещё нет, а страж стоит и не стреляет, чтобы телеграф не тонул в снарядах. Круг пунктирный и вращается, потому что сплошное кольцо уже занято ударом.\n• Призванные встают полукругом с дальней от героя стороны, в 152–168 px от хозяина; точка прижимается к границам арены, поэтому моб не появляется в стене.\n• Свита стала живучее: HP ×1.5, урон ×1.12, скорость ×0.94. Без этого её сносило первым же залпом — живых было в среднем 0,6–2,2 при пределе 3–5, то есть предел существовал только на бумаге. Множитель 1.9 пробовал и откатил: свита забирала до 45 % урона игрока.\n• С третьей фазы в волне идёт элита: в ярости свита выставляет тяжёлого.\n• Смерть хозяина гасит его свиту (если на арене нет второго стража): раньше после победы оставались бесхозные мобы, за которых уже ничего не падало.\n• Вызов откладывается, если страж в этот момент бьёт приёмом (0,6 с) или предел занят (2,6 с): иначе место павшего занимал новый моб через полторы секунды и бой превращался в конвейер. Попутно починено: отсрочка перебивала только что выставленный интервал, и вызов прилипал к концу каждого приёма — 10–18 вызовов в минуту вместо задуманных 8–14.\n• В F3-строке «СТРАЖ» видно «СВИТА 2/5» — сколько сейчас живых и каков предел в этой фазе.\n• Замеры до/после (30 с на фазу, волны выключены, здоровье стража прибито, зерно rand фиксировано): живых в среднем 1,7–5,7 → 0,5–1,8, пик 3–11 → 2–4 при пределе 3/4/5, элит в волне 4–8 → 0–7, урон игрока в свиту 6–24 % → 1–34 %, свиты после смерти стража 0–5 → 0.\n• Разбор с цифрами и честным списком слабых мест — design/boss_retinue.md, кадр замаха — design/boss_retinue.png."
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
@@ -10312,7 +10445,11 @@ struct Game {
         const int btnH = 42;
         const int btnY = cby - btnH - 12;
         const int pageHintY = btnY - FONT_SMALL.lineHeight - 6;
-        r.drawTextCentered(FONT_MED, SCREEN_W / 2, versionY, versions[patchNotesPage], 0xFFFFC75A);
+        // Длинный заголовок версии на 800 px уходил за край панели: если строка
+        // шире панели, она рисуется мелким шрифтом, а не обрезается.
+        const char* versionLine = versions[patchNotesPage];
+        const BakedFont& versionFont = r.textWidth(FONT_MED, versionLine) > panelW - 24 ? FONT_SMALL : FONT_MED;
+        r.drawTextCentered(versionFont, SCREEN_W / 2, versionY, versionLine, 0xFFFFC75A);
         const int notesX = compactPatch ? panelX + 18 : panelX + 60;
         const int notesY = versionY + FONT_MED.lineHeight + 16;
         const int notesW = compactPatch ? panelW - 36 : panelW - 120;
