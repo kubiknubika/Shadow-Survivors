@@ -13,6 +13,9 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <mmsystem.h>
+#else
+// Не-Windows (Android): тот же замок, только средствами стандартной библиотеки.
+#include <mutex>
 #endif
 
 enum SfxId {
@@ -96,6 +99,10 @@ struct SoundEngine {
     HANDLE hThread = NULL;
     std::atomic<bool> running{false};
     CRITICAL_SECTION cs;
+#else
+    // Android и любой другой не-Windows хост: звук тянет платформа (AAudio),
+    // а микшер остаётся тем же — значит и замок нужен тот же, только std.
+    std::mutex cs;
 #endif
 
     double musicTime = 0.0;
@@ -737,10 +744,28 @@ struct SoundEngine {
         return mixTransitionScores(oldScore, newScore, blend, musicSequentialHandoff);
     }
 
-    void mixBuffer(int16_t* outBuf, int numSamples) {
+    // Замок звука: критическая секция на Windows, мьютекс на Android.
+    void lockAudio() {
 #ifdef _WIN32
         EnterCriticalSection(&cs);
+#else
+        cs.lock();
 #endif
+    }
+    void unlockAudio() {
+#ifdef _WIN32
+        LeaveCriticalSection(&cs);
+#else
+        cs.unlock();
+#endif
+    }
+
+    // Вход для платформы, у которой свой звуковой выход (AAudio на Android).
+    // Внутри тот же mixBuffer с тем же замком, поэтому микшер не раздваивается.
+    void mixSamples(int16_t* outBuf, int numSamples) { mixBuffer(outBuf, numSamples); }
+
+    void mixBuffer(int16_t* outBuf, int numSamples) {
+        lockAudio();
         const double invSr = 1.0 / 44100.0;
         const bool sfxOn = enabled.load(std::memory_order_relaxed);
         const float hordeSfxGain = musicMode.load(std::memory_order_relaxed) == 1 ? 0.82f : 1.0f;
@@ -811,9 +836,7 @@ struct SoundEngine {
             if (level > 0.94f) mix = copysignf(0.94f + 0.05f * (1.0f - expf(-(level - 0.94f) / 0.05f)), mix);
             outBuf[i] = (int16_t)(mix * 30000.0f);
         }
-#ifdef _WIN32
-        LeaveCriticalSection(&cs);
-#endif
+        unlockAudio();
     }
 
 #ifdef _WIN32
@@ -947,13 +970,9 @@ struct SoundEngine {
             vol *= 0.90f + 0.20f * gainJitter;
         }
 
-#ifdef _WIN32
-        EnterCriticalSection(&cs);
-#endif
+        lockAudio();
         if (sfxSamples[id].empty()) {
-#ifdef _WIN32
-            LeaveCriticalSection(&cs);
-#endif
+            unlockAudio();
             return;
         }
         const uint8_t priority = sfxPriority(id);
@@ -986,9 +1005,7 @@ struct SoundEngine {
                 }
             }
             if (slot < 0) {
-#ifdef _WIN32
-                LeaveCriticalSection(&cs);
-#endif
+                unlockAudio();
                 return;
             }
         }
@@ -1000,8 +1017,6 @@ struct SoundEngine {
         voices[slot].volume = vol;
         voices[slot].id = id;
         voices[slot].priority = priority;
-#ifdef _WIN32
-        LeaveCriticalSection(&cs);
-#endif
+        unlockAudio();
     }
 };

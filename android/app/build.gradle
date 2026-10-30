@@ -1,0 +1,56 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.shadowsurvivors.game'
+    compileSdk 34
+    ndkVersion '26.1.10909125'
+
+    defaultConfig {
+        applicationId 'com.shadowsurvivors.game'
+        minSdk 26            // AAudio появился в API 26
+        targetSdk 34
+        versionCode 3049
+        versionName '2.10.49'
+        ndk {
+            // arm64 — все телефоны последних лет. armeabi-v7a добавьте, если
+            // нужна поддержка старых устройств: кода это не меняет.
+            abiFilters 'arm64-v8a'
+        }
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_static'
+                cppFlags '-std=c++17'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+            jniDebuggable true
+        }
+        release {
+            minifyEnabled false
+            // Подпись: собирайте `assembleRelease` со своим keystore или ставьте
+            // debug-сборку — для игры на своём телефоне этого достаточно.
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+    }
+}
