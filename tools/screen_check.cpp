@@ -6,7 +6,8 @@
 // Соберите его до правки и после — совпали хеши, значит картинка не изменилась
 // ни на пиксель; разошлись — смотрите, где именно.
 //
-//     g++ -O2 -std=c++17 -Isrc tools/screen_check.cpp -o build/screens_new
+//     g++ -O2 -std=c++17 -pthread -Isrc tools/screen_check.cpp -o build/screens_new
+//     build/screens_new 2          # тот же набор, но кадр в две полосы
 //     git stash && g++ -O2 -std=c++17 -Isrc tools/screen_check.cpp -o build/screens_old && git stash pop
 //     build/screens_old > old.txt && build/screens_new > new.txt && diff old.txt new.txt
 //
@@ -14,6 +15,8 @@
 // разойдётся текст (версия в заголовке), а не отрисовка.
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
+#include <algorithm>
 #include "renderer.h"
 #include "game.h"
 
@@ -23,7 +26,10 @@ static uint32_t checksum(const Renderer& r) {
     return h;
 }
 
-int main() {
+int main(int argc, char** argv) {
+    // Второй аргумент — число потоков: с ним тот же стенд проверяет, что
+    // полосный кадр совпадает с однопоточным пиксель в пиксель.
+    const int threads = argc > 1 ? std::max(1, atoi(argv[1])) : 1;
     struct Case { const char* name; int state; };
     const Case cases[] = {
         {"меню", STATE_MENU},
@@ -44,6 +50,7 @@ int main() {
         g.gameMode = MODE_ENDLESS;
         g.runTime = 240.0f;
         for (int i = 0; i < 5; ++i) g.itemLevels[i] = 3;
+        g.renderThreads = threads;
         g.state = (GameState)c.state;
         if (c.state == STATE_PLAYING || c.state == STATE_LEVELUP || c.state == STATE_CHEST || c.state == STATE_PAUSED) {
             for (int i = 0; i < 60; ++i) g.spawnMonster(i % 8, i % 9 == 0, false);

@@ -19,7 +19,8 @@
 //     build/perf_bench                       # 600 кадров, 1280×720
 //     build/perf_bench 1200                  # длиннее (стабильнее среднее)
 //     build/perf_bench 600 720x1280          # портрет
-//     build/perf_bench 600 1280x720 base     # сравнение: src/renderer.h из HEAD
+//     build/perf_bench 600 1280x720 2        # кадр в две полосы
+//     build/perf_bench 600 1280x720 1 loot   # сцена с тысячами самоцветов
 //
 // Хеш последних 20 кадров печатается специально: если после оптимизации хеш
 // совпал, картинка не изменилась ни на пиксель. Если разошёлся — визуальная
@@ -55,6 +56,13 @@ int main(int argc, char** argv) {
         ++argi;
     }
     if (argc > argi && strchr(argv[argi], 'x')) parseSize(argv[argi], w, h);
+    int threads = 1;
+    if (argc > argi + 1) threads = atoi(argv[argi + 1]);
+    if (threads < 1) threads = 1;
+    // Четвёртый аргумент «лут» добавляет самую тяжёлую сцену: герой стоит на
+    // месте 5 минут, и на полу накапливаются тысячи самоцветов. Именно на ней
+    // видно, что дорого стоит не толпа, а добыча.
+    const bool lootScene = argc > argi + 2 && strcmp(argv[argi + 2], "loot") == 0;
 
     SCREEN_W = w; SCREEN_H = h;
     Renderer r;
@@ -65,6 +73,7 @@ int main(int argc, char** argv) {
     g.state = STATE_PLAYING;
     g.gameMode = MODE_ENDLESS;
     g.cheatGodMode = true;
+    g.renderThreads = threads;
     g.runTime = 480.0f;
     for (int i = 0; i < 7; ++i) g.itemLevels[i] = 6;
     g.itemLevels[0] = 9;          // клинки на максимуме
@@ -74,6 +83,13 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 160; ++i) g.spawnMonster(i % 10, i % 9 == 0, false);
 
     const float dt = 1.0f / 60.0f;
+    if (lootScene) {
+        for (int i = 0; i < 60 * 300; ++i) {
+            if (g.state == STATE_LEVELUP) g.state = STATE_PLAYING;
+            g.update(dt);
+        }
+        printf("сцена с лутом: самоцветов на полу %d\n", (int)g.pickups.size());
+    }
     double upd = 0.0, ren = 0.0;
     uint32_t hash = 2166136261u;
     for (int f = 0; f < frames; ++f) {
@@ -95,8 +111,8 @@ int main(int argc, char** argv) {
     }
 
     const double updateMs = upd / frames, renderMs = ren / frames, frameMs = updateMs + renderMs;
-    printf("%dx%d, %d кадров: update %.2f мс, render %.2f мс, кадр %.2f мс — %.0f fps\n",
-           w, h, frames, updateMs, renderMs, frameMs, frameMs > 0.0 ? 1000.0 / frameMs : 0.0);
+    printf("%dx%d, %d кадров, потоков %d: update %.2f мс, render %.2f мс, кадр %.2f мс — %.0f fps\n",
+           w, h, frames, threads, updateMs, renderMs, frameMs, frameMs > 0.0 ? 1000.0 / frameMs : 0.0);
     printf("сущностей в конце: мобов %d, снарядов %d, частиц %d; хеш кадра %08x\n",
            (int)g.monsters.size(), (int)g.projectiles.size(), (int)g.particles.size(), hash);
     if (frameMs > 16.7) {

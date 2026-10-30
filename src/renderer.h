@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <mutex>
+#include <atomic>
 // SIMD-ветки ниже нужны для трёх самых горячих операций кадра (свечение,
 // полупрозрачная заливка, добавление света). На x86-64 SSE2 есть всегда; на
 // другой платформе или при сборке с -DRENDERER_NO_SIMD остаётся тот же
@@ -118,10 +120,25 @@ struct Renderer {
 
     int width = 0;
     int height = 0;
+    // Полоса кадра: этот экземпляр имеет право писать только строки
+    // [bandY0, bandY1). У обычного экземпляра это весь экран, поэтому проверка
+    // не стоит ничего; у полосы из пула потоков — это и есть разделение работы.
+    int bandY0 = 0;
+    int bandY1 = SCREEN_H;
+    // Признак «это полоса»: у обычного экземпляра проверка полосы выключена
+    // совсем, иначе однопоточный кадр платит за распараллеливание в каждом
+    // пикселе.
+    bool bandActive = false;
+    bool ownsPixels = true;   // полосы смотрят в буфер главного экземпляра
+    bool explicitBand = false; // полоса задана извне (pixels не наш)
     std::vector<uint8_t> vignetteAlpha;   // запечённая карта затемнения
     int vignetteW = -1, vignetteH = -1;
     // Снимок области кадра до отрисовки фигуры и маска её пикселей: по ним
     // считается объём (свет сверху-слева, тень с обратной стороны, AO у земли).
+    // Карта колонок для растянутых спрайтов: индекс пикселя экрана → индекс
+    // пикселя атласа. Раньше это было деление на каждый пиксель — самое дорогое
+    // в кадре место, потому что спрайтов сотни и тысяч.
+    std::vector<int32_t> columnMap;
     std::vector<uint32_t> figureScratch;
     std::vector<uint16_t> figureColor;   // упакованный цвет детали (5 бит на канал)
     std::vector<uint8_t> figureMask;
@@ -132,10 +149,40 @@ struct Renderer {
         resize(SCREEN_W, SCREEN_H);
     }
     ~Renderer() {
-        delete[] pixels;
+        if (ownsPixels) delete[] pixels;
+        pixels = nullptr;
     }
 
+    // Экземпляр-полоса: тот же кадр, но право записи ограничено строками
+    // [y0, y1). Нужен, чтобы несколько потоков рисовали один кадр, не
+    // перекрываясь: пиксель принадлежит ровно одной полосе, поэтому картинка
+    // не зависит от числа потоков. Буфер не освобождается.
+    void initBand(uint32_t* buffer, int w, int h, int y0, int y1, int iconStyle) {
+        if (ownsPixels) delete[] pixels;
+        pixels = buffer;
+        width = w;
+        height = h;
+        ownsPixels = false;
+        explicitBand = true;
+        bandY0 = std::max(0, std::min(h, y0));
+        bandY1 = std::max(bandY0, std::min(h, y1));
+        bandActive = true;
+        skillIconStyle = iconStyle;
+        clipActive = false;
+        clipX0 = 0; clipY0 = bandY0; clipX1 = SCREEN_W; clipY1 = bandY1;
+        vignetteW = -1;
+        vignetteH = -1;
+    }
+
+    // Обрезка строк по полосе [y0, y1) — полуинтервал.
+    inline void clampBandRows(int& y0, int& y1) const {
+        if (y0 < bandY0) y0 = bandY0;
+        if (y1 > bandY1) y1 = bandY1;
+    }
+    inline bool inBand(int y) const { return !bandActive || (y >= bandY0 && y < bandY1); }
+
     void resize(int newWidth, int newHeight) {
+        if (explicitBand) return;
         newWidth = std::max(1, newWidth);
         newHeight = std::max(1, newHeight);
         if (pixels && width == newWidth && height == newHeight) return;
@@ -152,7 +199,7 @@ struct Renderer {
     }
 
     inline void putPixel(int x, int y, uint32_t col) {
-        if ((unsigned)x < (unsigned)SCREEN_W && (unsigned)y < (unsigned)SCREEN_H) {
+        if ((unsigned)x < (unsigned)SCREEN_W && (unsigned)y < (unsigned)SCREEN_H && inBand(y)) {
             pixels[y * SCREEN_W + x] = col;
         }
     }
@@ -171,6 +218,7 @@ struct Renderer {
 
     inline void blendPixel(int x, int y, uint32_t col, int alpha) {
         if ((unsigned)x >= (unsigned)SCREEN_W || (unsigned)y >= (unsigned)SCREEN_H) return;
+        if (bandActive && (y < bandY0 || y >= bandY1)) return;
         // Отсечение на уровне пикселя: линии и круги идут через blendPixel, и
         // без этой проверки скроллящаяся карта рисовала маршрут поверх кнопок.
         if (clipActive && ((unsigned)(x - clipX0) >= (unsigned)(clipX1 - clipX0) ||
@@ -192,6 +240,7 @@ struct Renderer {
 
     inline void addPixel(int x, int y, uint32_t col, int intensity) {
         if ((unsigned)x >= (unsigned)SCREEN_W || (unsigned)y >= (unsigned)SCREEN_H || intensity <= 0) return;
+        if (bandActive && (y < bandY0 || y >= bandY1)) return;
         if (clipActive && ((unsigned)(x - clipX0) >= (unsigned)(clipX1 - clipX0) ||
                            (unsigned)(y - clipY0) >= (unsigned)(clipY1 - clipY0))) return;
         uint32_t dst = pixels[y * SCREEN_W + x];
@@ -206,6 +255,7 @@ struct Renderer {
 
     inline void blendSpan(int y, int x0, int x1, uint32_t col, int alpha) {
         if ((unsigned)y >= (unsigned)SCREEN_H || alpha <= 0 || x0 > x1) return;
+        if (bandActive && (y < bandY0 || y >= bandY1)) return;
         x0 = std::max(0, x0); x1 = std::min(SCREEN_W - 1, x1);
         // Область отсечения уважают и заливки: раньше setClip действовал только
         // на текст и контуры, а круги, линии и скруглённые панели лезли за
@@ -264,12 +314,20 @@ struct Renderer {
             x0 = std::max(x0, clipX0); x1 = std::min(x1, clipX1);
             y0 = std::max(y0, clipY0); y1 = std::min(y1, clipY1);
         }
+        clampBandRows(y0, y1);
         if (x0 >= x1 || y0 >= y1 || alpha <= 0) return;
         // Полуразмерная заливка идёт через blendSpan: там те же вычисления, но
         // без проверки границ и клипа на каждый пиксель. Раньше blendPixel
         // вызывался построчно-постолбцово и тратил на это больше, чем на саму
         // арифметику цвета.
         if (alpha >= 255) {
+            if (x1 - x0 == 1) {
+                // Вертикальная полоска в один пиксель: у плит пола это рамка
+                // шва. Раньше на каждую строку шёл отдельный вызов заливки,
+                // то есть 62 вызова на плитку вместо одного цикла.
+                for (int py = y0; py < y1; ++py) pixels[py * SCREEN_W + x0] = col;
+                return;
+            }
             for (int py = y0; py < y1; ++py) {
                 uint32_t* row = pixels + py * SCREEN_W;
                 std::fill(row + x0, row + x1, col);
@@ -287,6 +345,7 @@ struct Renderer {
             x0 = std::max(x0, clipX0); x1 = std::min(x1, clipX1);
             y0 = std::max(y0, clipY0); y1 = std::min(y1, clipY1);
         }
+        clampBandRows(y0, y1);
         for (int py = y0; py < y1; ++py) {
             float t = (float)(py - y) / (float)h;
             uint32_t c = lerpColor(topCol, botCol, t);
@@ -310,8 +369,11 @@ struct Renderer {
         if (rad <= 0) { fillRect(x, y, w, h, col, alpha); return; }
         if (rad * 2 > w) rad = w / 2;
         if (rad * 2 > h) rad = h / 2;
-        const int x0 = std::max(0, x), y0 = std::max(0, y);
-        const int x1 = std::min(SCREEN_W, x + w), y1 = std::min(SCREEN_H, y + h);
+        const int x0 = std::max(0, x);
+        int y0 = std::max(0, y);
+        const int x1 = std::min(SCREEN_W, x + w);
+        int y1 = std::min(SCREEN_H, y + h);
+        clampBandRows(y0, y1);
         if (x0 >= x1 || y0 >= y1 || alpha <= 0) return;
         const int r2 = rad * rad;
         // Скругление — это отступ по краям строки, а не отдельная проверка на
@@ -336,6 +398,7 @@ struct Renderer {
         if (rad <= 0) { drawRect(x, y, w, h, col, thickness, alpha); return; }
         int x0 = std::max(0, x), y0 = std::max(0, y);
         int x1 = std::min(SCREEN_W, x + w), y1 = std::min(SCREEN_H, y + h);
+        clampBandRows(y0, y1);
         int rOuter2 = rad * rad;
         int innerRad = std::max(0, rad - thickness);
         int rInner2 = innerRad * innerRad;
@@ -364,7 +427,8 @@ struct Renderer {
     void fillCircle(int cx, int cy, int r, uint32_t col, int alpha = 255) {
         if (r <= 0 || alpha <= 0) return;
         const int r2 = r * r;
-        const int y0 = std::max(0, cy - r), y1 = std::min(SCREEN_H - 1, cy + r);
+        const int y0 = std::max(std::max(0, cy - r), bandY0);
+        const int y1 = std::min(std::min(SCREEN_H - 1, cy + r), bandY1 - 1);
         for (int py = y0; py <= y1; ++py) {
             const int dy = py - cy;
             const int rem = r2 - dy * dy;
@@ -381,24 +445,124 @@ struct Renderer {
         static std::vector<std::vector<uint32_t>> kernels(513);
         std::vector<uint32_t>& kernel = kernels[radius];
         if (kernel.empty()) {
-            const int r2 = radius * radius;
-            kernel.resize((size_t)r2);
-            for (int d2 = 0; d2 < r2; ++d2) {
-                const int falloff = 256 - (d2 * 256) / r2;
-                kernel[d2] = (uint32_t)(falloff * falloff);
+            // Полосы рисуются потоками, поэтому первое заполнение таблицы идёт
+            // под замком: без него два потока одновременно делали resize одной
+            // и той же таблицы и роняли процесс.
+            static std::mutex buildLock;
+            std::lock_guard<std::mutex> guard(buildLock);
+            if (kernel.empty()) {
+                const int r2 = radius * radius;
+                // Собираем в стороне и подменяем целиком: если заполнять вектор
+                // на месте, другой поток увидит его уже непустым и прочитает
+                // половину таблицы.
+                std::vector<uint32_t> built((size_t)r2);
+                for (int d2 = 0; d2 < r2; ++d2) {
+                    const int falloff = 256 - (d2 * 256) / r2;
+                    built[d2] = (uint32_t)(falloff * falloff);
+                }
+                kernel.swap(built);
             }
         }
         return &kernel;
     }
 
+    // Готовое свечение: та же прибавка к пикселю, что и в addGlow, но посчитанная
+    // один раз на набор (радиус, цвет, яркость). В кадре почти все свечения —
+    // это самоцветы: восемь наборов параметров на тысячи вызовов. Кэш превращает
+    // работу «на каждый пиксель» в сложение байтов с насыщением, которое умеет
+    // одна команда на четыре пикселя.
+    struct GlowSprite {
+        int radius = 0;
+        uint32_t color = 0;
+        int intensity = 0;
+        int side = 0;
+        std::vector<uint16_t> extent;   // половина ширины строки внутри круга
+        std::vector<uint32_t> delta;    // прибавка к пикселю, (2r+1)²
+    };
+
+    // Кэш готового свечения на этот экземпляр: у каждой полосы кадра он свой,
+    // иначе два потока переписывали бы одни и те же слоты.
+    GlowSprite glowSlots[64];
+
+    const GlowSprite* getGlowSprite(int r, uint32_t col, int m) {
+        // Большие радиусы в кэш не берём: они редки, а память считают квадратами.
+        if (r <= 0 || r > 40) return nullptr;
+        const uint32_t key = (uint32_t)r * 2654435761u ^ (col * 2246822519u) ^ ((uint32_t)m * 3266489917u);
+        GlowSprite& g = glowSlots[(key >> 8) & 63];
+        if (g.radius == r && g.color == col && g.intensity == m) return &g;
+        const int side = r * 2 + 1;
+        const int r2 = r * r;
+        const int cr = (col >> 16) & 0xFF, cg = (col >> 8) & 0xFF, cb = col & 0xFF;
+        g.radius = r; g.color = col; g.intensity = m; g.side = side;
+        g.extent.resize((size_t)side);
+        g.delta.resize((size_t)side * side);
+        for (int dy = -r; dy <= r; ++dy) {
+            const int rem = r2 - 1 - dy * dy;
+            const int ext = rem > 0 ? (int)sqrtf((float)rem) : -1;
+            g.extent[(size_t)(dy + r)] = (uint16_t)(ext + 1);   // 0 — строка пустая
+            uint32_t* row = g.delta.data() + (size_t)(dy + r) * side;
+            for (int dx = -ext; dx <= ext; ++dx) {
+                const int d2 = dx * dx + dy * dy;
+                const int falloff = 256 - (d2 * 256) / r2;
+                const int intensity = (m * falloff * falloff) >> 16;
+                row[dx + r] = intensity > 0
+                    ? (((uint32_t)((cr * intensity) >> 8) << 16)
+                     | ((uint32_t)((cg * intensity) >> 8) << 8)
+                     | (uint32_t)((cb * intensity) >> 8))
+                    : 0u;
+            }
+        }
+        return &g;
+    }
+
     void addGlow(int cx, int cy, int r, uint32_t col, int maxIntensity = 180) {
         if (r <= 0 || maxIntensity <= 0) return;
+        // Яркость больше 255 давала выход за таблицу прибавок (256 входов).
+        // Такая яркость и не нужна: свечение уже полностью закрывает канал.
+        if (maxIntensity > 255) maxIntensity = 255;
         // Дешёвый отсев: свечение целиком за кадром. Частицы и снаряды улетают
         // за край постоянно, а до этой проверки для каждой из них считался
         // диапазон строк, корень и границы.
         if (cx + r < 0 || cy + r < 0 || cx - r >= SCREEN_W || cy - r >= SCREEN_H) return;
+        if (const GlowSprite* gs = getGlowSprite(r, col, maxIntensity)) {
+            const int side = gs->side;
+            const int gy0 = std::max(std::max(0, cy - r), bandY0), gy1 = std::min(std::min(SCREEN_H - 1, cy + r), bandY1 - 1);
+            const uint32_t* delta = gs->delta.data();
+            const uint16_t* extent = gs->extent.data();
+            for (int py = gy0; py <= gy1; ++py) {
+                const int ext = (int)extent[py - (cy - r)] - 1;
+                if (ext < 0) continue;
+                int dx = std::max(-ext, -cx);
+                const int dxEnd = std::min(ext, SCREEN_W - 1 - cx);
+                if (dx > dxEnd) continue;
+                uint32_t* dstRow = pixels + py * SCREEN_W + cx;
+                const uint32_t* srcRow = delta + (size_t)(py - (cy - r)) * side + r;
+                int x = dx;
+#if RENDERER_SIMD
+                const __m128i alphaMask = _mm_set1_epi32((int)0xFF000000u);
+                for (; x + 3 <= dxEnd; x += 4) {
+                    const __m128i diff = _mm_loadu_si128((const __m128i*)(srcRow + x));
+                    __m128i* quad = (__m128i*)(dstRow + x);
+                    _mm_storeu_si128(quad, _mm_or_si128(_mm_adds_epu8(_mm_loadu_si128(quad), diff), alphaMask));
+                }
+#endif
+                for (; x <= dxEnd; ++x) {
+                    const uint32_t d = srcRow[x];
+                    if (!d) continue;
+                    uint32_t& dst = dstRow[x];
+                    int rr = ((dst >> 16) & 0xFF) + (int)((d >> 16) & 0xFF);
+                    int gg = ((dst >> 8) & 0xFF) + (int)((d >> 8) & 0xFF);
+                    int bb = (dst & 0xFF) + (int)(d & 0xFF);
+                    if (rr > 255) rr = 255;
+                    if (gg > 255) gg = 255;
+                    if (bb > 255) bb = 255;
+                    dst = 0xFF000000u | ((uint32_t)rr << 16) | ((uint32_t)gg << 8) | (uint32_t)bb;
+                }
+            }
+            return;
+        }
         const int r2 = r * r;
-        const int y0 = std::max(0, cy - r), y1 = std::min(SCREEN_H - 1, cy + r);
+        const int y0 = std::max(std::max(0, cy - r), bandY0), y1 = std::min(std::min(SCREEN_H - 1, cy + r), bandY1 - 1);
         const int cr = (col >> 16) & 0xFF, cg = (col >> 8) & 0xFF, cb = col & 0xFF;
         const std::vector<uint32_t>* kernel = getGlowKernel(r);
         const uint32_t* k = kernel ? kernel->data() : nullptr;
@@ -407,8 +571,10 @@ struct Renderer {
         // Значения те же, что и в прежней формуле ((канал * intensity) >> 8).
         // Прибавка упакована в те же байты, что и пиксель (r<<16 | g<<8 | b):
         // тогда к четырём пикселям сразу можно прибавить вектор одной командой.
+        // Строим только те входы, которые этот вызов может запросить: яркость
+        // не превышает maxIntensity. У мелких частиц это 30–60 входов вместо 256.
         uint32_t addPacked[256];
-        for (int i = 0; i < 256; ++i) {
+        for (int i = 0; i <= maxIntensity; ++i) {
             addPacked[i] = ((uint32_t)((cr * i) >> 8) << 16)
                          | ((uint32_t)((cg * i) >> 8) << 8)
                          | (uint32_t)((cb * i) >> 8);
@@ -509,6 +675,7 @@ struct Renderer {
     }
 
     inline void addSpan(int y, int x0, int x1, uint32_t col, int intensity) {
+        if (bandActive && (y < bandY0 || y >= bandY1)) return;
         if ((unsigned)y >= (unsigned)SCREEN_H || intensity <= 0 || x0 > x1) return;
         x0 = std::max(0, x0); x1 = std::min(SCREEN_W - 1, x1);
         if (x0 > x1) return;
@@ -543,6 +710,26 @@ struct Renderer {
     }
 
     void drawLine(int x0, int y0, int x1, int y1, uint32_t col, int thickness = 1, int alpha = 255, bool additive = false) {
+        // Тонкая линия по оси — это одна полоса, а не шаг Брезенхема с проверкой
+        // границ на каждый пиксель. В кадре таких линий тысячи: фаски плит пола,
+        // лучи печати инея, насечки диска. Формула цвета та же, что в blendPixel
+        // и addPixel, поэтому вывод не меняется.
+        if (thickness <= 1) {
+            if (y0 == y1) {
+                const int lo = std::min(x0, x1), hi = std::max(x0, x1);
+                if (additive) addSpan(y0, lo, hi, col, alpha);
+                else blendSpan(y0, lo, hi, col, alpha);
+                return;
+            }
+            if (x0 == x1) {
+                const int lo = std::min(y0, y1), hi = std::max(y0, y1);
+                for (int y = lo; y <= hi; ++y) {
+                    if (additive) addPixel(x0, y, col, alpha);
+                    else blendPixel(x0, y, col, alpha);
+                }
+                return;
+            }
+        }
         int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
         int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
         int err = dx + dy;
@@ -600,16 +787,17 @@ struct Renderer {
             buildVignetteMap();
         // Blend with a precomputed multiply table: the per-pixel division by 255 was the
         // remaining cost after baking the map (3,8 мс на 1080p).
-        static uint8_t mulLut[256 * 256];
-        static bool lutReady = false;
-        if (!lutReady) {
+        // Таблица собирается один раз; инициализация статической структуры в
+        // C++11 потокобезопасна, поэтому полосам не нужен замок.
+        struct MulLut { uint8_t v[256 * 256]; MulLut() {
             for (int inv = 0; inv < 256; ++inv)
-                for (int v = 0; v < 256; ++v)
-                    mulLut[(inv << 8) | v] = (uint8_t)((v * inv) / 255);
-            lutReady = true;
-        }
+                for (int val = 0; val < 256; ++val)
+                    v[(inv << 8) | val] = (uint8_t)((val * inv) / 255);
+        } };
+        static const MulLut& lutTable = []() -> const MulLut& { static const MulLut t; return t; }();
+        const uint8_t* mulLut = lutTable.v;
         const int tr = 0x04, tg = 0x02, tb = 0x08;
-        for (int y = 0; y < SCREEN_H; ++y) {
+        for (int y = bandY0; y < bandY1; ++y) {
             const uint8_t* row = vignetteAlpha.data() + (size_t)y * SCREEN_W;
             uint32_t* dst = pixels + (size_t)y * SCREEN_W;
             for (int x = 0; x < SCREEN_W; ++x) {
@@ -635,6 +823,7 @@ struct Renderer {
         for (int sy = 0; sy < h; ++sy) {
             int py = startY + sy;
             if ((unsigned)py >= (unsigned)SCREEN_H) continue;
+            if (py < bandY0 || py >= bandY1) continue;
             const uint32_t* row = spr->pixels + sy * w;
             for (int sx = 0; sx < w; ++sx) {
                 int px = startX + (flipX ? (w - 1 - sx) : sx);
@@ -661,10 +850,11 @@ struct Renderer {
     void bakedSpriteVisualOffset(const BakedSprite* spr, int& dx, int& dy) const {
         dx = dy = 0;
         if (!spr || spr->width <= 0 || spr->height <= 0) return;
-        struct Entry { const BakedSprite* spr; int dx, dy; };
+        struct Entry { const BakedSprite* spr = nullptr; int dx = 0, dy = 0; };
         static Entry cache[256];
-        static int used = 0;
-        for (int i = 0; i < used; ++i) {
+        static std::atomic<int> used{0};
+        const int filled = used.load(std::memory_order_acquire);
+        for (int i = 0; i < filled; ++i) {
             if (cache[i].spr == spr) { dx = cache[i].dx; dy = cache[i].dy; return; }
         }
         int x0 = spr->width, y0 = spr->height, x1 = -1, y1 = -1;
@@ -682,7 +872,13 @@ struct Renderer {
             dx = (int)std::lround((x0 + x1) * 0.5 - (spr->width - 1) * 0.5);
             dy = (int)std::lround((y0 + y1) * 0.5 - (spr->height - 1) * 0.5);
         }
-        if (used < 256) cache[used++] = Entry{spr, dx, dy};
+        const int slot = used.load(std::memory_order_relaxed);
+        if (slot < 256) {
+            cache[slot].dx = dx;
+            cache[slot].dy = dy;
+            cache[slot].spr = spr;
+            used.store(slot + 1, std::memory_order_release);
+        }
     }
 
     // Draw a baked sprite so its visible pixels are centred on (cx, cy).
@@ -702,38 +898,82 @@ struct Renderer {
         const int w = std::max(1, (int)(spr->width * scaleX));
         const int h = std::max(1, (int)(spr->height * scaleY));
         const int x = cx - w / 2, y = cy - h / 2;
-        const int x0 = std::max(0, x), y0 = std::max(0, y);
-        const int x1 = std::min(SCREEN_W, x + w), y1 = std::min(SCREEN_H, y + h);
+        const int x0 = std::max(0, x);
+        int y0 = std::max(0, y);
+        const int x1 = std::min(SCREEN_W, x + w);
+        int y1 = std::min(SCREEN_H, y + h);
+        clampBandRows(y0, y1);
+        if (x0 >= x1 || y0 >= y1) return;
+        const int span = x1 - x0;
+        columnMap.resize((size_t)span);
+        for (int i = 0; i < span; ++i) {
+            const int dx = x0 + i - x;
+            columnMap[i] = std::min(spr->width - 1, (flipX ? (w - 1 - dx) : dx) * spr->width / w);
+        }
+        const bool cap = clipActive;
+        const int cx0 = std::max(x0, clipX0), cx1 = std::min(x1, clipX1);
+        if (cap && cx0 >= cx1) return;
+        const int lo = cap ? cx0 : x0, hi = cap ? cx1 : x1;
         for (int py = y0; py < y1; ++py) {
+            if (cap && (py < clipY0 || py >= clipY1)) continue;
             const int sy = std::min(spr->height - 1, ((py - y) * spr->height) / h);
             const uint32_t* row = spr->pixels + sy * spr->width;
-            for (int px = x0; px < x1; ++px) {
-                const int dx = px - x;
-                const int sx = std::min(spr->width - 1, (flipX ? (w - 1 - dx) : dx) * spr->width / w);
-                uint32_t c = row[sx];
+            uint32_t* dst = pixels + py * SCREEN_W;
+            for (int px = lo; px < hi; ++px) {
+                uint32_t c = row[columnMap[px - x0]];
                 int a = (c >> 24) & 0xFF;
                 if (a <= 10) continue;
                 a = (a * alphaScale) >> 8;
                 if (hitFlash) c = lerpColor(c, 0xFFFFE8B0, 0.72f);
                 else if (frozen) c = lerpColor(c, 0xFF50E8FF, 0.55f);
-                blendPixel(px, py, c, a);
+                if (a >= 255) { dst[px] = c; continue; }
+                if (a <= 0) continue;
+                const uint32_t d = dst[px];
+                const int inv = 255 - a;
+                dst[px] = 0xFF000000u
+                    | (((((c >> 16) & 0xFF) * a + ((d >> 16) & 0xFF) * inv) >> 8) << 16)
+                    | (((((c >> 8) & 0xFF) * a + ((d >> 8) & 0xFF) * inv) >> 8) << 8)
+                    | (((c & 0xFF) * a + (d & 0xFF) * inv) >> 8);
             }
         }
     }
 
     void drawBakedSpriteScaled(const BakedSprite* spr, int x, int y, int w, int h, int alphaScale = 255) {
         if (!spr || w <= 0 || h <= 0) return;
-        const int x0 = std::max(0, x), y0 = std::max(0, y);
-        const int x1 = std::min(SCREEN_W, x + w), y1 = std::min(SCREEN_H, y + h);
+        const int x0 = std::max(0, x);
+        int y0 = std::max(0, y);
+        const int x1 = std::min(SCREEN_W, x + w);
+        int y1 = std::min(SCREEN_H, y + h);
+        clampBandRows(y0, y1);
+        if (x0 >= x1 || y0 >= y1) return;
+        const int span = x1 - x0;
+        columnMap.resize((size_t)span);
+        if (w == spr->width) {
+            for (int i = 0; i < span; ++i) columnMap[i] = x0 + i - x;
+        } else {
+            for (int i = 0; i < span; ++i)
+                columnMap[i] = std::min(spr->width - 1, ((x0 + i - x) * spr->width) / w);
+        }
+        const bool cap = clipActive;
+        const int cx0 = std::max(x0, clipX0), cx1 = std::min(x1, clipX1);
+        if (cap && (cx0 >= cx1)) return;
         for (int py = y0; py < y1; ++py) {
+            if (cap && (py < clipY0 || py >= clipY1)) continue;
             const int sy = std::min(spr->height - 1, ((py - y) * spr->height) / h);
             const uint32_t* row = spr->pixels + sy * spr->width;
-            for (int px = x0; px < x1; ++px) {
-                const int sx = std::min(spr->width - 1, ((px - x) * spr->width) / w);
-                const uint32_t c = row[sx];
-                const int a = (((c >> 24) & 0xFF) * alphaScale) >> 8;
-                if (a >= 255) pixels[py * SCREEN_W + px] = c;
-                else if (a > 0) blendPixel(px, py, c, a);
+            uint32_t* dst = pixels + py * SCREEN_W;
+            const int lo = cap ? cx0 : x0, hi = cap ? cx1 : x1;
+            for (int px = lo; px < hi; ++px) {
+                const uint32_t c = row[columnMap[px - x0]];
+                int a = (int)(((c >> 24) & 0xFF) * alphaScale) >> 8;
+                if (a >= 255) { dst[px] = c; continue; }
+                if (a <= 0) continue;
+                const uint32_t d = dst[px];
+                const int inv = 255 - a;
+                dst[px] = 0xFF000000u
+                    | (((((c >> 16) & 0xFF) * a + ((d >> 16) & 0xFF) * inv) >> 8) << 16)
+                    | (((((c >> 8) & 0xFF) * a + ((d >> 8) & 0xFF) * inv) >> 8) << 8)
+                    | (((c & 0xFF) * a + (d & 0xFF) * inv) >> 8);
             }
         }
     }
@@ -791,25 +1031,43 @@ struct Renderer {
         if (!text || alpha <= 0) return;
         const char* p = text;
         int curX = x;
+        const int sr = (col >> 16) & 0xFF, sg = (col >> 8) & 0xFF, sb = col & 0xFF;
+        const bool cap = clipActive;
         while (*p) {
             uint32_t cp = nextUTF8(p);
             const BakedGlyph* g = findGlyph(font, cp);
             if (!g) continue;
             if (g->width > 0 && g->height > 0) {
-                int gx = curX + g->bearingX;
-                int gy = y + g->bearingY;
+                const int gx = curX + g->bearingX;
+                const int gy = y + g->bearingY;
                 const uint8_t* bmp = font.bitmapData + g->dataOffset;
-                for (int row = 0; row < g->height; ++row) {
-                    int py = gy + row;
+                // Клип и границы кадра проверяются на строку глифа, а не на
+                // каждый пиксель: текст рисуется десятки раз за кадр, и это
+                // были три лишние проверки на пиксель внутри подсчёта цвета.
+                const int gh = (int)g->height, gw = (int)g->width;
+                const int rowStart = std::max(cap ? std::max(0, clipY0 - gy) : 0, bandY0 - gy);
+                const int rowEnd = std::min(cap ? std::min(gh, clipY1 - gy) : gh, bandY1 - gy);
+                const int colStart = cap ? std::max(0, clipX0 - gx) : 0;
+                const int colEnd = cap ? std::min(gw, clipX1 - gx) : gw;
+                for (int row = rowStart; row < rowEnd; ++row) {
+                    const int py = gy + row;
                     if ((unsigned)py >= (unsigned)SCREEN_H) continue;
-                    if (clipActive && (py < clipY0 || py >= clipY1)) continue;
                     const uint8_t* rptr = bmp + row * g->width;
-                    for (int colIdx = 0; colIdx < g->width; ++colIdx) {
-                        uint8_t cov = rptr[colIdx];
+                    uint32_t* dst = pixels + py * SCREEN_W;
+                    for (int colIdx = colStart; colIdx < colEnd; ++colIdx) {
+                        const uint8_t cov = rptr[colIdx];
                         if (cov <= 8) continue;
                         const int px = gx + colIdx;
-                        if (clipActive && (px < clipX0 || px >= clipX1)) continue;
-                        blendPixel(px, py, col, (cov * alpha) >> 8);
+                        if ((unsigned)px >= (unsigned)SCREEN_W) continue;
+                        const int a = (cov * alpha) >> 8;
+                        if (a <= 0) continue;
+                        if (a >= 255) { dst[px] = col; continue; }
+                        const int inv = 255 - a;
+                        const uint32_t d = dst[px];
+                        dst[px] = 0xFF000000u
+                            | ((((sr * a + ((d >> 16) & 0xFF) * inv) >> 8) << 16))
+                            | ((((sg * a + ((d >> 8) & 0xFF) * inv) >> 8) << 8))
+                            | (((sb * a + (d & 0xFF) * inv) >> 8));
                     }
                 }
             }
@@ -946,7 +1204,9 @@ struct Renderer {
         float burst = 0.0f, burstV = 0.0f;
         float lastT = -1.0f;
     };
-    BossSpring bossSpring[6];
+    // Пружина общая на кадр, а не на экземпляр: при рисовании полосами страж
+    // переезжает из полосы в полосу, и его поза не должна начинаться заново.
+    static BossSpring* bossSprings() { static BossSpring springs[6]; return springs; }
     static inline bool bossSpringEnabled = true;
     // Для стендов: последние сглаженные значения, которые получила фигура.
     static inline float lastBossPose = 0.0f, lastBossBurst = 0.0f;
@@ -992,8 +1252,12 @@ struct Renderer {
             const int sy = y0 + j;
             for (int i = 0; i < w; ++i) {
                 const int sx = x0 + i;
+                // Строки вне полосы не читаем вовсе: их в этот момент пишет
+                // другой поток. Всё равно объём считается только по своим
+                // строкам (границы полос обходят фигуру стража стороной).
+                const bool inBand = (sy >= bandY0 && sy < bandY1);
                 figureScratch[(size_t)j * w + i] =
-                    (sx >= 0 && sy >= 0 && sx < W && sy < H) ? pixels[(size_t)sy * W + sx] : 0u;
+                    (inBand && sx >= 0 && sy >= 0 && sx < W && sy < H) ? pixels[(size_t)sy * W + sx] : 0u;
             }
         }
     }
@@ -1015,7 +1279,10 @@ struct Renderer {
         for (int j = 0; j < h; ++j) {
             for (int i = 0; i < w; ++i) {
                 const int sx = x0 + i, sy = y0 + j;
-                if (sx < 0 || sy < 0 || sx >= W || sy >= H) { figureMask[(size_t)j * w + i] = 0; continue; }
+                if (sx < 0 || sy < 0 || sx >= W || sy >= H || sy < bandY0 || sy >= bandY1) {
+                    figureMask[(size_t)j * w + i] = 0;
+                    continue;
+                }
                 const uint32_t pix = pixels[(size_t)sy * W + sx];
                 // Плотный ключ цвета: 5 бит на канал. Полный цвет детали не нужен,
                 // нужно только «это та же деталь или соседняя», а 32-битная копия
@@ -1071,7 +1338,7 @@ struct Renderer {
             const uint8_t* maskRow = &figureMask[(size_t)j * w];
             const uint16_t* colorRow = &figureColor[(size_t)j * w];
             const int sy = y0 + j;
-            if (sy < 0 || sy >= H) continue;
+            if (sy < 0 || sy >= H || sy < bandY0 || sy >= bandY1) continue;
             uint32_t* pixRow = pixels + (size_t)sy * W;
             for (int i = 0; i < w; ++i) {
                 if (!maskRow[i]) continue;
@@ -2035,7 +2302,7 @@ struct Renderer {
         // что один тип стража не двигает пружину дважды за кадр.
         if (bossSpringEnabled) {
             const int sid = ((bossType % 6) + 6) % 6;
-            BossSpring& sp = bossSpring[sid];
+            BossSpring& sp = bossSprings()[sid];
             float dt = sp.lastT < 0.0f ? 0.016f : (animTime - sp.lastT);
             if (!(dt > 0.0f) || dt > 0.25f) {
                 // Пауза, переход сцены или новый страж с тем же типом: время ушло

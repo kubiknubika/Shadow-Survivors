@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <thread>
 #include <mmsystem.h>
 #include <windowsx.h>
 #include <dwmapi.h>
@@ -267,6 +268,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     g_bmi.bmiHeader.biCompression = BI_RGB;
 
     g_game.init();
+    // Кадр рисуется полосами: по одному потоку на полосу, максимум четыре.
+    // На одном ядре или в системе, где неизвестно число ядер, остаётся
+    // однопоточный путь — он же и запасной, если полосы не годятся.
+    {
+        unsigned cores = std::thread::hardware_concurrency();
+        if (cores < 2) cores = 1;
+        if (cores > 4) cores = 4;
+        g_game.renderThreads = (int)cores;
+    }
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
 
