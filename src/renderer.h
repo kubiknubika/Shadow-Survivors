@@ -141,6 +141,10 @@ struct Renderer {
 
     inline void blendPixel(int x, int y, uint32_t col, int alpha) {
         if ((unsigned)x >= (unsigned)SCREEN_W || (unsigned)y >= (unsigned)SCREEN_H) return;
+        // Отсечение на уровне пикселя: линии и круги идут через blendPixel, и
+        // без этой проверки скроллящаяся карта рисовала маршрут поверх кнопок.
+        if (clipActive && ((unsigned)(x - clipX0) >= (unsigned)(clipX1 - clipX0) ||
+                           (unsigned)(y - clipY0) >= (unsigned)(clipY1 - clipY0))) return;
         if (alpha <= 0) return;
         if (alpha >= 255) {
             pixels[y * SCREEN_W + x] = col;
@@ -158,6 +162,8 @@ struct Renderer {
 
     inline void addPixel(int x, int y, uint32_t col, int intensity) {
         if ((unsigned)x >= (unsigned)SCREEN_W || (unsigned)y >= (unsigned)SCREEN_H || intensity <= 0) return;
+        if (clipActive && ((unsigned)(x - clipX0) >= (unsigned)(clipX1 - clipX0) ||
+                           (unsigned)(y - clipY0) >= (unsigned)(clipY1 - clipY0))) return;
         uint32_t dst = pixels[y * SCREEN_W + x];
         int r = ((dst >> 16) & 0xFF) + ((((col >> 16) & 0xFF) * intensity) >> 8);
         int g = ((dst >> 8) & 0xFF)  + ((((col >> 8) & 0xFF) * intensity) >> 8);
@@ -171,6 +177,14 @@ struct Renderer {
     inline void blendSpan(int y, int x0, int x1, uint32_t col, int alpha) {
         if ((unsigned)y >= (unsigned)SCREEN_H || alpha <= 0 || x0 > x1) return;
         x0 = std::max(0, x0); x1 = std::min(SCREEN_W - 1, x1);
+        // Область отсечения уважают и заливки: раньше setClip действовал только
+        // на текст и контуры, а круги, линии и скруглённые панели лезли за
+        // границу списка — прокручиваемая карта кампании рисовала дела поверх
+        // кнопок внизу экрана.
+        if (clipActive) {
+            if (y < clipY0 || y >= clipY1) return;
+            x0 = std::max(x0, clipX0); x1 = std::min(x1, clipX1 - 1);
+        }
         if (x0 > x1) return;
         uint32_t* row = pixels + y * SCREEN_W;
         if (alpha >= 255) {
@@ -190,6 +204,10 @@ struct Renderer {
     void fillRect(int x, int y, int w, int h, uint32_t col, int alpha = 255) {
         int x0 = std::max(0, x), y0 = std::max(0, y);
         int x1 = std::min(SCREEN_W, x + w), y1 = std::min(SCREEN_H, y + h);
+        if (clipActive) {
+            x0 = std::max(x0, clipX0); x1 = std::min(x1, clipX1);
+            y0 = std::max(y0, clipY0); y1 = std::min(y1, clipY1);
+        }
         if (x0 >= x1 || y0 >= y1) return;
         if (alpha >= 255) {
             for (int py = y0; py < y1; ++py) {
@@ -206,6 +224,10 @@ struct Renderer {
         if (h <= 0 || w <= 0) return;
         int x0 = std::max(0, x), x1 = std::min(SCREEN_W, x + w);
         int y0 = std::max(0, y), y1 = std::min(SCREEN_H, y + h);
+        if (clipActive) {
+            x0 = std::max(x0, clipX0); x1 = std::min(x1, clipX1);
+            y0 = std::max(y0, clipY0); y1 = std::min(y1, clipY1);
+        }
         for (int py = y0; py < y1; ++py) {
             float t = (float)(py - y) / (float)h;
             uint32_t c = lerpColor(topCol, botCol, t);

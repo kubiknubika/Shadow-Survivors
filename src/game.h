@@ -65,6 +65,14 @@ struct CampaignMissionDef {
 // these rows and the tables in STORY.md so the script and the build cannot drift.
 static constexpr int CAMPAIGN_ACT_COUNT = 5;
 static constexpr int CAMPAIGN_MISSION_COUNT = 30;
+// ── Развилки ───────────────────────────────────────────────────────────────
+// Развилка — это два первых дела одного акта: обе головы растут из последнего
+// дела прошлого акта. Раньше развилка была ровно одна (вход в акт II), дальше
+// игрок механически шёл выбранным следом — поэтому выбора в акте V он не видел
+// вовсе. Теперь развилка стоит на входе в каждый акт II–V, и каждая голова —
+// отдельный маршрут: выбор одной гасит вторую навсегда.
+struct CampaignForkDef { int act; int a; int b; };
+static constexpr int CAMPAIGN_FORK_COUNT = 4;
 static constexpr int CAMPAIGN_ACT_MAX_ROWS = 6;
 static const char* const CAMPAIGN_ACT_TITLES[CAMPAIGN_ACT_COUNT] = {
     "ПЕПЕЛ НА СТОЛЕ", "ГОЛОС В КОЛБЕ", "РЕЕСТР", "АРХИВ", "СЕРДЦЕ АРХИВА"
@@ -72,6 +80,14 @@ static const char* const CAMPAIGN_ACT_TITLES[CAMPAIGN_ACT_COUNT] = {
 static const uint32_t CAMPAIGN_ACT_COLORS[CAMPAIGN_ACT_COUNT] = {
     0xFFFFC848, 0xFF80E58A, 0xFF5BD8EE, 0xFFFF8C43, 0xFFFFD278
 };
+static const CampaignForkDef CAMPAIGN_FORKS[CAMPAIGN_FORK_COUNT] = {
+    {2,  4, 14},   // акт II:  свидетель / копия
+    {3,  8, 18},   // акт III: реестр — две дороги вглубь
+    {4, 11, 21},   // акт IV:  архив — две дороги к трону
+    {5, 27, 28},   // акт V:   сохранить копию / сжечь копию
+};
+static_assert(sizeof(CAMPAIGN_FORKS) / sizeof(CAMPAIGN_FORKS[0]) == CAMPAIGN_FORK_COUNT,
+              "развилки: таблица CAMPAIGN_FORKS должна совпадать с CAMPAIGN_FORK_COUNT");
 static constexpr uint32_t STORY_ARCHIVE_MISSION_COMPLETE_BIT = 1u << 4;
 static constexpr uint32_t STORY_HEART_MISSION_COMPLETE_BIT = 1u << 5;
 // The old 6-mission save only knew these two extra bits; everything else now lives
@@ -85,20 +101,20 @@ static const CampaignMissionDef CAMPAIGN_MISSIONS[CAMPAIGN_MISSION_COUNT] = {
     {"СЕСТРА, КОТОРАЯ НЕ СЛЫШИТ", "СЛЕД А • СВИДЕТЕЛЬ", "Копия отвечает так, как её записали. Я спрашивал одно и то же восемь раз и восемь раз слышал тот же голос. Это не свидетель. Это протокол.", "ДОЖМИ КОПИЮ ДО РАСХОЖДЕНИЙ", "ГОЛОС ИЗ КОЛБЫ", 220, 170, 1, 2, 0x01u, false, 2, 0, 4, -1, false, 1, 7, "СЕСТРА НЕ СЛЫШИТ"},
     {"ДЕЛО О СЕМИ СЕМЬЯХ", "СЛЕД А • СВИДЕТЕЛЬ", "Семь семей подали жалобу на Архив. Их показания совпадают дословно — значит, кто-то писал за них. Или они говорят одно, потому что видели одно.", "СОБЕРИ ПОКАЗАНИЯ • СВЕРЬ ГОЛОСА", "СТАРШИНА КВАРТАЛА", 220, 170, 0, 2, 0x01u, false, 2, 0, 5, -1, false, 1, 15},
     {"ПЕЧАТЬ ГОЛОСА", "СЛЕД А • СВИДЕТЕЛЬ", "Малакор бережёт копию родного голоса, потому что хоронить оригинал нечем. Я пришёл сказать ему то, что он не услышит от машины.", "СЛОМАЙ ПЕЧАТЬ ГОЛОСА", "МАЛАКОР", 240, 180, 1, 2, 0x01u, false, 2, 0, 6, -1, false, 1, 11},
-    {"ЗАТОПЛЕННЫЙ РЕЕСТР", "СЛЕД А • СВИДЕТЕЛЬ", "Нижний ярус реестра затоплен. Чернила расплылись, но оттиск на обложках остался: семейные имена резали на камне, чтобы книга не решала за них.", "ПОДНИ КНИГИ • ПЕРЕПИШИ ИМЕНА", "ПЕРЕПИСЧИК", 230, 170, 4, 3, 0x03u, false, 3, 0, 7, -1, false, 1, 12},
+    {"ЗАТОПЛЕННЫЙ РЕЕСТР", "СЛЕД А • СВИДЕТЕЛЬ", "Нижний ярус реестра затоплен. Чернила расплылись, но оттиск на обложках остался: семейные имена резали на камне, чтобы книга не решала за них.", "ПОДНИ КНИГИ • ПЕРЕПИШИ ИМЕНА", "ПЕРЕПИСЧИК", 230, 170, 4, 3, 0x03u, false, 3, 0, 7, 17, false, 1, 12},
     {"ИМЯ НА КАМНЕ", "СЛЕД А • СВИДЕТЕЛЬ", "На кладбище имена режут заново, поверх прежних. Кардинал вымарывал книги, люди резали камень. Кто-то стирал и камень.", "ЗАЩИТИ КАМЕНЬ • НАЙДИ РЕЗЧИКА", "РЕЗЧИК ИМЁН", 230, 170, 2, 3, 0x03u, false, 3, 0, 8, -1, false, 1, 13},
     {"ПЕЧАТЬ ИМЕНИ", "СЛЕД А • СВИДЕТЕЛЬ", "Кардинал вымарывал имена, называя забвение милосердием. Он не учёл одного: люди помнят друг друга без разрешения Архива.", "СЛОМАЙ ПЕЧАТЬ ИМЕНИ", "КАРДИНАЛ", 240, 180, 2, 3, 0x03u, false, 3, 0, 9, -1, false, 1, 17},
-    {"ПЕПЕЛЬНЫЙ ТРОН", "СЛЕД А • СВИДЕТЕЛЬ", "Азарот запустил Архив, чтобы никто не исчез. Машина услышала его буквально: заперла ночь в цикле, а людей — в копиях.", "ВОЙДИ В КАБИНЕТ • ОТКРОЙ ДЕЛО АЗАРОТА", "СЕКРЕТАРЬ АРХИВА", 240, 180, 4, 4, 0x07u, false, 4, 0, 10, -1, false, 1, 18},
+    {"ПЕПЕЛЬНЫЙ ТРОН", "СЛЕД А • СВИДЕТЕЛЬ", "Азарот запустил Архив, чтобы никто не исчез. Машина услышала его буквально: заперла ночь в цикле, а людей — в копиях.", "ВОЙДИ В КАБИНЕТ • ОТКРОЙ ДЕЛО АЗАРОТА", "СЕКРЕТАРЬ АРХИВА", 240, 180, 4, 4, 0x07u, false, 4, 0, 10, 20, false, 1, 18},
     {"ПИСАРЬ, КОТОРЫЙ СТЁР СЕБЯ", "СЛЕД А • СВИДЕТЕЛЬ", "В списке писцов одна строка вымарана дважды. Тот, кто стирал имена, стёр и своё имя.", "ВОССТАНОВИ СТРОКУ • ВЫЙДИ НА КАРДИНАЛА", "САМОЗВАНЫЙ ПИСАРЬ", 230, 170, 5, 4, 0x07u, false, 4, 0, 11, -1, false, 1, 14, "ПИСАРЬ СТЁР СЕБЯ"},
     {"ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "СЛЕД А • СВИДЕТЕЛЬ", "Азарот хранит копии, а не людей. Печать Свидетельства — последний засов: пока она цела, Архив считает свои записи единственными свидетелями.", "СЛОМАЙ ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "АЗАРОТ", 270, 200, 3, 4, 0x07u, false, 4, 0, 12, -1, false, 1, 21},
     {"ПУСТЫЕ НАРУЧНИКИ", "СЛЕД Б • КОПИЯ", "Другой след: склад наручников, все пустые. Сняли с погибших — или с тех, кто ушёл и не вернулся за ними.", "ВСКРОЙ КАМЕРУ • НАЙДИ ВЛАДЕЛЬЦЕВ", "СМОТРИТЕЛЬ СКЛАДА", 200, 150, 1, 2, 0x01u, false, 2, 0, 3, -1, false, 2, 5},
     {"КРИПТА ГОЛОСОВ", "СЛЕД Б • КОПИЯ", "В колбах последние слова. Их говорила сестра. Копия помнит фразу и не помнит, что было после неё.", "РАЗБЕЙ КОЛБЫ • СОБЕРИ ОБРАЗЦЫ", "ЭХО СЕСТРЫ", 220, 170, 5, 2, 0x01u, false, 2, 0, 14, -1, false, 2, 6},
     {"ТЁПЛЫЙ СЛЕД", "СЛЕД Б • КОПИЯ", "Морг цел. Буря его не задела: тела на месте, бирки на местах, и все даты смерти вчерашние. Кто-то ведёт учёт.", "СВЕРЬ БИРКИ • НАЙДИ УЧЁТЧИКА", "СЧЁТЧИК ТЕЛ", 210, 160, 0, 2, 0x01u, false, 2, 0, 15, -1, false, 2, 9},
     {"ПЕЧАТЬ ГОЛОСА", "СЛЕД Б • КОПИЯ", "Малакор бережёт копию родного голоса, потому что хоронить оригинал нечем. Я пришёл сказать ему то, что он не услышит от машины.", "СЛОМАЙ ПЕЧАТЬ ГОЛОСА", "МАЛАКОР", 240, 180, 1, 2, 0x01u, false, 2, 0, 16, -1, false, 2, 11},
-    {"ДЕЛО О ПУСТЫХ СТРАНИЦАХ", "СЛЕД Б • КОПИЯ", "Из книги вырваны страницы — ровно те, где записаны свидетели. Пустые листы аккуратно сложены в папку с моим делом.", "НАЙДИ ЛИСТЫ • ПРОЧТИ КРАЯ", "ХРАНИТЕЛЬ ПАПОК", 220, 170, 3, 3, 0x03u, false, 3, 0, 17, -1, false, 2, 16, "ПУСТЫЕ СТРАНИЦЫ"},
+    {"ДЕЛО О ПУСТЫХ СТРАНИЦАХ", "СЛЕД Б • КОПИЯ", "Из книги вырваны страницы — ровно те, где записаны свидетели. Пустые листы аккуратно сложены в папку с моим делом.", "НАЙДИ ЛИСТЫ • ПРОЧТИ КРАЯ", "ХРАНИТЕЛЬ ПАПОК", 220, 170, 3, 3, 0x03u, false, 3, 0, 17, 7, false, 2, 16, "ПУСТЫЕ СТРАНИЦЫ"},
     {"ХОЛОДНЫЙ СЛЕД", "СЛЕД Б • КОПИЯ", "В лаборатории пахнет озоном. На столе — журнал опытов: Архив учился говорить голосом мёртвых, пока город ещё был жив.", "ИЗЪЯТЬ ЖУРНАЛ • ЗАКРЫТЬ ОПЫТ", "ЛАБОРАНТ АРХИВА", 210, 160, 2, 3, 0x03u, false, 3, 0, 18, -1, false, 2, 8},
     {"КОЛБА № 9", "СЛЕД Б • КОПИЯ", "Колба девять пуста, но бирка цела. На бирке — мой голос. Я никогда не был здесь. Значит, был кто-то с моим голосом.", "НАЙДИ ПЛЁНКУ • ВОССТАНОВИ ЗАПИСЬ", "ХРАНИТЕЛЬ ПЛЁНКИ", 220, 170, 5, 3, 0x03u, false, 3, 0, 19, -1, false, 2, 10},
-    {"КОПИЯ СВИДЕТЕЛЯ", "СЛЕД Б • КОПИЯ", "В деле подшита копия показаний — с моим голосом и моими словами. Копия утверждает, что она и есть Свидетель. Проверить можно только одним способом.", "ОТЛИЧИ КОПИЮ ОТ СЕБЯ", "КОПИЯ СВИДЕТЕЛЯ", 240, 180, 5, 4, 0x07u, false, 4, 2, 20, -1, false, 2, 19},
+    {"КОПИЯ СВИДЕТЕЛЯ", "СЛЕД Б • КОПИЯ", "В деле подшита копия показаний — с моим голосом и моими словами. Копия утверждает, что она и есть Свидетель. Проверить можно только одним способом.", "ОТЛИЧИ КОПИЮ ОТ СЕБЯ", "КОПИЯ СВИДЕТЕЛЯ", 240, 180, 5, 4, 0x07u, false, 4, 2, 20, 10, false, 2, 19},
     {"ДОПРОС МАШИНЫ", "СЛЕД Б • КОПИЯ", "Машина не лжёт — она повторяет. Я спросил её о ночи бури и получил в ответ собственный рапорт, написанный до того, как я его написал.", "ДОПРОСИ АРХИВ • НАЙДИ АВТОРА", "ПРОТОКОЛИСТ", 240, 180, 4, 4, 0x07u, false, 4, 0, 21, -1, false, 2, 20},
     {"ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "СЛЕД Б • КОПИЯ", "Азарот хранит копии, а не людей. Печать Свидетельства — последний засов: пока она цела, Архив считает свои записи единственными свидетелями.", "СЛОМАЙ ПЕЧАТЬ СВИДЕТЕЛЬСТВА", "АЗАРОТ", 270, 200, 3, 4, 0x07u, false, 4, 0, 22, -1, false, 2, 21},
     {"РЕЗЕРВНАЯ КОПИЯ ПРИКАЗА", "АРХИВ ЗАЩИЩАЕТ СЕБЯ", "В сердце Архива осталась запись последнего приказа Азарота. Это не воскресший Азарот — это машинная копия его команды, и она снова запускает цикл.", "НАЙДИ И УНИЧТОЖЬ КОПИЮ", "КОПИЯ АЗАРОТА", 260, 190, 5, 5, 0x0Fu, false, 5, 2, 13, 23, false, 0, 24, "РЕЗЕРВНЫЙ ПРИКАЗ"},
@@ -167,7 +183,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 127;
+static constexpr int PATCH_NOTES_COUNT = 128;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -501,6 +517,7 @@ struct GameOptions {
     float musicVolume = 0.42f;
     int messageSpeechEnabled = 1; // read combat messages aloud (SAPI)
     int skillIconStyle = 0; // 0 = вектор, 1 = ИИ-арт, 2 = набор «цвет».
+    int campaignSnakeMap = 1; // 1 = змейка (новый UI), 0 = карта колонками (старый).
 };
 
 struct SaveData {
@@ -515,7 +532,7 @@ struct SaveData {
     int seenIntroCutscene = 0;
     int seenTwistCutscene = 0;
     int seenEndingCutscene = 0;
-    uint32_t saveVersion = 8;
+    uint32_t saveVersion = 9;
     int enemyOathRanks[3] = {0, 0, 0};
     // Appended in v5 for binary compatibility: narrative evidence and permanently broken seals.
     uint32_t storySealMask = 0;
@@ -533,7 +550,12 @@ struct SaveData {
     int campaignCycle = 0;
     // v8 (tail): какой след выбран в этом прохождении. 0 — ещё не выбран,
     // 1 — «СВИДЕТЕЛЬ», 2 — «КОПИЯ». Второй след закрыт до новой ночи.
+    // v9: поле осталось как «последний выбор» — по нему мигрируют старые сейвы.
     int campaignTrack = 0;
+    // v9 (tail): выбор на каждой развилке в порядке CAMPAIGN_FORKS.
+    // 0 — ещё не выбрано, 1 — верхняя голова, 2 — нижняя. Выбор постоянный:
+    // вторая голова гаснет и остаётся серой до новой ночи.
+    uint8_t campaignFork[CAMPAIGN_FORK_COUNT] = {0, 0, 0, 0};
 };
 
 struct UIButton {
@@ -594,6 +616,11 @@ struct Game {
     int briefPreviewMission = -1; // which case narration was last read out in the select screen
     float pendingObjectiveVoiceTimer = 0.0f; // speak the objective once the case narration ends
     int campaignActView = 1;   // which act the mission list is showing
+    // Камера «змейки»: прокрутка маршрута в пикселях и последнее дело, к
+    // которому она подъехала. Хранятся в Game, а не в static внутри рендера,
+    // чтобы позиция не сбрасывалась при возврате из боя.
+    int campaignSnakeScroll = 0;
+    int campaignSnakeLastCursor = -1;
     int helpPage = 0;          // 0 = арсенал, 1 = словарь терминов
     int glossaryScroll = 0;
 
@@ -1073,6 +1100,19 @@ struct Game {
                         save.saveVersion = 8;
                         migrated = true;
                     }
+                    // v9: выбор теперь на каждой развилке. Старый сейв знал один
+                    // след на всю кампанию — переносим его в акты II–IV, а выбор
+                    // акта V восстанавливаем по тому, какое из двух дел закрыто.
+                    if (loadedVersion < 9 || got < offsetof(SaveData, campaignFork)) {
+                        for (int f = 0; f < CAMPAIGN_FORK_COUNT; ++f) save.campaignFork[f] = 0;
+                        if (save.campaignTrack == 1 || save.campaignTrack == 2)
+                            for (int f = 0; f + 1 < CAMPAIGN_FORK_COUNT; ++f)
+                                save.campaignFork[f] = (uint8_t)save.campaignTrack;
+                        if (save.campaignMissionsDone & (1u << 27)) save.campaignFork[3] = 1;
+                        else if (save.campaignMissionsDone & (1u << 28)) save.campaignFork[3] = 2;
+                        save.saveVersion = 9;
+                        migrated = true;
+                    }
                 }
             }
             fclose(f);
@@ -1158,41 +1198,103 @@ struct Game {
         if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return 0;
         return CAMPAIGN_MISSIONS[mission].track;
     }
-    // Дело чужого следа закрыто до новой ночи; дело без следа доступно всегда.
+    // ── Развилки: выбор головы ─────────────────────────────────────────────
+    static int campaignForkOfMission(int mission) {
+        for (int f = 0; f < CAMPAIGN_FORK_COUNT; ++f)
+            if (CAMPAIGN_FORKS[f].a == mission || CAMPAIGN_FORKS[f].b == mission) return f;
+        return -1;
+    }
+    static int campaignForkOfAct(int act) {
+        for (int f = 0; f < CAMPAIGN_FORK_COUNT; ++f) if (CAMPAIGN_FORKS[f].act == act) return f;
+        return -1;
+    }
+    static int campaignForkSide(int fork, int mission) {
+        if (fork < 0 || fork >= CAMPAIGN_FORK_COUNT) return 0;
+        if (CAMPAIGN_FORKS[fork].a == mission) return 1;
+        if (CAMPAIGN_FORKS[fork].b == mission) return 2;
+        return 0;
+    }
+    static int campaignForkHead(int fork, int side) {
+        if (fork < 0 || fork >= CAMPAIGN_FORK_COUNT) return -1;
+        return side == 2 ? CAMPAIGN_FORKS[fork].b : CAMPAIGN_FORKS[fork].a;
+    }
+    int campaignForkPick(int fork) const {
+        if (fork < 0 || fork >= CAMPAIGN_FORK_COUNT) return 0;
+        const int v = save.campaignFork[fork];
+        return (v == 1 || v == 2) ? v : 0;
+    }
+    bool campaignForkChosen(int fork) const { return campaignForkPick(fork) != 0; }
+    // «След выбран» раньше означало «развилка акта II закрыта»; теперь это
+    // «первая развилка закрыта», остальные выбираются по ходу кампании.
+    bool isCampaignTrackChosen() const { return campaignForkChosen(0); }
+    // Ветка отмерла: на этой развилке уже выбрана другая голова. До выбора
+    // обе головы живые, обе доступны и обе ведут к следующему слиянию.
     bool isCampaignMissionLockedByTrack(int mission) const {
-        const int track = campaignTrackOf(mission);
-        return track != 0 && save.campaignTrack != track;
+        if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return false;
+        const int fork = campaignForkOfMission(mission);
+        if (fork >= 0) {
+            const int pick = campaignForkPick(fork);
+            return pick != 0 && campaignForkSide(fork, mission) != pick;
+        }
+        const int track = CAMPAIGN_MISSIONS[mission].track;
+        if (track == 0) return false;
+        const int actFork = campaignForkOfAct(CAMPAIGN_MISSIONS[mission].act);
+        if (actFork < 0) return false;
+        const int pick = campaignForkPick(actFork);
+        return pick != 0 && pick != track;
     }
-    bool isCampaignTrackChosen() const { return save.campaignTrack == 1 || save.campaignTrack == 2; }
-    // Развилка одна и стоит на входе в акт II: первое дело полосы. Только здесь
-    // след фиксируется. Всё остальное — уже дела выбранного следа.
-    int campaignForkMission(int track) const {
-        if (track != 1 && track != 2) return -1;
-        const int actOneLast = campaignActLaneMission(1, 0, campaignActLaneCount(1, 0) - 1);
-        if (actOneLast < 0 || !isCampaignMissionCompleted(actOneLast)) return -1;
-        return campaignActLaneMission(2, track, 0);
+    // Ближайшая живая и доступная голова на этой стороне — для кнопки «к развилке».
+    int campaignNextForkMission(int side) const {
+        for (int f = 0; f < CAMPAIGN_FORK_COUNT; ++f) {
+            if (campaignForkPick(f) != 0) continue;
+            const int head = campaignForkHead(f, side);
+            if (head >= 0 && isCampaignMissionUnlocked(head)) return head;
+        }
+        return -1;
     }
-    // Дальше развилки дерево не листается, пока след не выбран: иначе можно
-    // стоять в акте III и «пройти следом А» там, где надо выбирать ветку.
+    int campaignForkMission(int side) const { return campaignNextForkMission(side); }
+    // Сколько развилок ещё не выбрано — этим живёт подпись кнопки.
+    int campaignOpenForks() const {
+        int n = 0;
+        for (int f = 0; f < CAMPAIGN_FORK_COUNT; ++f) {
+            if (campaignForkPick(f) != 0) continue;
+            const int ha = campaignForkHead(f, 1), hb = campaignForkHead(f, 2);
+            if ((ha >= 0 && isCampaignMissionUnlocked(ha)) || (hb >= 0 && isCampaignMissionUnlocked(hb))) ++n;
+        }
+        return n;
+    }
+    // Дальше листается любой акт, где есть открытое или закрытое дело: запуск
+    // всё равно закрыт пререквизитом, а смотреть вперёд игрок вправе.
     int campaignReachableAct() const {
-        if (isCampaignTrackChosen()) return CAMPAIGN_ACT_COUNT;
-        return campaignForkMission(1) >= 0 ? 2 : 1;
+        int best = 1;
+        for (int a = 2; a <= CAMPAIGN_ACT_COUNT; ++a) {
+            for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+                if (CAMPAIGN_MISSIONS[i].act != a) continue;
+                if (isCampaignMissionCompleted(i) || isCampaignMissionUnlocked(i)) { best = a; break; }
+            }
+        }
+        return best;
     }
     int campaignTrackCompletedCount() const {
-        if (!isCampaignTrackChosen()) return 0;
         int n = 0;
         for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i)
-            if (CAMPAIGN_MISSIONS[i].track == save.campaignTrack && isCampaignMissionCompleted(i)) ++n;
+            if (!isCampaignMissionLockedByTrack(i) && isCampaignMissionCompleted(i)) ++n;
         return n;
+    }
+    void chooseCampaignFork(int mission) {
+        const int fork = campaignForkOfMission(mission);
+        if (fork < 0 || campaignForkPick(fork) != 0) return;
+        const int side = campaignForkSide(fork, mission);
+        if (side == 0 || !isCampaignMissionUnlocked(mission)) return;
+        save.campaignFork[fork] = (uint8_t)side;
+        save.campaignTrack = side;   // «последний выбор» для старых подписей
+        writeSave();
+        sound.play(SFX_LEVELUP, 0.05f);
     }
     void chooseCampaignTrack(int track) {
         if (track != 1 && track != 2) return;
-        if (isCampaignTrackChosen()) return;
-        // След фиксируется только на развилке акта II — не в акте III и не раньше.
-        if (campaignForkMission(track) < 0) return;
-        save.campaignTrack = track;
-        writeSave();
-        sound.play(SFX_LEVELUP, 0.05f);
+        const int door = campaignNextForkMission(track);
+        if (door >= 0) chooseCampaignFork(door);
     }
     // Два последних выбора (kind 3) взаимоисключающие: на ночь даётся один ответ.
     static int campaignChoiceSibling(int mission) {
@@ -1215,27 +1317,28 @@ struct Game {
     const char* campaignMissionStatus(int mission) const {
         if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return "НЕТ ДЕЛА";
         if (isCampaignMissionCompleted(mission)) return "ПРОЙДЕНА";
-        if (isCampaignMissionLockedByChoice(mission)) return "ДРУГОЙ ВЫБОР СДЕЛАН";
-        if (isCampaignMissionLockedByTrack(mission)) {
-            if (isCampaignTrackChosen()) return "ЗАКРЫТО ДО НОВОЙ НОЧИ";
-            if (campaignCanChooseTrackHere(mission))
-                return campaignTrackOf(mission) == 1 ? "СЛЕД А • ВЫБЕРИ" : "СЛЕД Б • ВЫБЕРИ";
-            // Дело впереди развилки: след здесь не выбирают, его выбирают в акте II.
-            return "СНАЧАЛА ВЫБЕРИ СЛЕД";
+        if (isCampaignMissionLockedByTrack(mission)) return "ВЕТКА ОТМЕРЛА";
+        if (campaignCanChooseTrackHere(mission)) {
+            const int fork = campaignForkOfMission(mission);
+            return campaignForkSide(fork, mission) == 2 ? "ВЕТКА Б • ВЫБЕРИ" : "ВЕТКА А • ВЫБЕРИ";
         }
         if (isCampaignMissionUnlocked(mission)) return "ДОСТУПНА";
         return "ЗАКРЫТА";
     }
-    // Здесь кнопка не только запускает дело, но и фиксирует выбор следа.
+    // Здесь кнопка не только запускает дело, но и фиксирует выбор головы.
     bool campaignCanChooseTrackHere(int mission) const {
-        if (isCampaignTrackChosen()) return false;
-        const int track = campaignTrackOf(mission);
-        if (track == 0) return false;
-        return campaignForkMission(track) == mission;
+        const int fork = campaignForkOfMission(mission);
+        if (fork < 0 || campaignForkPick(fork) != 0) return false;
+        if (campaignForkSide(fork, mission) == 0) return false;
+        return isCampaignMissionUnlocked(mission);
     }
     void confirmCampaignSelection(int mission) {
-        // «Пойти следом» = выбрать след и сразу начать дело: одно нажатие, а не два.
-        if (campaignCanChooseTrackHere(mission)) chooseCampaignTrack(campaignTrackOf(mission));
+        // «Пойти веткой» = выбрать голову развилки и сразу начать дело: одно
+        // нажатие, а не два. Именно здесь фиксируется выбор — обойти его
+        // навигацией нельзя, потому что запуск идёт только через эту функцию.
+        // Раньше фиксировался «след» по полю campaignTrack, а у выбора в акте V
+        // поле равно 0, поэтому выбор в финале вообще не записывался.
+        if (campaignCanChooseTrackHere(mission)) chooseCampaignFork(mission);
         if (isCampaignMissionUnlocked(mission)) launchStoryMission(mission);
     }
     static int campaignMissionWithBrief(int brief) {
@@ -1282,7 +1385,7 @@ struct Game {
             for (int k = 0; k < 2; ++k) {
                 if (pre[k] < 0 || isCampaignMissionCompleted(pre[k])) continue;
                 const int track = campaignTrackOf(pre[k]);
-                if (pass == 1 || track == 0 || track == save.campaignTrack) return pre[k];
+                if (pass == 1 || track == 0 || track == campaignLaneTrack()) return pre[k];
             }
         }
         return -1;
@@ -1299,7 +1402,9 @@ struct Game {
             int total = 0, done = 0;
             for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
                 if (CAMPAIGN_MISSIONS[i].act != act) continue;
-                if (CAMPAIGN_MISSIONS[i].track != 0 && CAMPAIGN_MISSIONS[i].track != save.campaignTrack) continue;
+                // Отмершая голова не мешает закрыть акт: играть по ней всё равно
+                // нельзя, а раньше именно она держала печать незакрытой.
+                if (isCampaignMissionLockedByTrack(i)) continue;
                 ++total;
                 if (isCampaignMissionCompleted(i)) ++done;
             }
@@ -7230,6 +7335,7 @@ struct Game {
         save.campaignCycle = std::min(3, save.campaignCycle + 1);
         save.campaignMissionsDone = 0;
         save.campaignTrack = 0; // в новую ночь можно пойти другим следом
+        for (int f = 0; f < CAMPAIGN_FORK_COUNT; ++f) save.campaignFork[f] = 0;
         save.storySealMask = 0;
         save.storyEntryMask = 0;
         save.storyChapter = 0;
@@ -7605,13 +7711,17 @@ struct Game {
         int slot = campaignActSlotOf(act, lane, storyMissionCursor);
         if (slot < 0) slot = 0;
         if (slotDelta != 0) {
-            if (!isCampaignTrackChosen()) {
-                const int doorA = campaignForkMission(1), doorB = campaignForkMission(2);
-                if (doorA < 0 || doorB < 0) return;
-                storyMissionCursor = (storyMissionCursor == doorA) ? doorB : doorA;
-                selectedStoryMission = storyMissionCursor;
-                campaignActView = 2;
-                return;
+            // На открытой развилке влево/вправо переключают две головы: выбор
+            // делается с клавиатуры так же, как мышью.
+            const int fork = campaignForkOfAct(act);
+            if (fork >= 0 && !campaignForkChosen(fork)) {
+                const int headA = campaignForkHead(fork, 1), headB = campaignForkHead(fork, 2);
+                if (headA >= 0 && headB >= 0) {
+                    storyMissionCursor = (storyMissionCursor == headA) ? headB : headA;
+                    selectedStoryMission = storyMissionCursor;
+                    campaignActView = act;
+                    return;
+                }
             }
             const int count = campaignActLaneCount(act, lane);
             if (count > 0) {
@@ -7649,7 +7759,11 @@ struct Game {
     // актов, справа от узла полосы следов. В актах II–IV две полосы: «А» и «Б».
     // Полоса выбранного следа светится, вторая перечёркнута до новой ночи.
     int campaignLaneTrack() const {
-        if (save.campaignTrack == 1 || save.campaignTrack == 2) return save.campaignTrack;
+        const int actFork = campaignForkOfAct(campaignActOf(storyMissionCursor));
+        if (actFork >= 0) {
+            const int pick = campaignForkPick(actFork);
+            if (pick != 0) return pick;
+        }
         const int t = campaignTrackOf(storyMissionCursor);
         return t != 0 ? t : 1;
     }
@@ -7671,6 +7785,32 @@ struct Game {
     // Сколько полос в акте: у актов с развилкой их две.
     int campaignActLanes(int act) const {
         return campaignActLaneCount(act, 2) > 0 ? 2 : 1;
+    }
+    // Счётчик акта — это одно прохождение, а не коллекция: на развилке
+    // играется одна голова, поэтому целиком вторая полоса в счёт не идёт.
+    int campaignActPlayableTotal(int act) const {
+        if (campaignActLanes(act) > 1)
+            return std::max(campaignActLaneCount(act, 1), campaignActLaneCount(act, 2));
+        int total = 0;
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+            if (CAMPAIGN_MISSIONS[i].act != act) continue;
+            const int f = campaignForkOfMission(i);
+            if (f >= 0 && campaignForkSide(f, i) == 2) continue;  // вторая голова развилки
+            ++total;
+        }
+        return total;
+    }
+    // Сколько дел проходится за одну ночь: на каждой развилке — одна голова.
+    int campaignRunMissionCount() const {
+        int n = 0;
+        for (int a = 1; a <= CAMPAIGN_ACT_COUNT; ++a) n += campaignActPlayableTotal(a);
+        return n;
+    }
+    int campaignActDoneCount(int act) const {
+        int done = 0;
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i)
+            if (CAMPAIGN_MISSIONS[i].act == act && isCampaignMissionCompleted(i)) ++done;
+        return done;
     }
     // ── Вертикальный список для портретного окна ───────────────────────────
     // Та же карта, развёрнутая в столбик: в колонку шириной 120 px ни одно
@@ -7732,12 +7872,8 @@ struct Game {
                 const uint32_t accent = CAMPAIGN_ACT_COLORS[row.act - 1];
                 const bool actOpen = isCampaignActUnlocked(row.act);
                 const bool actCurrent = campaignActView == row.act;
-                const int headerLane = campaignActLanes(row.act) > 1 ? campaignLaneTrack() : 0;
-                int done = 0, total = 0;
-                for (int slot = 0; slot < campaignActLaneCount(row.act, headerLane); ++slot) {
-                    ++total;
-                    if (isCampaignMissionCompleted(campaignActLaneMission(row.act, headerLane, slot))) ++done;
-                }
+                const int done = campaignActDoneCount(row.act);
+                const int total = campaignActPlayableTotal(row.act);
                 char actNum[16], counter[24];
                 snprintf(actNum, sizeof(actNum), "%s.", romanAct(row.act));
                 snprintf(counter, sizeof(counter), "%d/%d", done, total);
@@ -7754,7 +7890,9 @@ struct Game {
                 if (actOpen) r.fillRect(x, ry + FONT_SMALL.lineHeight + 4, w, 1, accent, 120);
             } else {
                 // Полоса следа: А золотая, Б бирюзовая, чужая гаснет.
-                const bool otherTrack = isCampaignTrackChosen() && save.campaignTrack != row.track;
+                const int rowFork = campaignForkOfAct(row.act);
+                const int rowPick = rowFork >= 0 ? campaignForkPick(rowFork) : 0;
+                const bool otherTrack = rowPick != 0 && rowPick != row.track;
                 const uint32_t col = otherTrack ? 0xFF4E4658
                                     : row.track == 1 ? 0xFFFFC860 : 0xFF5FE0C8;
                 char lane[64];
@@ -7767,7 +7905,7 @@ struct Game {
     }
 
     void renderMissionSelectPortrait(Renderer& r) {
-        renderMenuHeader(r, "КАМПАНИЯ • КАРТА ГЛАВ");
+        renderMenuHeader(r, options.campaignSnakeMap ? "КАМПАНИЯ • КАРТА ГЛАВ" : "КАМПАНИЯ • СПИСОК ДЕЛ");
         const int x = 20, w = SCREEN_W - 40;
         const int buttonY = SCREEN_H - 100, buttonH = 54;
         const int actionsTop = buttonY - (campaignActionsTwoRows(SCREEN_W) ? buttonH + 10 : 0);
@@ -7838,11 +7976,13 @@ struct Game {
         return rc;
     }
     // Цвет дороги: своя полоса светится, чужой след погашен, до выбора обе равны.
-    uint32_t campaignLaneLineColor(int laneIdx, int lanes) const {
-        if (lanes <= 1) return isCampaignTrackChosen() ? 0xFFFFD878 : 0xFF6E6288;
+    uint32_t campaignLaneLineColor(int act, int laneIdx, int lanes) const {
+        if (lanes <= 1) return 0xFFFFD878;
         const int track = laneIdx == 0 ? 1 : 2;
-        if (save.campaignTrack == track) return track == 1 ? 0xFFFFC860 : 0xFF5FE0C8;
-        if (!isCampaignTrackChosen()) return 0xFF8A7BA8;
+        const int fork = campaignForkOfAct(act);
+        const int pick = fork >= 0 ? campaignForkPick(fork) : 0;
+        if (pick == track) return track == 1 ? 0xFFFFC860 : 0xFF5FE0C8;
+        if (pick == 0) return 0xFF8A7BA8;
         return 0xFF3E3949;
     }
     // Узел дела: рамка, полоса дороги и название. Один вид для карты и для
@@ -7906,12 +8046,8 @@ struct Game {
             r.fillRoundedRect(cx, g.y, g.colW, g.height(), 9, actCurrent ? 0xFF1E1830 : 0xFF14101D);
             r.drawRoundedRect(cx, g.y, g.colW, g.height(), 9,
                               actCurrent ? 0xFFFFD858 : 0xFF443C58, 1, actCurrent ? 220 : 160);
-            const int headerLane = campaignActLanes(a) > 1 ? campaignLaneTrack() : 0;
-            int done = 0, total = 0;
-            for (int slot = 0; slot < campaignActLaneCount(a, headerLane); ++slot) {
-                ++total;
-                if (isCampaignMissionCompleted(campaignActLaneMission(a, headerLane, slot))) ++done;
-            }
+            const int done = campaignActDoneCount(a);
+            const int total = campaignActPlayableTotal(a);
             char counter[24];
             snprintf(counter, sizeof(counter), "%d/%d", done, total);
             const int counterW = r.textWidth(FONT_SMALL, counter);
@@ -7944,7 +8080,7 @@ struct Game {
                 for (int c = 0; c < curLanes; ++c) {
                     if (prevLanes > 1 && curLanes > 1 && p != c) continue;
                     const int laneForColor = curLanes > 1 ? c : (prevLanes > 1 ? p : 0);
-                    const uint32_t col = campaignLaneLineColor(laneForColor,
+                    const uint32_t col = campaignLaneLineColor(a, laneForColor,
                                                                curLanes > 1 ? curLanes : prevLanes);
                     const int x1 = g.colX(a - 1) + g.colW - 1, y1 = laneCenterY(a - 1, p);
                     const int x2 = g.colX(a) + 1, y2 = laneCenterY(a, c);
@@ -8152,12 +8288,385 @@ struct Game {
         else if (mouseClicked && startHover && canGo) confirmCampaignSelection(selected);
     }
 
+    // ── «Змейка»: новый экран кампании ───────────────────────────────────────
+    // Маршрут растёт снизу вверх: акт I у нижней кромки, акт V у верхней.
+    // Полосы А и Б идут параллельно и расходятся из узла развилки, как две
+    // головы одной змеи. Клик по голове фиксирует ветку, вторая гаснет навсегда
+    // и остаётся серой до новой ночи.
+    //
+    // Почему не таблица актов: в прежней карте игрок видел колонки слева
+    // направо, то есть читал кампанию как документ, а не как путь. Здесь путь
+    // один и вертикальный — как в «Slay the Spire», где выбор читается по
+    // развилке, а не по номеру столбца.
+    static int campaignSnakeActBase(int act) {
+        // акт I — 0..3, II — 4..7, III — 8..10, IV — 11..13, V — 14..18
+        static const int base[CAMPAIGN_ACT_COUNT] = {0, 4, 8, 11, 14};
+        return (act >= 1 && act <= CAMPAIGN_ACT_COUNT) ? base[act - 1] : 0;
+    }
+    // Уровень (ряд) дела в змейке. Считается из самого дерева, а не из таблицы:
+    // голова развилки всегда стоит на ряд выше своего пререквизита, поэтому
+    // слияние акта V автоматически оказывается над выбором «сохранить/сжечь».
+    int campaignSnakeLevel(int mission) const {
+        if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return 0;
+        const CampaignMissionDef& def = CAMPAIGN_MISSIONS[mission];
+        // Дело без пререквизита — начало своего акта, его ряд задаёт база акта.
+        if (def.prereqA < 0 && def.prereqB < 0)
+            return campaignSnakeActBase(def.act) +
+                   std::max(0, campaignActSlotOf(def.act, def.track, mission));
+        // Всё остальное стоит ровно над своим родителем. Это и держит обе головы
+        // развилки на одном ряду, и ставит слияние акта V над выбором.
+        int lvl = 0;
+        if (def.prereqA >= 0) lvl = std::max(lvl, campaignSnakeLevel(def.prereqA) + 1);
+        if (def.prereqB >= 0) lvl = std::max(lvl, campaignSnakeLevel(def.prereqB) + 1);
+        return lvl;
+    }
+    // Развилка отнимает одно дело из общего счёта: пройти можно только одну
+    // голову из двух, поэтому «17 / 30» никогда не превращалось в «30 / 30».
+    int campaignPossibleMissionCount() const { return CAMPAIGN_MISSION_COUNT - CAMPAIGN_FORK_COUNT; }
+    int campaignForkCountInAct(int act) const {
+        int n = 0;
+        for (int f = 0; f < CAMPAIGN_FORK_COUNT; ++f) if (CAMPAIGN_FORKS[f].act == act) ++n;
+        return n;
+    }
+    int campaignSnakeRows() const {
+        int rows = 1;
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) rows = std::max(rows, campaignSnakeLevel(i) + 1);
+        return rows;
+    }
+    // Смещение от центра: полоса А влево, Б вправо, общие дела по осевой.
+    int campaignSnakeDx(int mission, int spread) const {
+        if (mission < 0 || mission >= CAMPAIGN_MISSION_COUNT) return 0;
+        const int fork = campaignForkOfMission(mission);
+        if (fork >= 0) return campaignForkSide(fork, mission) == 2 ? spread : -spread;
+        const int act = CAMPAIGN_MISSIONS[mission].act;
+        if (campaignActLanes(act) < 2) return 0;
+        return campaignTrackOf(mission) == 2 ? spread : -spread;
+    }
+    // Цвет ребра: пройденный отрезок зелёный, непройденный серый, отмершая
+    // ветка — тёмная и с разрывом, чтобы её не путали с «просто закрытой».
+    uint32_t campaignSnakeEdgeColor(int from, int to) const {
+        if (isCampaignMissionLockedByTrack(from) || isCampaignMissionLockedByTrack(to)) return 0xFF2A2532;
+        if (isCampaignMissionCompleted(from) && isCampaignMissionCompleted(to)) return 0xFF57D392;
+        if (isCampaignMissionCompleted(from)) return 0xFF6C6480;
+        return 0xFF3C3648;
+    }
+    int campaignSnakeNodeR(int mission, bool compact) const {
+        const bool fork = campaignForkOfMission(mission) >= 0;
+        return (fork ? (compact ? 13 : 16) : (compact ? 9 : 11));
+    }
+    // Голова змеи: две точки-глаза и язык. Так развилка читается как развилка,
+    // а не как два кружка с цифрами. У отмершей головы глаза перечёркнуты.
+    void drawCampaignSnakeHead(Renderer& r, int x, int y, int rad, int dir, bool alive, bool chosen, bool hovered, uint32_t accent) {
+        // Голова — не кружок с цифрой: два круга (череп и челюсть), глаза с
+        // зрачками и раздвоенный язык. На 32 px это единственный способ, чтобы
+        // развилка читалась как развилка, а не как две монеты.
+        const int snoutX = x + dir * (rad - 3);
+        const uint32_t body = !alive ? 0xFF241F2B : chosen ? 0xFF2F6B4E : 0xFF24443A;
+        const uint32_t edge = !alive ? 0xFF453E50 : chosen ? 0xFF8EF0B4 : (hovered ? 0xFFFFF0B8 : 0xFF7CE8B4);
+        r.fillCircle(x - dir * 2, y, rad, body, 255);
+        r.fillCircle(snoutX, y + 2, std::max(5, rad * 2 / 3), body, 255);
+        r.drawCircleRing(x - dir * 2, y, rad, alive ? 2 : 1, edge, 240);
+        const int eyeDx = std::max(3, rad / 3);
+        const int eyeX = x + dir * 2;
+        const int eyeY = y - rad / 3;
+        const int eyeR = std::max(3, rad / 4);
+        if (!alive) {
+            // Перечёркнутые глаза: голова мертва, ветка закрыта до новой ночи.
+            for (int k = -1; k <= 1; k += 2) {
+                const int ex = eyeX + k * eyeDx;
+                r.drawLine(ex - 3, eyeY - 3, ex + 3, eyeY + 3, 0xFF8A8296, 1, 220, false);
+                r.drawLine(ex + 3, eyeY - 3, ex - 3, eyeY + 3, 0xFF8A8296, 1, 220, false);
+            }
+        } else {
+            for (int k = -1; k <= 1; k += 2) {
+                const int ex = eyeX + k * eyeDx;
+                r.fillCircle(ex, eyeY, eyeR, 0xFFF7F0CE, 255);
+                r.fillCircle(ex + dir, eyeY, std::max(1, eyeR - 2), 0xFF161320, 255);
+            }
+            // Пасть и язык смотрят вверх по маршруту: голова «ползёт» к акту V.
+            const int mouthY = y + rad / 2;
+            r.drawLine(snoutX, mouthY, snoutX + dir * 5, mouthY + 5, accent, 1, 230, false);
+            r.drawLine(x, y + rad - 2, x, y + rad + 5, accent, 1, 235, false);
+            r.drawLine(x, y + rad + 5, x - 4, y + rad + 10, accent, 1, 235, false);
+            r.drawLine(x, y + rad + 5, x + 4, y + rad + 10, accent, 1, 235, false);
+        }
+    }
+
+    void renderCampaignSnakeMenu(Renderer& r) {
+        // Подзаголовок не переносится: в узком окне он уходит за рамку, поэтому
+        // короткая версия включается по ширине, как это уже сделано в настройках.
+        const char* snakeHint = SCREEN_W < 980
+            ? "Снизу вверх • клик по голове выбирает ветку, вторая гаснет навсегда"
+            : "Снизу вверх • колесо — прокрутка • клик по голове змеи выбирает ветку, вторая гаснет навсегда";
+        renderSubmenuFrame(r, "КАМПАНИЯ • ЗМЕЙКА", snakeHint);
+        const int buttonY = SCREEN_H - 100, buttonH = 54;
+        const bool wide = SCREEN_W >= 1040 && SCREEN_W > SCREEN_H;
+        const bool compact = !wide;
+        int mapX, mapW, mapTop, mapBottom, detailX, detailY, detailW, detailH;
+        if (wide) {
+            const int gap = 22;
+            mapX = 24;
+            mapW = (SCREEN_W - 24 * 2 - gap) * 62 / 100;
+            detailX = mapX + mapW + gap;
+            detailW = SCREEN_W - 24 - detailX;
+            mapTop = 118;
+            mapBottom = buttonY - 12;
+            detailY = mapTop;
+            detailH = mapBottom - mapTop;
+        } else {
+            // В узком окне кнопки идут двумя рядами, поэтому досье обязано
+            // закончиться выше верхнего ряда, иначе оно ложится на «НАЗАД».
+            const int actionsTop = buttonY - (campaignActionsTwoRows(SCREEN_W) ? buttonH + 10 : 0);
+            const int minDetailH = SCREEN_H < 560 ? 84 : 150;
+            mapX = 20;
+            mapW = SCREEN_W - 40;
+            detailH = std::max(minDetailH, std::min(SCREEN_H / 4, 200));
+            detailX = mapX;
+            detailW = mapW;
+            detailY = actionsTop - 12 - detailH;
+            mapTop = 112;
+            mapBottom = detailY - 12;
+        }
+        // ── Шапка со счётчиками ──────────────────────────────────────────────
+        const int seals = storySealCount();
+        r.fillRoundedRect(20, 84, 176, 24, 7, 0xFF251B35);
+        r.drawRoundedRect(20, 84, 176, 24, 7, 0xFFFFD878, 1);
+        r.drawTextCentered(FONT_SMALL, 108, 89, "ПЕЧАТИ СЛОМАНЫ", 0xFFFFE5A0, false);
+        for (int i = 0; i < 4; ++i) {
+            const int sx = 204 + i * 20;
+            r.fillRoundedRect(sx, 90, 14, 11, 4, i < seals ? 0xFF65D89A : 0xFF3B3345);
+            r.drawRoundedRect(sx, 90, 14, 11, 4, i < seals ? 0xFFB6FFD0 : 0xFF6C6177, 1);
+        }
+        char progress[128];
+        int chosenForks = 0;
+        for (int f = 0; f < CAMPAIGN_FORK_COUNT; ++f) if (campaignForkChosen(f)) ++chosenForks;
+        if (save.campaignCycle > 0)
+            snprintf(progress, sizeof(progress), "ДЕЛА %d / %d • ВЕТОК ВЫБРАНО %d ИЗ %d • НОЧЬ %d",
+                     campaignCompletedCount(), CAMPAIGN_MISSION_COUNT, chosenForks, CAMPAIGN_FORK_COUNT, save.campaignCycle);
+        else
+            snprintf(progress, sizeof(progress), "ДЕЛА %d / %d • ВЕТОК ВЫБРАНО %d ИЗ %d",
+                     campaignCompletedCount(), CAMPAIGN_MISSION_COUNT, chosenForks, CAMPAIGN_FORK_COUNT);
+        r.drawText(FONT_SMALL, 292, 89, progress, 0xFFE4D7B5, false);
+
+        // ── Камера ───────────────────────────────────────────────────────────
+        const int rows = campaignSnakeRows();
+        const int rowStep = wide ? 46 : (SCREEN_H < 700 ? 34 : 40);
+        // Между актами — чуть больше воздуха: в этот зазор встаёт подпись акта,
+        // иначе она наезжает на название последнего дела предыдущей полосы.
+        const int actHeaderPad = wide ? 20 : 12;
+        std::vector<int> actOfLevel((size_t)rows, 1);
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+            const int lv = campaignSnakeLevel(i);
+            if (lv >= 0 && lv < rows) actOfLevel[(size_t)lv] = CAMPAIGN_MISSIONS[i].act;
+        }
+        const int spread = std::max(46, std::min(wide ? 210 : 96, mapW * (wide ? 27 : 22) / 100));
+        const int margin = rowStep / 2 + 12;
+        const int contentH = margin * 2 + (rows - 1) * rowStep + (CAMPAIGN_ACT_COUNT - 1) * actHeaderPad;
+        const int viewH = std::max(96, mapBottom - mapTop);
+        const int maxScroll = std::max(0, contentH - viewH);
+        const int selected = std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, storyMissionCursor));
+        const int centerX = mapX + mapW / 2;
+        // Если маршрут короче окна, он прижат к нижней кромке: акт I всегда
+        // начинается снизу, иначе в высоком окне под ним остаётся пустота.
+        const int bottomAnchor = std::max(0, viewH - contentH);
+        auto levelY = [&](int level) {
+            const int pad = (CAMPAIGN_ACT_COUNT - actOfLevel[(size_t)level]) * actHeaderPad;
+            return mapTop + margin + bottomAnchor + (rows - 1 - level) * rowStep + pad - campaignSnakeScroll;
+        };
+        // Камера сама подъезжает к выбранному делу — но только когда выбор
+        // сменился: иначе колесо мыши отменяло бы прокрутку каждый кадр.
+        if (storyMissionCursor != campaignSnakeLastCursor) {
+            campaignSnakeLastCursor = storyMissionCursor;
+            campaignSnakeScroll = margin + (rows - 1 - campaignSnakeLevel(selected)) * rowStep +
+                                  (CAMPAIGN_ACT_COUNT - actOfLevel[(size_t)campaignSnakeLevel(selected)]) * actHeaderPad -
+                                  viewH / 2;
+        }
+        if (mouseWheelDelta != 0) {
+            const int notches = std::max(1, std::abs(mouseWheelDelta) / 120);
+            campaignSnakeScroll += (mouseWheelDelta < 0 ? 1 : -1) * rowStep * notches;
+        }
+        campaignSnakeScroll = std::max(0, std::min(maxScroll, campaignSnakeScroll));
+
+        // ── Фон карты и рамки актов ──────────────────────────────────────────
+        r.fillRoundedRect(mapX, mapTop, mapW, viewH, 12, 0xFF0E0B16, 240);
+        r.drawRoundedRect(mapX, mapTop, mapW, viewH, 12, 0xFF3A3350, 1, 180);
+
+        // ── Тело маршрута: рёбра из пререквизитов ────────────────────────────
+        r.setClip(mapX + 1, mapTop + 1, mapW - 2, viewH - 2);
+        for (int a = 1; a <= CAMPAIGN_ACT_COUNT; ++a) {
+            const uint32_t accent = CAMPAIGN_ACT_COLORS[a - 1];
+            int lo = rows, hi = -1;
+            for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+                if (CAMPAIGN_MISSIONS[i].act != a) continue;
+                lo = std::min(lo, campaignSnakeLevel(i));
+                hi = std::max(hi, campaignSnakeLevel(i));
+            }
+            if (hi < 0) continue;
+            const int bandTop = levelY(hi) - rowStep / 2 - 2;
+            const int bandBot = levelY(lo) + rowStep / 2 + 2;
+            if (bandBot > mapTop && bandTop < mapBottom)
+                r.fillRoundedRect(mapX + 6, bandTop, mapW - 12, bandBot - bandTop, 10, accent, 15);
+            // Заголовок акта — в расширенном зазоре под его первой полосой.
+            const int labelY = levelY(lo) - rowStep / 2 - actHeaderPad / 2 - FONT_SMALL.ascent / 2;
+            if (labelY > mapTop + 2 && labelY < mapBottom - FONT_SMALL.lineHeight) {
+                const int done = campaignActDoneCount(a);
+                const int total = campaignActPlayableTotal(a);
+                char label[128];
+                snprintf(label, sizeof(label), "%s. %s • %d/%d", romanAct(a), CAMPAIGN_ACT_TITLES[a - 1], done, total);
+                const int lw = r.textWidth(FONT_SMALL, label) + 18;
+                // У акта с двумя полосами центр свободен — подпись по центру.
+                // У однополосного (акт I и ствол акта V) центр занят делами,
+                // поэтому подпись уходит к левой кромке.
+                const int lx = campaignActLanes(a) > 1 ? centerX - lw / 2 : mapX + 12;
+                r.fillRoundedRect(lx, labelY - 1, lw, FONT_SMALL.lineHeight + 2, 6, 0xFF0E0B16, 225);
+                r.drawText(FONT_SMALL, lx + 9, labelY, label,
+                           isCampaignActUnlocked(a) ? accent : 0xFF6E6678, false);
+            }
+        }
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+            const CampaignMissionDef& def = CAMPAIGN_MISSIONS[i];
+            const int y2 = levelY(campaignSnakeLevel(i));
+            const int x2 = centerX + campaignSnakeDx(i, spread);
+            const int pre[2] = {def.prereqA, def.prereqB};
+            for (int k = 0; k < 2; ++k) {
+                if (pre[k] < 0) continue;
+                const int y1 = levelY(campaignSnakeLevel(pre[k]));
+                const int x1 = centerX + campaignSnakeDx(pre[k], spread);
+                if (std::max(y1, y2) < mapTop - 40 || std::min(y1, y2) > mapBottom + 40) continue;
+                const uint32_t col = campaignSnakeEdgeColor(pre[k], i);
+                const bool dead = col == 0xFF2A2532;
+                // Тело змеи: тёмная подложка + светлая сердцевина.
+                r.drawLine(x1, y1, x2, y2, 0xFF171320, dead ? 5 : 9, 235, false);
+                if (dead) {
+                    // Отмершая ветка рвётся на штрихи: сплошная линия читалась
+                    // как рабочий маршрут, а он закрыт до новой ночи.
+                    const int steps = 8;
+                    for (int t = 0; t + 1 < steps; t += 2) {
+                        const int ax = x1 + (x2 - x1) * t / steps, ay = y1 + (y2 - y1) * t / steps;
+                        const int bx = x1 + (x2 - x1) * (t + 1) / steps, by = y1 + (y2 - y1) * (t + 1) / steps;
+                        r.drawLine(ax, ay, bx, by, col, 2, 150, false);
+                    }
+                } else {
+                    r.drawLine(x1, y1, x2, y2, col, 4, 235, false);
+                }
+            }
+        }
+        // ── Узлы дел ────────────────────────────────────────────────────────
+        for (int i = 0; i < CAMPAIGN_MISSION_COUNT; ++i) {
+            const CampaignMissionDef& def = CAMPAIGN_MISSIONS[i];
+            const int y = levelY(campaignSnakeLevel(i));
+            if (y < mapTop - 40 || y > mapBottom + 40) continue;
+            const int x = centerX + campaignSnakeDx(i, spread);
+            const int rad = campaignSnakeNodeR(i, compact);
+            const bool completed = isCampaignMissionCompleted(i);
+            const bool unlocked = isCampaignMissionUnlocked(i);
+            const bool dead = isCampaignMissionLockedByTrack(i);
+            const bool canChoose = campaignCanChooseTrackHere(i);
+            const bool focused = storyMissionCursor == i;
+            const bool hovered = std::abs(mouseX - x) <= rad + 3 && std::abs(mouseY - y) <= rad + 3;
+            const uint32_t accent = getCampaignAccent(i);
+            const bool fork = campaignForkOfMission(i) >= 0;
+            if (fork) {
+                const int pick = campaignForkPick(fork);
+                const bool chosenHead = pick != 0 && campaignForkSide(fork, i) == pick;
+                const int dir = campaignSnakeDx(i, spread) > 0 ? 1 : -1;
+                drawCampaignSnakeHead(r, x, y, rad, dir, !dead, chosenHead, hovered, accent);
+            } else {
+                const uint32_t fill = dead ? 0xFF191521
+                                    : completed ? 0xFF17342A
+                                    : unlocked ? (hovered ? 0xFF33284A : 0xFF221A33) : 0xFF161320;
+                const uint32_t edge = dead ? 0xFF3E3949
+                                    : completed ? 0xFF69E8A8
+                                    : unlocked ? (hovered ? 0xFFFFE9A8 : accent) : 0xFF46405A;
+                r.fillCircle(x, y, rad, fill, 255);
+                r.drawCircleRing(x, y, rad, completed || unlocked ? 2 : 1, edge, 245);
+                char num[8];
+                snprintf(num, sizeof(num), "%d", i);
+                r.drawTextCentered(FONT_SMALL, x, y - FONT_SMALL.ascent / 2 - 1, num,
+                                   dead ? 0xFF7A7386 : completed ? 0xFFBFFFDC : unlocked ? 0xFFFFEECD : 0xFF8A8296, false);
+            }
+            if (focused) r.drawCircleRing(x, y, rad + 4, 1, focused && canChoose ? 0xFFFFD858 : 0xFFFFFFFF, 220);
+            else if (canChoose) r.drawCircleRing(x, y, rad + 6, 1, 0xFFFFD858, 90);
+            // Название — сбоку от узла, наружу от осевой, чтобы не резать маршрут.
+            // Отмершее дело перечёркнуто: серый кружок без пометки читался как
+            // «просто ещё не открыто».
+            if (dead && !fork) {
+                const int q = std::max(4, rad - 3);
+                r.drawLine(x - q, y + q, x + q, y - q, 0xFF7C7488, 1, 200, false);
+            }
+            const char* label = def.mapTitle ? def.mapTitle : def.title;
+            const int dx = campaignSnakeDx(i, spread);
+            const int gap = rad + 8;
+            const uint32_t col = dead ? 0xFF6C6577
+                              : completed ? 0xFFCDFFD9
+                              : canChoose ? 0xFFFFF0B8
+                              : unlocked ? 0xFFE8DCC0 : 0xFF8A8296;
+            // Название всегда уходит от осевой наружу; у общих дел (dx == 0)
+            // центр — это и есть узел, поэтому текст идёт вправо.
+            const int tw = dx >= 0 ? std::max(0, mapX + mapW - 8 - (x + gap))
+                                   : std::max(0, (x - gap) - (mapX + 8));
+            std::string lines[2];
+            int lineCount = 1;
+            lines[0] = label;
+            if (fork && r.textWidth(FONT_SMALL, label) > tw) {
+                // Головы развилки подписываем двумя строками: сбоку от них всего
+                // треть ширины карты, а названия веток длинные.
+                const std::string full(label);
+                const size_t cut = full.rfind(' ');
+                if (cut != std::string::npos && cut > 0) {
+                    lines[0] = full.substr(0, cut);
+                    lines[1] = full.substr(cut + 1);
+                    lineCount = 2;
+                }
+            }
+            for (int ln = 0; ln < lineCount; ++ln) {
+                const int ly = y - FONT_SMALL.ascent / 2 + (lineCount == 2 ? (ln == 0 ? -8 : 8) : 0);
+                if (dx >= 0) {
+                    r.drawText(FONT_SMALL, x + gap, ly,
+                               fitText(r, FONT_SMALL, lines[ln].c_str(), tw).c_str(), col, false);
+                } else {
+                    r.drawTextRight(FONT_SMALL, x - gap, ly,
+                                    fitText(r, FONT_SMALL, lines[ln].c_str(), tw).c_str(), col, false);
+                }
+            }
+            // Клик: первый — выбрать для досье, второй по тому же узлу — идти.
+            if (mouseClicked && hovered && mouseY >= mapTop && mouseY <= mapBottom) {
+                if (storyMissionCursor == i && (unlocked || canChoose)) confirmCampaignSelection(i);
+                else {
+                    storyMissionCursor = i;
+                    selectedStoryMission = i;
+                    campaignActView = def.act;
+                    sound.play(SFX_CLICK, 0.02f);
+                }
+            }
+        }
+        r.clearClip();
+        // ── Полоса прокрутки камеры ──────────────────────────────────────────
+        if (maxScroll > 0) {
+            const int railX = mapX + mapW - 5;
+            const int railH = viewH - 24;
+            const int knobH = std::max(28, railH * viewH / std::max(viewH, contentH));
+            const int knobY = mapTop + 12 + (railH - knobH) * campaignSnakeScroll / maxScroll;
+            r.fillRoundedRect(railX - 1, mapTop + 12, 3, railH, 1, 0xFF2A2440, 220);
+            r.fillRoundedRect(railX - 2, knobY, 5, knobH, 2, 0xFF8A7BA8, 240);
+        }
+
+        const int detailSelected = std::max(0, std::min(CAMPAIGN_MISSION_COUNT - 1, storyMissionCursor));
+        drawCampaignDossier(r, detailX, detailY, detailW, detailH, detailSelected);
+        drawCampaignActions(r, buttonY, buttonH, detailSelected);
+        noteMissionPreview();
+    }
+
     void renderMissionSelectMenu(Renderer& r) {
+        // Стиль карты переключается в настройках: «змейка» — новый экран,
+        // «карта» — прежние колонки актов. Старый вариант не удалён: к нему
+        // возвращаются те, кому нужен список дел одним взглядом.
+        if (options.campaignSnakeMap) { renderCampaignSnakeMenu(r); return; }
         // Пять колонок перестают влезать в окно раньше, чем кончается место:
         // в узком окне карта идёт вертикальным списком, как в портретном.
         if (SCREEN_W < SCREEN_H || SCREEN_W < 860) { renderMissionSelectPortrait(r); return; }
         renderSubmenuFrame(r, "КАМПАНИЯ • КАРТА ГЛАВ",
-                          "Акты II–IV идут двумя следами: А — свидетель, Б — копия. Второй след откроется в новую ночь.");
+                          "Здесь ветки идут колонками: выбранная светится, отмершая гаснет до новой ночи.");
 
         const int completedCount = campaignCompletedCount();
         const int seals = storySealCount();
@@ -8176,13 +8685,19 @@ struct Game {
         else
             snprintf(progress, sizeof(progress), "ДЕЛ ЗАКРЫТО %d / %d", completedCount, CAMPAIGN_MISSION_COUNT);
         r.drawText(FONT_SMALL, 360, 90, progress, 0xFFE4D7B5, false);
-        char trackLine[96];
-        if (isCampaignTrackChosen())
-            snprintf(trackLine, sizeof(trackLine), "СЛЕД %s • %s",
-                     campaignTrackLetter(save.campaignTrack), campaignTrackName(save.campaignTrack));
-        else snprintf(trackLine, sizeof(trackLine), "СЛЕД НЕ ВЫБРАН");
+        char trackLine[128];
+        int chosenForks = 0, lastPick = 0;
+        for (int f = 0; f < CAMPAIGN_FORK_COUNT; ++f) {
+            if (!campaignForkChosen(f)) continue;
+            ++chosenForks;
+            lastPick = campaignForkPick(f);
+        }
+        if (chosenForks > 0)
+            snprintf(trackLine, sizeof(trackLine), "ВЕТОК %d ИЗ %d • ПОСЛЕДНЯЯ %s • %s",
+                     chosenForks, CAMPAIGN_FORK_COUNT, campaignTrackLetter(lastPick), campaignTrackName(lastPick));
+        else snprintf(trackLine, sizeof(trackLine), "ВЕТКА НЕ ВЫБРАНА");
         r.drawTextRight(FONT_SMALL, SCREEN_W - 22, 90, trackLine,
-                        isCampaignTrackChosen() ? 0xFFFFD858 : 0xFFBFB5D0);
+                        chosenForks > 0 ? 0xFFFFD858 : 0xFFBFB5D0);
 
         // ── Раскладка: карта сверху, досье снизу ──────────────────────────────
         // Досье ужимается ступенями: сначала теряет иллюстрацию, потом брифинг,
@@ -8519,8 +9034,13 @@ struct Game {
             "СЮЖЕТ", "ENDLESS", "КУЗНИЦА", "АРСЕНАЛ", "ЗАЛ СЛАВЫ", "НАСТРОЙКИ", "ВЫХОД"
         };
         static const char* subtitles[MAIN_MENU_ITEM_COUNT] = {
-            "28 ДЕЛ", "ВОЛНЫ", "МАГАЗИН", "СПРАВКА", "РЕЕСТР", "ПАРАМЕТРЫ", "ИЗ ИГРЫ"
+            "ДЕЛА", "ВОЛНЫ", "МАГАЗИН", "СПРАВКА", "РЕЕСТР", "ПАРАМЕТРЫ", "ИЗ ИГРЫ"
         };
+        // «28 ДЕЛ» было числом из старого линейного дерева. Теперь на каждой
+        // развилке играется одна голова, поэтому за ночь проходится 19 дел, и
+        // считать это надо из дерева, а не помнить руками.
+        char storySubtitle[32];
+        snprintf(storySubtitle, sizeof(storySubtitle), "%d ДЕЛ", campaignRunMissionCount());
         static const uint32_t accents[MAIN_MENU_ITEM_COUNT] = {
             0xFFFFC85A, 0xFF62D8F0, 0xFFFF9C56, 0xFFB58EFF,
             0xFF76E5B8, 0xFFA6C4FF, 0xFFFF7A83
@@ -8561,14 +9081,14 @@ struct Game {
             const uint32_t subColor = selected ? 0xFFFFD98A : 0xFFAAA3B8;
             if (item == 1) {
                 r.drawTextCentered(titleFont, tx, ty - 17, labels[item], titleColor, false);
-                r.drawTextCentered(FONT_SMALL, tx, ty + 1, subtitles[item], subColor, false);
+                r.drawTextCentered(FONT_SMALL, tx, ty + 1, item == 0 ? storySubtitle : subtitles[item], subColor, false);
                 r.drawTextCentered(FONT_SMALL, tx, ty + 17, "БЕЗ КОНЦА", subColor, false);
             } else if (item == 2 || item == 3) {
                 r.drawTextCentered(titleFont, tx, ty - 11, labels[item], titleColor, false);
-                r.drawTextCentered(FONT_SMALL, tx, ty + 10, subtitles[item], subColor, false);
+                r.drawTextCentered(FONT_SMALL, tx, ty + 10, item == 0 ? storySubtitle : subtitles[item], subColor, false);
             } else {
                 r.drawTextCentered(titleFont, tx, ty - 9, labels[item], titleColor, false);
-                r.drawTextCentered(FONT_SMALL, tx, ty + 13, subtitles[item], subColor, false);
+                r.drawTextCentered(FONT_SMALL, tx, ty + 13, item == 0 ? storySubtitle : subtitles[item], subColor, false);
             }
         }
 
@@ -8744,6 +9264,7 @@ struct Game {
         else if (optionId == 5) options.hardModeEnabled = !options.hardModeEnabled;
         else if (optionId == 6) options.projectileTrailsEnabled = !options.projectileTrailsEnabled;
         else if (optionId == 7) options.skillIconStyle = (options.skillIconStyle + 1) % 3;
+        else if (optionId == 9) options.campaignSnakeMap = options.campaignSnakeMap ? 0 : 1;
         else if (optionId == 8) {
             options.messageSpeechEnabled = options.messageSpeechEnabled != 0 ? 0 : 1;
             sound.setVoiceEnabled(options.messageSpeechEnabled != 0);
@@ -8771,32 +9292,36 @@ struct Game {
     void renderSettingsMenu(Renderer& r) {
         static int lastRefreshSecond = -1;
         if ((int)globalTime != lastRefreshSecond) { lastRefreshSecond = (int)globalTime; refreshVoiceStats(); }
-        renderSubmenuFrame(r, "НАСТРОЙКИ", "shadow_survivors.cfg • звук • эффекты • стиль иконок");
+        renderSubmenuFrame(r, "НАСТРОЙКИ", "shadow_survivors.cfg • звук • эффекты • стиль иконок • карта кампании");
 
-        const char* labels[8] = {
+        const char* labels[9] = {
             "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
             "Советник по сборке (ИИ)", "БЕЗДНА — давление выше; пауэрапы только с умных", "Следы снарядов",
-            "Стиль иконок предметов", "Озвучка сообщений в бою"
+            "Стиль иконок предметов", "Озвучка сообщений в бою",
+            "Карта кампании: змейка снизу вверх или карта актами"
         };
         // Narrow portraits need shorter labels: the ВКЛ/ВЫКЛ value is right-aligned on the row.
-        static const char* labelsPortrait[8] = {
+        static const char* labelsPortrait[9] = {
             "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
             "Советник по сборке (ИИ)", "БЕЗДНА — сложнее", "Следы снарядов",
-            "Стиль иконок предметов", "Озвучка сообщений в бою"
+            "Стиль иконок предметов", "Озвучка сообщений в бою",
+            "Карта кампании"
         };
-        const bool values[8] = {
+        const bool values[9] = {
             sound.enabled.load(std::memory_order_relaxed), options.hitEffectsEnabled != 0,
             options.screenShakeEnabled != 0, options.advisorEnabled != 0,
             options.hardModeEnabled != 0, options.projectileTrailsEnabled != 0, options.skillIconStyle != 0,
-            options.messageSpeechEnabled != 0
+            options.messageSpeechEnabled != 0, options.campaignSnakeMap != 0
         };
         const bool portraitLayout = SCREEN_W < SCREEN_H;
         const char* const* rowLabels = portraitLayout ? labelsPortrait : labels;
         const int x = portraitLayout ? 24 : (SCREEN_W < 1100 ? 24 : 260);
         const int w = portraitLayout || SCREEN_W < 1100 ? SCREEN_W - 48 : 760;
-        const int h = portraitLayout ? 54 : 36, startY = portraitLayout ? 150 : 96, gap = portraitLayout ? 8 : 2;
+        // Девять строк вместо восьми: в портрете они ужимаются, иначе нижние
+        // строки уезжают под кнопку «назад».
+        const int h = portraitLayout ? 40 : 36, startY = portraitLayout ? 146 : 96, gap = portraitLayout ? 4 : 2;
         char stateText[24];
-        for (int i = 0; i < 8; ++i) {
+        for (int i = 0; i < 9; ++i) {
             int y = startY + i * (h + gap);
             bool hov = mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h;
             uint32_t border = hov ? 0xFFFFD848 : (values[i] ? 0xFF68DDA0 : 0xFF685878);
@@ -8807,12 +9332,13 @@ struct Game {
                 static const char* iconStyles[3] = {"ВЕКТОР", "ИИ-АРТ", "ЦВЕТ"};
                 snprintf(stateText, sizeof(stateText), "%s", iconStyles[std::max(0, std::min(2, options.skillIconStyle))]);
             }
+            else if (i == 8) snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ЗМЕЙКА" : "КАРТА");
             else snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ВКЛ" : "ВЫКЛ");
             r.drawTextRight(FONT_MED, x + w - 24, y + (h - 18) / 2, stateText, values[i] ? 0xFF68F0A0 : 0xFFFF8B98);
             if (mouseClicked && hov) toggleOption(i + 1);
         }
 
-        const int volumeY = startY + 8 * (h + gap) + 22;
+        const int volumeY = startY + 9 * (h + gap) + 22;
         auto drawVolume = [&](int channel, int y, const char* label, float value) {
             const int rowX = x, rowW = w, rowH = portraitLayout ? 44 : 38;
             const int trackW = std::min(310, rowW * 38 / 100);
@@ -8855,10 +9381,12 @@ struct Game {
             snprintf(voiceLine, sizeof(voiceLine), "ОЗВУЧКА: ВСЕ %d ФРАЗ НА МЕСТЕ — audio/voice/", voiceClips);
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 20, voiceLine, voiceMissing > 0 ? 0xFFFFC98A : 0xFF8CD8B0);
         if (portraitLayout) {
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 40, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–8] ПЕРЕКЛЮЧАТЕЛИ", 0xFFAAA0C8);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 40, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] ПЕРЕКЛЮЧАТЕЛИ", 0xFFAAA0C8);
         } else {
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 574, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–8] ПЕРЕКЛЮЧАТЕЛИ • КЛИК МЫШЬЮ", 0xFFAAA0C8);
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 612, "ГОЛОС — ЗАПИСАННЫЕ ФРАЗЫ В audio/voice/; СПИСОК И СЧЁТЧИКИ В F3", 0xFF8C82A8);
+            // Подсказки ниже счётчиков считаются от infoY: с девятой строкой
+            // настроек фиксированный y=574 наезжал на строку про музыку.
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 40, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] ПЕРЕКЛЮЧАТЕЛИ • КЛИК МЫШЬЮ", 0xFFAAA0C8);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 62, "ГОЛОС — ЗАПИСАННЫЕ ФРАЗЫ В audio/voice/; СПИСОК И СЧЁТЧИКИ В F3", 0xFF8C82A8);
         }
         int bw = std::min(340, SCREEN_W - 48), bh = 50;
         int bx = (SCREEN_W - bw) / 2, by = portraitLayout ? SCREEN_H - 76 : 651;
@@ -8981,6 +9509,7 @@ struct Game {
             "2.10.31 • РУКИ СТРАЖЕЙ: ПОЧИНЕНА ОТРИСОВКА ЛИНИЙ И ПРОСВЕТ В СИЛУЭТЕ",
             "2.10.32 • МЕТАЛЛ, ТКАНЬ И СТЕКЛО СВЕТЯТСЯ ПО-РАЗНОМУ",
             "2.10.33 • СТРАЖИ ОЖИЛИ: ПЕРИФЕРИЯ ОТСТАЁТ, ПОЗА ДОГОНЯЕТ, ОТДАЧА ПРИСЕДАЕТ",
+            "2.10.34 • КАМПАНИЯ: РАЗВИЛКА В КАЖДОМ АКТЕ И КАРТА-ЗМЕЙКА",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -9109,7 +9638,8 @@ struct Game {
             "• Разворот: стражи больше не смотрят вправо, куда бы ни шли. Фигура зеркалится целиком — алебарда, щит, книга, колба, слепок Двойника, — поэтому страж всегда лицом к герою.\n• Выпад: раньше на ударе двигалась одна деталь (древко, книга, перо), а корпус стоял статуей. Теперь на замахе страж отклоняется назад, на выбросе подаётся всем телом к герою.\n• Отдача: попадание по стражу не только вспыхивает белым. Фигура приседает и сжимается на 5 процентов, вспышка держится 0.18 с и гаснет, так что серия попаданий читается телом, а не только цветом.\n• Смерть: раньше стражи исчезали в тот же кадр, что и падение полоски здоровья. Теперь у них 1.45 с на смерть — фигура проседает и сжимается, гаснет, из неё летят 16 осколков и два расходящихся кольца цвета стража. Видно, что босс именно убит, а не пропал.\n• Смена фазы перестала быть пустой: сверху и снизу экрана встают полосы цвета стража со сходящимися штрихами, по центру — имя, номер фазы и её название. Держится 3.2 с, вход и выход плавные, середина арены бою не мешает.\n• Лист кадров — design/boss_animations.png: все шесть стражей лицом к герою в обе стороны, замах, выброс и смерть.\n• Стенд смерти показал выжигание цвета: аддитивные кольца из многих сегментов уходили в белый. Теперь кольца рисуются обычным смешиванием и гаснут вместе с фигурой.",
             "• Свет у стражей был у каждого свой: у Моргара блик сверху, у Малакора справа, а у Протоколиста вообще снизу — шесть стражей выглядели как шесть разных игр. Теперь направление одно на весь бестиарий: сверху-слева.\n• После отрисовки фигуры идёт один проход по её маске: край со стороны света подсвечивается, обратная сторона уходит в собственную тень, стыки деталей получают вполовину более слабый эффект (иначе фигура выглядит тиснёной).\n• Стыки деталей важнее силуэта: раньше объём читался только по внешнему контуру, а щит на плече и книга на груди оставались плоскими. Теперь у каждой детали есть свой освещённый верх и затемнённый низ.\n• Мягкий градиент по фигуре и затемнение последних 14 пикселей у земли: страж стоит на полу, а не лежит на нём картинкой.\n• Тень больше не висит на фиксированной высоте: она рисуется по реальному низу фигуры. Азарот висел над землёй на 24 пикселя, Протоколист — на 34, Двойник — на 22. Ниже тени добавлен узкий контактный эллипс.\n• Вспышка попадания и ярость проверены отдельно: свет не выжигает белое и не спорит с красным кольцом фазы.\n• Цена прохода — около 0.5 мс на стража (три стража в кадре: 1.4–1.6 мс из 16.7). Область прохода 250×232 пикселя, за её края фигура не выходит ни в одной позе.\n• Лист было/стало — design/boss_lighting.png, разбор с цифрами — design/char_model_audit.md.",            "• У всех шести стражей руки, посохи и перья рисуются лямбдой DL, а в ней были перепутаны аргументы: в цвет попадала толщина (почти чёрный пиксель 0x0000000A без альфы), а в толщину — упакованный цвет, который как int отрицателен. Линия вырождалась в цепочку одиночных тёмных точек: у Кардинала и Протоколиста рук не было видно вовсе, остальные линии тоже не читались.\n• Порядок аргументов исправлен, и линии появились сразу у четырёх стражей: Моргар (древко), Кардинал (руки и перо), Протоколист (обе руки), Двойник (руки обоих тел).\n• Протоколист: рука выходит из-под наплечника, локтем уходит за мантию и возвращается кистью на верхний угол тома. Между предплечьем и мантией сквозной просвет — первая настоящая дыра в силуэте стража (стенд /tmp/negspace: 0 → 5 дыр).\n• Объём рук: тело камнем, блик тонкой линией по верхне-левой стороне. Раньше блик шёл по центру трубы, и вся рука светилась, как пластиковая.\n• Моргар: гребень врос в шлем и ломает верхнюю линию головы. Шею с просветом пробовал дважды — на приземистом торсе она читалась тонкой палкой и горлышком бутылки, а рога по краям шлема висели в воздухе; для стража-башни сплошная масса — намеренная часть образа.\n• Двойник: руки обоих тел стали стеклянными с тонким бликом — после починки DL они светились белыми палками ярче головы.\n• Цифры (площадь / выпуклость / заполнение / дыры): Моргар 8046/0.72/72%/2 → 8677/0.77/77%/0; Протоколист 12076/0.60/60%/0 → 13873/0.68/67%/5; Двойник 13661/0.72/72%/3 → 14161/0.74/74%/5; Кардинал 5993/0.65/65% → 6153/0.66/66%.\n• Лист было/стало — design/boss_silhouettes_231.png, разбор с цифрами — design/char_model_audit.md, §11.",
             "• Проход объёма применял один приём ко всем шести стражам: металл, ткань, камень и стекло получали одинаковый блик и одинаковую тень, и вся линейка выглядела отлитой из одного материала.\n• Теперь у каждого материала своя рампа. Металл (Моргар): блик в 2 px и короткая жёсткая тень. Ткань (Кардинал) и плоть (Малакор): широкий мягкий переход, а на стыке деталей только тень, без светлого канта. Камень (Азарот, Протоколист): посередине. Стекло (Двойник): яркий край почти без собственной тени. Пергамент, страницы книг, кость и маска блика не получают вовсе — на них он читался как пластик.\n• Пергамент отличается от камня не яркостью, а теплом: у Протоколиста камень тоже светлый, но синего в нём больше красного.\n• Контактная тень между деталями: кант в 2 px, в полтора раза сильнее обычной тени силуэта. Раньше стык шёл на 45 % от силуэта, и детали сливались в одно пятно.\n• Ступенчатую рампировку (три тона по осям кадра) пробовал и отверг: на крупном теле она даёт прямой диагональный шов через всю фигуру — у Азарота балахон делился на светлую и тёмную половину ровной линией. Тона даёт форма: блик у края, кольцо собственной тени внутри, контактный кант на стыке.\n• Цифры: тонов на фигуре 171–373 (порог аудита 30), доля пяти самых частых 19–36 % (порог 75 %). Контраст стыка деталей: Моргар 30.2 → 47.3, Кардинал 41.7 → 51.8, Двойник 32.3 → 38.1, Азарот 30.6 → 32.7, Протоколист 29.9 → 32.2, Малакор 33.5 → 32.6 (у мягких материалов стык и должен быть мягким).\n• Цена: +0.05 мс на стража, три стража в кадре 1.43 → 1.59 мс из 16.7.\n• Лист было/стало — design/boss_materials_232.png, разбор — design/char_model_audit.md, §12.",
-            "Четвёртый пункт аудита моделей: анимация стражей. Периферия теперь отстаёт от корпуса по фазе: подол, полы мантии, ленты, перья и кисти считаются от времени, снятого на 60-160 мс раньше, поэтому корпус уже пошёл, а подол ещё висит.\nПоза замаха и выброса догоняется пружиной с перелётом вместо мгновенной ступеньки: перелёт до 1,012, после удара проседание до -0,057, успокоение 16 кадров.\nОтдача от попадания стала приседанием: по вертикали фигура ужимается сильнее, чем по горизонтали, и объём сохраняется. Кардинал качается в такт шагу.\nНиже 60 px мелкие частицы, заклёпки и трещины не рисуются - силуэт остаётся чистым.\nЗамеры: расхождение подол/корпус 1,24 -> 2,82 px, W/H при ударе 0,63 -> 0,71, ход корпуса Кардинала 0,1 -> 4,2 px, одиночных пикселей у Азарота 26 -> 0. Три стража на кадр: 1,30 -> 1,27 мс."
+            "Четвёртый пункт аудита моделей: анимация стражей. Периферия теперь отстаёт от корпуса по фазе: подол, полы мантии, ленты, перья и кисти считаются от времени, снятого на 60-160 мс раньше, поэтому корпус уже пошёл, а подол ещё висит.\nПоза замаха и выброса догоняется пружиной с перелётом вместо мгновенной ступеньки: перелёт до 1,012, после удара проседание до -0,057, успокоение 16 кадров.\nОтдача от попадания стала приседанием: по вертикали фигура ужимается сильнее, чем по горизонтали, и объём сохраняется. Кардинал качается в такт шагу.\nНиже 60 px мелкие частицы, заклёпки и трещины не рисуются - силуэт остаётся чистым.\nЗамеры: расхождение подол/корпус 1,24 -> 2,82 px, W/H при ударе 0,63 -> 0,71, ход корпуса Кардинала 0,1 -> 4,2 px, одиночных пикселей у Азарота 26 -> 0. Три стража на кадр: 1,30 -> 1,27 мс.",
+            "• Кампания больше не держится на одной развилке: выбор спрашивают на входе в каждый акт II–V, и каждый раз он меняет четверть прохождения. Выбор в акте V теперь виден как выбор, а не как два дела подряд.\n• Новый экран «ЗМЕЙКА»: маршрут растёт снизу вверх, камера стартует у акта I, пройденное светится зелёным, непройденное серое, по колесу мыши маршрут прокручивается, а камера сама подъезжает к выбранному делу.\n• Развилка нарисована как две головы змеи: глаза со зрачками и раздвоенный язык. Клик по голове выбирает ветку: вторая гаснет, её голова получает крестики вместо глаз, полоса сереет, связи рвутся на штрихи.\n• Первый клик по голове показывает дело в досье, второй — идёт в бой (или Enter), поэтому выбор нельзя сделать случайно.\n• В настройках появился переключатель «Карта кампании»: ЗМЕЙКА или КАРТА. Прежняя карта колонками осталась целиком — новый интерфейс не вместо старого.\n• Сейв v9: выбор хранится по каждой развилке отдельно (campaignFork[4]). Старый сейв мигрирует: прежний «след» переносится в акты II–IV, а выбор акта V восстанавливается по тому, какое дело было закрыто.\n• Счётчики актов считают одно прохождение: в акте с развилкой в счёт идёт одна голова, поэтому «3/6» в акте V больше не появится.\n• setClip теперь режет и заливки, а не только текст: прокручиваемый маршрут не рисует дела поверх кнопок внизу экрана.\n• Дерево кампании перестроено в tools/campaign.py: у дел 009, 011, 019, 022 по два пререквизита — головы акта III открываются с любой полосы акта II, и то же для акта IV.\n• Проверено на 1920x1080, 1600x900, 1280x720, 1080x1920 и 800x600. Листы — design/campaign_snake.png и design/campaign_snake_old.png, разбор — design/campaign_map_snake.md."
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
@@ -10471,7 +11001,7 @@ struct Game {
             if (key == 27 || key == 'P' || key == 'p') state = STATE_PLAYING;
             else if (key == 'O' || key == 'o') { settingsReturnState = STATE_PAUSED; state = STATE_SETTINGS; }
         } else if (state == STATE_SETTINGS) {
-            if (key >= '1' && key <= '8') toggleOption(key - '0');
+            if (key >= '1' && key <= '9') toggleOption(key - '0');
             else if (key == 9) settingsVolumeFocus = (settingsVolumeFocus + 1) % 2;
             else if (key == 37 || key == 39) adjustSoundVolume(key == 37 ? -1 : 1);
             else if (key == 27) state = settingsReturnState;
