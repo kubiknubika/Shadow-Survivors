@@ -90,6 +90,11 @@ struct Renderer {
     int height = 0;
     std::vector<uint8_t> vignetteAlpha;   // запечённая карта затемнения
     int vignetteW = -1, vignetteH = -1;
+    // Снимок области кадра до отрисовки фигуры и маска её пикселей: по ним
+    // считается объём (свет сверху-слева, тень с обратной стороны, AO у земли).
+    std::vector<uint32_t> figureScratch;
+    std::vector<uint16_t> figureColor;   // упакованный цвет детали (5 бит на канал)
+    std::vector<uint8_t> figureMask;
     // 0 = compact vector icons, 1 = AI-rendered art for the two approved skill variants.
     int skillIconStyle = 0; // 0 = vector, 1 = AI art, 2 = «цвет» (один предмет — один цвет)
 
@@ -755,6 +760,159 @@ struct Renderer {
             }
             blendSpan(py, cx - extent, cx + extent, 0xFF040208, 135);
         }
+    }
+
+    // ── Общий свет фигур ──────────────────────────────────────────────────────
+    // Одно направление света на весь бестиарий: сверху-слева. Раньше у каждого
+    // стража блик стоял там, где его нарисовали: у Моргара сверху, у Малакора
+    // справа, у Протоколиста вообще снизу — шесть стражей выглядели как шесть
+    // разных игр. Направление задаётся здесь один раз и одинаково для всех.
+    static constexpr int FIG_LIGHT_DX = -1;
+    static constexpr int FIG_LIGHT_DY = -1;
+    static constexpr int FIG_RIM_DEPTH = 3;    // толщина подсветки края, px
+    static constexpr int FIG_CORE_DEPTH = 4;   // толщина собственной тени, px
+    // Сила прохода вынесена в поля, чтобы её можно было перебрать стендом:
+    // «слишком мало» и «слишком много» здесь отличаются на десятую.
+    static inline float FIG_RIM_STRENGTH = 0.46f;
+    static inline float FIG_CORE_STRENGTH = 0.30f;
+    static inline float FIG_INTERNAL = 0.45f;   // вес стыка деталей против силуэта
+    static inline float FIG_GRAD_LIGHT = 0.18f;
+    static inline float FIG_GRAD_DARK = 0.22f;
+    // Выключатель нужен стендам: свет сравнивается «до и после» на одном кадре,
+    // иначе цифры смешивают разные палитры стражей.
+    static inline bool figureVolumeEnabled = true;
+    static inline float figureVolumeGradient = 1.0f;
+
+    // Снимок области кадра ДО отрисовки фигуры. Ореол, знак на полу и осколки
+    // уже нарисованы, поэтому в маску объёма они не попадут.
+    void captureFigureRegion(int x0, int y0, int w, int h) {
+        const int W = std::min(SCREEN_W, width), H = std::min(SCREEN_H, height);
+        figureScratch.resize((size_t)w * h);
+        for (int j = 0; j < h; ++j) {
+            const int sy = y0 + j;
+            for (int i = 0; i < w; ++i) {
+                const int sx = x0 + i;
+                figureScratch[(size_t)j * w + i] =
+                    (sx >= 0 && sy >= 0 && sx < W && sy < H) ? pixels[(size_t)sy * W + sx] : 0u;
+            }
+        }
+    }
+
+    // Объём фигуры: край со стороны света светлеет, противоположный уходит в
+    // тень, низ темнеет (AO от земли). В 3D это rim-свет, core shadow и AO;
+    // здесь — один проход по маске, поэтому фигуру не нужно перерисовывать.
+    // Границы берутся двух родов: силуэт (фигура против фона) и стык деталей.
+    // Стык даёт вполовину более слабый эффект — иначе фигура выглядит не
+    // объёмной, а тиснёной, с двойными контурами у каждой детали.
+    void applyFigureVolume(int x0, int y0, int w, int h, float strength = 1.0f, float gradient = 0.0f,
+                           int bodyCx = 0, int bodyCy = 0) {
+        if (strength <= 0.01f || w <= 0 || h <= 0) return;
+        const int W = std::min(SCREEN_W, width), H = std::min(SCREEN_H, height);
+        if ((int)figureScratch.size() != w * h) return;
+        figureMask.resize((size_t)w * h);
+        figureColor.resize((size_t)w * h);
+        int bottom = -1, top = h, leftmost = w, rightmost = -1;
+        for (int j = 0; j < h; ++j) {
+            for (int i = 0; i < w; ++i) {
+                const int sx = x0 + i, sy = y0 + j;
+                if (sx < 0 || sy < 0 || sx >= W || sy >= H) { figureMask[(size_t)j * w + i] = 0; continue; }
+                const uint32_t pix = pixels[(size_t)sy * W + sx];
+                // Плотный ключ цвета: 5 бит на канал. Полный цвет детали не нужен,
+                // нужно только «это та же деталь или соседняя», а 32-битная копия
+                // области стоила дороже самого прохода.
+                figureColor[(size_t)j * w + i] = (uint16_t)((((pix >> 19) & 0x1F) << 10) |
+                                                           (((pix >> 11) & 0x1F) << 5) |
+                                                           ((pix >> 3) & 0x1F));
+                const bool solid = pix != figureScratch[(size_t)j * w + i];
+                figureMask[(size_t)j * w + i] = solid ? 1 : 0;
+                if (solid) {
+                    if (j > bottom) bottom = j;
+                    if (j < top) top = j;
+                    if (i < leftmost) leftmost = i;
+                    if (i > rightmost) rightmost = i;
+                }
+            }
+        }
+        if (bottom < 0) return;
+        const float k = std::max(0.0f, std::min(1.0f, strength));
+        // Центр градиента — центр самой фигуры (cx, cy вызова), а не середина
+        // рамки: у Моргара щит уводит рамку влево, и по рамке половина тела
+        // попадала в «тень» независимо от позы.
+        const float gc = (float)(bodyCx - x0), gr = (float)(bodyCy - y0);
+        const float ghw = std::max(1.0f, std::max(std::fabs((float)leftmost - gc), std::fabs((float)rightmost - gc)));
+        const float ghh = std::max(1.0f, std::max(std::fabs((float)top - gr), std::fabs((float)bottom - gr)));
+        auto solidAt = [&](int i, int j) {
+            if (i < 0 || j < 0 || i >= w || j >= h) return false;
+            return figureMask[(size_t)j * w + i] != 0;
+        };
+        // Ищет ближайшую границу в заданном направлении и говорит, силуэт это
+        // или стык деталей (по цвету соседа).
+        auto boundaryToward = [&](int i, int j, int dx, int dy, int depth, bool& silhouette) {
+            silhouette = false;
+            const int c0 = figureColor[(size_t)j * w + i];
+            const int r0 = (c0 >> 10) & 0x1F, g0 = (c0 >> 5) & 0x1F, b0 = c0 & 0x1F;
+            for (int d = 1; d <= depth; ++d) {
+                const int ni = i + dx * d, nj = j + dy * d;
+                if (!solidAt(ni, nj)) { silhouette = true; return d; }
+                const int c1 = figureColor[(size_t)nj * w + ni];
+                const int dr = std::abs(r0 - ((c1 >> 10) & 0x1F));
+                const int dg = std::abs(g0 - ((c1 >> 5) & 0x1F));
+                const int db = std::abs(b0 - (c1 & 0x1F));
+                if (dr + dg + db > 4) return d;
+            }
+            return 0;
+        };
+        for (int j = 0; j <= bottom; ++j) {
+            for (int i = 0; i < w; ++i) {
+                if (!solidAt(i, j)) continue;
+                const int sx = x0 + i, sy = y0 + j;
+                if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
+                uint32_t c = pixels[(size_t)sy * W + sx];
+                // Мягкий градиент: вся фигура чуть светлее со стороны света и
+                // чуть темнее с обратной. В 3D это ambient по нормалям; без него
+                // объём читался бы только по кромке, как у наклейки.
+                if (gradient > 0.001f) {
+                    const float nx = (i - gc) / ghw, ny = (j - gr) / ghh;
+                    const float dot = (nx * FIG_LIGHT_DX + ny * FIG_LIGHT_DY) * 0.70710678f;
+                    if (dot > 0.0f) c = lerpColor(c, 0xFFFFE8C0, dot * FIG_GRAD_LIGHT * gradient * k);
+                    else c = lerpColor(c, 0xFF0A0714, -dot * FIG_GRAD_DARK * gradient * k);
+                }
+                bool rimSil = false, coreSil = false;
+                const int rimD = boundaryToward(i, j, FIG_LIGHT_DX, FIG_LIGHT_DY, FIG_RIM_DEPTH, rimSil);
+                const int coreD = rimD ? 0
+                    : boundaryToward(i, j, -FIG_LIGHT_DX, -FIG_LIGHT_DY, FIG_CORE_DEPTH, coreSil);
+                if (rimD) {
+                    const float edge = 1.0f - (rimD - 1) / (float)FIG_RIM_DEPTH;
+                    const float t = edge * FIG_RIM_STRENGTH * (rimSil ? 1.0f : FIG_INTERNAL) * k;
+                    c = lerpColor(c, 0xFFFFF4D6, t);
+                } else if (coreD) {
+                    const float edge = 1.0f - (coreD - 1) / (float)FIG_CORE_DEPTH;
+                    const float t = edge * FIG_CORE_STRENGTH * (coreSil ? 1.0f : FIG_INTERNAL) * k;
+                    c = lerpColor(c, 0xFF06040C, t);
+                }
+                // AO у земли: последние 14 px фигуры темнеют — фигура стоит на
+                // полу, а не лежит на нём картинкой.
+                const int aoBand = 14;
+                if (bottom - j < aoBand) {
+                    const float t = (1.0f - (bottom - j) / (float)aoBand) * 0.16f * k;
+                    c = lerpColor(c, 0xFF07050E, t);
+                }
+                pixels[(size_t)sy * W + sx] = c;
+            }
+        }
+    }
+
+    // Низ фигуры в пикселях от cy при масштабе 1.12. Замерено стендом по кадрам
+    // (design/char_model_audit.md, §6): у Азарота, Протоколиста и Двойника низ
+    // на 22–34 px ниже общего cy+50, и они висели над собственной тенью.
+    static int bossFootOffset(int id) {
+        static const int t[6] = {60, 50, 52, 74, 84, 72};
+        return t[std::max(0, std::min(5, id))];
+    }
+    // Ширина тени по ширине силуэта, а не одна на всех.
+    static int bossShadowWidth(int id) {
+        static const int t[6] = {34, 30, 32, 46, 44, 46};
+        return t[std::max(0, std::min(5, id))];
     }
 
     void drawHeroSprite(int cx, int cy, int heroClass, float animTime, int facing, bool hurtFlash, bool dashing) {
@@ -1624,9 +1782,23 @@ struct Renderer {
             }
         }
         addGlow(cx, cy, 62, auraCol, enraged ? 190 : 140);
-        drawShadow(cx, cy + 50, 36, 12);
+        // Тень стоит под ступнями, а не на фиксированном cy+50: у трёх стражей
+        // низ фигуры ниже на 22–34 px, и они висели в воздухе. Второй, узкий
+        // эллипс — контактная AO, без неё фигура «лежит» на полу, а не стоит.
+        const int footY = cy + bossFootOffset(bossId);
+        const int shadowW = bossShadowWidth(bossId);
+        drawShadow(cx, footY - 3, shadowW, 12);
+        drawShadow(cx, footY - 2, shadowW * 3 / 5, 6);
+        // Снимок области до фигуры: по нему считается маска для общего света,
+        // чтобы ореол и знак на полу не подсвечивались как часть стража.
+        // Область с запасом: замеренный размах стражей при 1.12 — от -125 до +119
+        // по x и от -123 до +93 по y в позах замаха и выброса. Меньшая рамка
+        // обрезала выброшенную колбу и поднятое древко.
+        const int lx = cx - 125, ly = cy - 132, lw = 250, lh = 232;
+        captureFigureRegion(lx, ly, lw, lh);
         drawBossFigure(cx, cy, bossType, animTime, hitFlash, enraged, false, 1.12f, castPose, castBurst,
                        mirror, recoil, fade);
+        if (figureVolumeEnabled) applyFigureVolume(lx, ly, lw, lh, std::min(1.0f, fade), figureVolumeGradient, cx, cy);
     }
 
     // Смерть стража. Раньше босс исчезал между кадрами: попадал последний удар —
@@ -1659,8 +1831,14 @@ struct Renderer {
         // светится вспышкой — удар был последним.
         const float shrink = 1.12f * (1.0f - p * 0.55f);
         const int sink = (int)(p * 20.0f);
+        // Область с запасом: замеренный размах стражей при 1.12 — от -125 до +119
+        // по x и от -123 до +93 по y в позах замаха и выброса. Меньшая рамка
+        // обрезала выброшенную колбу и поднятое древко.
+        const int lx = cx - 125, ly = cy - 132, lw = 250, lh = 232;
+        captureFigureRegion(lx, ly, lw, lh);
         drawBossFigure(cx, cy + sink, bossType, animTime, p < 0.3f, true, false, shrink,
                        0.0f, p * 0.85f, false, p * 0.7f, 1.0f - p * 0.85f);
+        if (figureVolumeEnabled) applyFigureVolume(lx, ly, lw, lh, 1.0f - p * 0.8f, figureVolumeGradient, cx, cy);
         (void)fadeA;
     }
 
