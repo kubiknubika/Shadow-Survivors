@@ -958,26 +958,47 @@ struct Renderer {
     // echo == true renders the trio copy: same shape, spectral and translucent.
     // castPose: 0..1 — насколько замах уже сделан (колба поднята над головой),
     // castBurst: 0..1 — удар/выброс уже случился (колба выброшена вперёд).
+    // mirror: страж повёрнут влево — фигура рисуется зеркально, к герою.
+    // recoil: 0..1 — отдача от попадания: фигура приседает и сжимается.
     void drawBossFigure(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged, bool echo,
-                        float s = 1.0f, float castPose = 0.0f, float castBurst = 0.0f) {
+                        float s = 1.0f, float castPose = 0.0f, float castBurst = 0.0f,
+                        bool mirror = false, float recoil = 0.0f, float fade = 1.0f) {
         const int id = bossType % 6;
         const uint32_t flash = 0xFFFFF0C8;
         const float breath = 0.5f + 0.5f * sinf(animTime * 2.2f);
         const int lift = (int)(sinf(animTime * 1.6f) * 2.0f);
         auto tint = [&](uint32_t c) { return hitFlash ? lerpColor(c, flash, 0.7f) : c; };
-        const int alpha = echo ? 205 : 255;
+        const int alpha = (int)((echo ? 205 : 255) * std::max(0.0f, std::min(1.0f, fade)));
 
         // Everything below is written in one canonical 1:1 size; the helpers rescale it so
         // the same figure works in the arena and on the campaign dossier card.
-        const float sc = s;
-        auto PX = [&](int ax) { return cx + (int)lrintf((ax - cx) * sc); };
-        auto PY = [&](int ay) { return cy + (int)lrintf((ay - cy) * sc); };
+        //
+        // Зеркало делается здесь, в переводе координат: вся фигура нарисована
+        // в одной системе, поэтому достаточно отразить смещение от центра — и
+        // страж поворачивается к герою, а не идёт спиной вперёд. Раньше стражи
+        // не разворачивались вообще: любой из них смотрел вправо при любом
+        // движении по арене.
+        const float sc = s * (1.0f - recoil * 0.05f);
+        const int cyAdj = cy + (int)(recoil * 3.0f);
+        // Выпад. Раньше удар стража читался только по одной детали — древку, книге,
+        // перу: корпус стоял на месте, будто статуя махнула рукой. Теперь на замахе
+        // страж отклоняется назад, а на выбросе подаётся всем телом к герою.
+        const float cpLean = std::max(0.0f, std::min(1.0f, castPose));
+        const float cbLean = std::max(0.0f, std::min(1.0f, castBurst));
+        const int lunge = (int)lrintf((cbLean * 13.0f - cpLean * 6.0f) * sc) * (mirror ? -1 : 1);
+        cx += lunge;
+        auto MO = [&](int ax) { return mirror ? (cx - ax) : (ax - cx); };
+        auto PX = [&](int ax) { return cx + (int)lrintf(MO(ax) * sc); };
+        auto PY = [&](int ay) { return cyAdj + (int)lrintf((ay - cy) * sc); };
         auto SS = [&](int v) { return std::max(1, (int)lrintf(v * sc)); };
+        // Для прямоугольников в зеркале берём правый край как левый, иначе
+        // деталь съезжает на свою же ширину.
+        auto RX = [&](int x, int w) { return cx + (int)lrintf((MO(x) - (mirror ? w : 0)) * sc); };
         auto FR = [&](int x, int y, int w, int h, int rad, uint32_t c, int a = 255) {
-            fillRoundedRect(PX(x), PY(y), SS(w), SS(h), std::max(1, (int)lrintf(rad * sc)), c, a);
+            fillRoundedRect(RX(x, w), PY(y), SS(w), SS(h), std::max(1, (int)lrintf(rad * sc)), c, a);
         };
         auto FC = [&](int x, int y, int r, uint32_t c, int a = 255) { fillCircle(PX(x), PY(y), SS(r), c, a); };
-        auto FX = [&](int x, int y, int w, int h, uint32_t c, int a = 255) { fillRect(PX(x), PY(y), SS(w), SS(h), c, a); };
+        auto FX = [&](int x, int y, int w, int h, uint32_t c, int a = 255) { fillRect(RX(x, w), PY(y), SS(w), SS(h), c, a); };
         auto DL = [&](int x0, int y0, int x1, int y1, uint32_t c, int th = 1, int a = 255, bool add = false) {
             drawLine(PX(x0), PY(y0), PX(x1), PY(y1), std::max(1, (int)lrintf(th * sc)), c, a, add);
         };
@@ -1504,7 +1525,8 @@ struct Renderer {
     }
 
     void drawBossSprite(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged = false,
-                        bool reinforced = false, float castPose = 0.0f, float castBurst = 0.0f) {
+                        bool reinforced = false, float castPose = 0.0f, float castBurst = 0.0f,
+                        bool mirror = false, float recoil = 0.0f, float fade = 1.0f) {
         int auraRad = 40 + (int)(sinf(animTime * 7.0f) * 5.0f);
         static const uint32_t auraPalette[6] = {0xFFFFB028, 0xFF80FF40, 0xFFFF3068, 0xFFFF6818, 0xFF49C8E8, 0xFF9EDBE8};
         const int bossId = bossType % 6;
@@ -1603,7 +1625,43 @@ struct Renderer {
         }
         addGlow(cx, cy, 62, auraCol, enraged ? 190 : 140);
         drawShadow(cx, cy + 50, 36, 12);
-        drawBossFigure(cx, cy, bossType, animTime, hitFlash, enraged, false, 1.12f, castPose, castBurst);
+        drawBossFigure(cx, cy, bossType, animTime, hitFlash, enraged, false, 1.12f, castPose, castBurst,
+                       mirror, recoil, fade);
+    }
+
+    // Смерть стража. Раньше босс исчезал между кадрами: попадал последний удар —
+    // и на его месте уже пусто. Теперь фигура проседает и сжимается, вспыхивает,
+    // рассыпается осколками и уходит в расширяющееся кольцо.
+    //   progress: 0 — только что погиб, 1 — пора убирать.
+    void drawBossDeath(int cx, int cy, int bossType, float animTime, float progress) {
+        static const uint32_t pal[6] = {0xFFFFB028, 0xFF80FF40, 0xFFFF3068,
+                                        0xFFFF6818, 0xFF49C8E8, 0xFF9EDBE8};
+        const float p = std::max(0.0f, std::min(1.0f, progress));
+        const uint32_t col = pal[bossType % 6];
+        const int fadeA = (int)(255.0f * (1.0f - p * p));
+        addGlow(cx, cy, 56 + (int)(p * 50.0f), col, (int)(190.0f * (1.0f - p)));
+        // Кольцо смерти расходится от фигуры.
+        drawCircleRing(cx, cy + 24, 26 + (int)(p * 130.0f), p < 0.5f ? 4 : 2, col,
+                       (int)(225.0f * (1.0f - p)), true);
+        drawCircleRing(cx, cy + 24, 14 + (int)(p * 78.0f), 1, 0xFFFFFFFF,
+                       (int)(160.0f * (1.0f - p)), true);
+        // Осколки: разлетаются по кругу и провисают вниз, как настоящие обломки.
+        for (int i = 0; i < 16; ++i) {
+            const float a = i * 6.2831853f / 16.0f + animTime * 0.4f;
+            const float dist = 18.0f + p * (46.0f + (i % 4) * 16.0f);
+            const int px = cx + (int)(cosf(a) * dist);
+            const int py = cy + 10 + (int)(sinf(a) * dist * 0.6f + p * p * 26.0f);
+            const int sz = std::max(1, 4 - (int)(p * 3.0f));
+            fillRect(px - sz / 2, py - sz / 2, sz, sz + (i % 2), i % 3 ? col : 0xFFFFF0C8,
+                     (int)(215.0f * (1.0f - p)));
+        }
+        // Сама фигура: проседает, сжимается и гаснет. Первую треть она ещё
+        // светится вспышкой — удар был последним.
+        const float shrink = 1.12f * (1.0f - p * 0.55f);
+        const int sink = (int)(p * 20.0f);
+        drawBossFigure(cx, cy + sink, bossType, animTime, p < 0.3f, true, false, shrink,
+                       0.0f, p * 0.85f, false, p * 0.7f, 1.0f - p * 0.85f);
+        (void)fadeA;
     }
 
     // Эхо-двойники из третьей фазы: та же фигура, но призрачная и полупрозрачная.

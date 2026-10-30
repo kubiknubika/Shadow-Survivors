@@ -167,7 +167,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 122;
+static constexpr int PATCH_NOTES_COUNT = 123;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -389,6 +389,9 @@ struct Monster {
     float freezeTimer;
     float shootTimer;
     float animOffset;
+    // Сколько секунд страж уже умирает: фигура не исчезает между кадрами, а
+    // проседает и рассыпается (см. renderer drawBossDeath).
+    float deathTimer = 0.0f;
 };
 
 struct Projectile {
@@ -5032,8 +5035,16 @@ struct Game {
                 addFloatingText(playerX, playerY - 24.0f, buf, 0xFFFF3850, true);
             }
         }
+        // Мёртвый страж ещё полторы секунды остаётся на арене: иначе последний
+        // удар не виден вовсе. Обычные враги убираются сразу, как раньше.
+        for (Monster& m : monsters) {
+            if (m.hp > 0.0f || !m.isBoss) continue;
+            m.deathTimer += dt;
+        }
         monsters.erase(
-            std::remove_if(monsters.begin(), monsters.end(), [](const Monster& m) { return m.hp <= 0.0f; }),
+            std::remove_if(monsters.begin(), monsters.end(), [](const Monster& m) {
+                return m.hp <= 0.0f && (!m.isBoss || m.deathTimer > 1.45f);
+            }),
             monsters.end()
         );
         if (endingCutscenePending && !save.seenEndingCutscene) {
@@ -5737,6 +5748,11 @@ struct Game {
                 r.drawTextCentered(FONT_SMALL, sx, sy - 58, "РЕЗОНАТОР • РАЗРУШЬ", 0xFFE7C2FF);
                 continue;
             }
+            if (m.isBoss && m.hp <= 0.0f) {
+                r.drawBossDeath(sx, sy, m.bossType, globalTime + m.animOffset,
+                                std::min(1.0f, m.deathTimer / 1.45f));
+                continue;
+            }
             if (m.isBoss && m.abilityWindup > 0.0f) {
                 static const uint32_t tellPalette[6] = {0xFFFFC64A, 0xFF70E85F, 0xFFFF4E78, 0xFFFF7948, 0xFF62D8F0, 0xFFB6E8F4};
                 const uint32_t tellColor = tellPalette[m.bossType % 6];
@@ -5792,8 +5808,13 @@ struct Game {
                                      ? std::min(1.0f, (0.95f - m.abilityWindup) / 0.62f) : 0.0f;
                 const float castBurst = m.abilityActive > 0.0f
                                      ? std::min(1.0f, m.abilityActive / 0.5f) : 0.0f;
-                r.drawBossSprite(sx, sy, m.bossType, globalTime + m.animOffset, m.hitFlashTimer > 0.0f, m.bossPhase >= 3,
-                                 m.bossReinforced, castPose, castBurst);
+                // Страж поворачивается к герою и дёргается от попадания: раньше он
+                // смотрел в одну сторону при любом движении, а удар давал только
+                // белую вспышку без отдачи.
+                const float recoil = m.hitFlashTimer > 0.0f ? std::min(1.0f, m.hitFlashTimer / 0.18f) : 0.0f;
+                if (m.hp > 0.0f)
+                    r.drawBossSprite(sx, sy, m.bossType, globalTime + m.animOffset, m.hitFlashTimer > 0.0f,
+                                     m.bossPhase >= 3, m.bossReinforced, castPose, castBurst, m.facing < 0, recoil);
             } else {
                 r.drawMonsterSprite(sx, sy, m.type, globalTime + m.animOffset, m.hitFlashTimer > 0.0f, m.isElite, m.freezeTimer > 0.0f, m.facing < 0,
                                     m.isRat ? m.ratHeading : 0.0f);
@@ -8952,6 +8973,7 @@ struct Game {
             "2.10.26 • КАМПАНИЯ — КАРТА ГЛАВ С ИМЕНАМИ ДЕЛ И РАЗВИЛКОЙ",
             "2.10.27 • МАЛАКОР: ТРИ СКЛЯНКИ И ЖИВАЯ АНИМАЦИЯ",
             "2.10.28 • ПРОВЕРКА АНИМАЦИЙ ВСЕХ СТРАЖЕЙ: ЗАМАХ ЕСТЬ У КАЖДОГО",
+            "2.10.29 • СТРАЖИ ПОВОРАЧИВАЮТСЯ, ВЗДРАГИВАЮТ И УМИРАЮТ",
         };
                 // Keep each note to ~8 wrapped lines: the panel does not scroll.
         static const char* const notes[] = {
@@ -9076,7 +9098,8 @@ struct Game {
             "• Развилку можно было обойти: стоя в акте III, нажать «ПОЙТИ СЛЕДОМ А» и зафиксировать след там, где его выбирать нельзя. Теперь след фиксируется только на двери развилки — на первом деле акта II.\n• Пока след не выбран, дерево не листается дальше акта II, а ← и → переключают две двери развилки: А «СВИДЕТЕЛЬ» и Б «КОПИЯ». Раньше клавиатура всегда стояла на полосе А, и след Б с клавиатуры было не выбрать вовсе.\n• До выбора обе полосы выглядят равноправно: раньше обе были перечёркнуты, будто выбор уже сделан и потерян.\n• Дело впереди развилки больше не обещает «выбери след»: на кнопке честно написано «СНАЧАЛА ВЫБЕРИ СЛЕД», а досье объясняет, что след выбирают в акте II.",
             "• Кампания больше не список номеров: главы идут картой слева направо — акт I, развилка на два следа в актах II–IV и слияние в акте V. У каждого дела на карте своё имя, а не «05».\n• Развилку видно: дороги расходятся из первого акта и сходятся в последнем. Полоса следа А золотая, следа Б бирюзовая, чужой след гаснет. Для карты у длинных дел есть короткие имена, полные названия остались в досье.\n• Досье переехало под карту и стало шире: иллюстрация, брифинг, цель, а строкой ниже страж, время босса и тир. В низком окне досье ужимается ступенями — сначала теряет картинку, потом брифинг, — а не режет буквы.\n• Кнопка «К РАЗВИЛКЕ [TAB]»: пока след не выбран, из любого закрытого дела видно, где эта развилка.\n• Портретное и узкое окно: карта разворачивается в список по актам, дела идут строками с названиями, кнопки — двумя рядами, чтобы надписи не резались.\n• Проверено на 1920x1080, 1280x720, 1024x600, 900x520 и портретных 720x1280.",
             "• Малакор перестал быть мешком для битья. Он один дерётся на дистанции, поэтому скорость у него своя: раньше он плёлся со всеми и просто стоял мишенью. Запас здоровья 3300 → 4000.\n• Атака больше не одна лужа под ногами: он швыряет три склянки веером — ближнюю, среднюю и дальнюю. Колбы летят снарядами, разбиваются сами и оставляют три чумных пятна с разной задержкой, так что шагом в сторону не отделаться.\n• У Малакора появилась анимация: переступает с ноги на ногу, капюшон качается, подол хлещет, респиратор-клюв читается в силуэте, в колбе кипят пузыри и поднимаются пары, глаза горят неровно.\n• На замах он поднимает колбу над головой, а на выбросе швыряет её вперёд — сам замах видно по фигуре, как у остальных стражей.\n• Знак на полу у него теперь лужа, а не кольцо: прежнее кольцо проходило через туловище и читалось как обруч на фигуре.\n• Пример кадров — design/malakor_animation.png (покой, замах, выброс).",
-            "• Проверены все шесть стражей — не только Малакор. Замах и выброс теперь есть у КАЖДОГО: раньше поза была только у Малакора, а остальные на собственную способность не реагировали вовсе, хотя круг на полу уже показывал замах.\n• Моргар: корпус переносит тяжесть с ноги на ногу, алебарда качается, щит ходит с дыханием, стопы переступают, из щели в груди летят искры. На замахе приседает и поднимает древко, на выбросе уводит клюв вперёд.\n• Кардинал: шляпа покачивается, книга поднимается к груди, перо пишет мелким движением и вскидывается на замахе, цепочка печатей подрагивает.\n• Азарот: на замахе разгорается сердце, руки разводятся шире, фигура приподнимается; на выбросе резко проседает.\n• Протоколист: том поднимается к груди и раскрывается шире на замахе, на выбросе захлопывается и проседает.\n• Двойник: перед обменом местами слепок отходит дальше, после — оба сходятся; телепорт больше не выглядит беспричинным.\n• Проверка анимаций не на глаз: стенд считает, сколько пикселей меняется между кадрами и насколько сильно. Было у Моргара 479 меняющихся пикселей на кадр (самый статичный страж), стало 774; у Кардинала 828 → 853 при более крупных движениях книги и пера.\n• Лист кадров — design/boss_animations.png: все шесть стражей в покое, на замахе и на выбросе.",        };
+            "• Проверены все шесть стражей — не только Малакор. Замах и выброс теперь есть у КАЖДОГО: раньше поза была только у Малакора, а остальные на собственную способность не реагировали вовсе, хотя круг на полу уже показывал замах.\n• Моргар: корпус переносит тяжесть с ноги на ногу, алебарда качается, щит ходит с дыханием, стопы переступают, из щели в груди летят искры. На замахе приседает и поднимает древко, на выбросе уводит клюв вперёд.\n• Кардинал: шляпа покачивается, книга поднимается к груди, перо пишет мелким движением и вскидывается на замахе, цепочка печатей подрагивает.\n• Азарот: на замахе разгорается сердце, руки разводятся шире, фигура приподнимается; на выбросе резко проседает.\n• Протоколист: том поднимается к груди и раскрывается шире на замахе, на выбросе захлопывается и проседает.\n• Двойник: перед обменом местами слепок отходит дальше, после — оба сходятся; телепорт больше не выглядит беспричинным.\n• Проверка анимаций не на глаз: стенд считает, сколько пикселей меняется между кадрами и насколько сильно. Было у Моргара 479 меняющихся пикселей на кадр (самый статичный страж), стало 774; у Кардинала 828 → 853 при более крупных движениях книги и пера.\n• Лист кадров — design/boss_animations.png: все шесть стражей в покое, на замахе и на выбросе.",
+            "• Разворот: стражи больше не смотрят вправо, куда бы ни шли. Фигура зеркалится целиком — алебарда, щит, книга, колба, слепок Двойника, — поэтому страж всегда лицом к герою.\n• Выпад: раньше на ударе двигалась одна деталь (древко, книга, перо), а корпус стоял статуей. Теперь на замахе страж отклоняется назад, на выбросе подаётся всем телом к герою.\n• Отдача: попадание по стражу не только вспыхивает белым. Фигура приседает и сжимается на 5 процентов, вспышка держится 0.18 с и гаснет, так что серия попаданий читается телом, а не только цветом.\n• Смерть: раньше стражи исчезали в тот же кадр, что и падение полоски здоровья. Теперь у них 1.45 с на смерть — фигура проседает и сжимается, гаснет, из неё летят 16 осколков и два расходящихся кольца цвета стража. Видно, что босс именно убит, а не пропал.\n• Смена фазы перестала быть пустой: сверху и снизу экрана встают полосы цвета стража со сходящимися штрихами, по центру — имя, номер фазы и её название. Держится 3.2 с, вход и выход плавные, середина арены бою не мешает.\n• Лист кадров — design/boss_animations.png: все шесть стражей лицом к герою в обе стороны, замах, выброс и смерть.\n• Стенд смерти показал выжигание цвета: аддитивные кольца из многих сегментов уходили в белый. Теперь кольца рисуются обычным смешиванием и гаснут вместе с фигурой.",        };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
         static_assert(sizeof(notes) / sizeof(notes[0]) == PATCH_NOTES_COUNT,
@@ -10534,7 +10557,70 @@ struct Game {
 
     // The phase change is announced in the bottom-left stack (see drawCombatNotices), so this
     // hook stays empty on purpose: nothing is drawn in the middle of the battlefield any more.
-    void renderBossPhaseTransition(Renderer& r) { (void)r; }
+    // Смена фазы стража. Раньше на событие не было ничего, кроме тряски и звука:
+    // функция пустая, а баннер фазы жил своей жизнью. Теперь экран подхватывает
+    // событие: цветные полосы, которые сходятся к центру, имя стража и номер
+    // фазы. Держится 3,2 с, появляется и уходит плавно, и не перекрывает бой —
+    // полосы вверху и внизу, середина арены остаётся видимой.
+    void renderBossPhaseTransition(Renderer& r) {
+        if (bossPhaseEventTimer <= 0.0f) return;
+        static const uint32_t pal[6] = {0xFFFFB028, 0xFF80FF40, 0xFFFF3068,
+                                        0xFFFF6818, 0xFF49C8E8, 0xFF9EDBE8};
+        static const char* bossShort[6] = {"МОРГАР", "МАЛАКОР", "КАРДИНАЛ",
+                                           "АЗАРОТ", "ПРОТОКОЛИСТ", "ДВОЙНИК"};
+        static const char* phaseRoman[3] = {"I", "II", "III"};
+        static const char* phaseTitle[3] = {"ОХОТА", "НАТИСК", "ЯРОСТЬ"};
+        const int bossId = std::max(0, std::min(5, bossPhaseEventType));
+        const int phase = std::max(1, std::min(3, bossPhaseEventNumber));
+        const uint32_t col = pal[bossId];
+        const float total = 3.2f;
+        const float elapsed = total - bossPhaseEventTimer;
+        // Огибающая: быстрый вход, короткое удержание, мягкий выход.
+        float envelope = 1.0f;
+        if (elapsed < 0.28f) envelope = elapsed / 0.28f;
+        else if (bossPhaseEventTimer < 0.9f) envelope = bossPhaseEventTimer / 0.9f;
+        envelope = std::max(0.0f, std::min(1.0f, envelope));
+        // Полосы фиксированной высоты: анимируется прозрачность, а не размер.
+        // Пока высота ползла, буквы «приезжали» вместе с ней и дёргались.
+        const int bandScale = SCREEN_H > 900 ? 92 : (SCREEN_H > 700 ? 76 : 62);
+        const int topH = bandScale, botH = bandScale;
+        r.fillRect(0, 0, SCREEN_W, topH, 0xFF07050D, (int)(215 * envelope));
+        r.fillRect(0, SCREEN_H - botH, SCREEN_W, botH, 0xFF07050D, (int)(215 * envelope));
+        r.fillRect(0, topH - 2, SCREEN_W, 2, col, (int)(235 * envelope));
+        r.fillRect(0, SCREEN_H - botH, SCREEN_W, 2, col, (int)(235 * envelope));
+        // Сходящиеся к центру штрихи: движение есть, кадр не статичен.
+        const int sweep = (int)(elapsed / 0.55f * (SCREEN_W * 0.5f));
+        if (sweep < SCREEN_W / 2) {
+            const int len = (int)(90 * (1.0f - envelope * 0.4f));
+            for (int side = 0; side < 2; ++side) {
+                const int x0 = side == 0 ? -len + sweep : SCREEN_W + len - sweep;
+                r.drawLine(x0, topH / 2, x0 + (side == 0 ? len : -len), topH / 2, col, 2,
+                           (int)(190 * envelope), true);
+                r.drawLine(x0, SCREEN_H - botH / 2, x0 + (side == 0 ? len : -len), SCREEN_H - botH / 2,
+                           col, 2, (int)(190 * envelope), true);
+            }
+        }
+        char title[96], sub[96];
+        snprintf(title, sizeof(title), "%s • ФАЗА %s", bossShort[bossId], phaseRoman[phase - 1]);
+        snprintf(sub, sizeof(sub), "%s", phaseTitle[phase - 1]);
+        // Заголовок и подпись держим внутри полосы: снаружи они наезжали на её
+        // нижнюю границу и читались как обрезанный текст.
+        // Заголовок и подпись — одна колонка сверху вниз: подпись ровно под
+        // заголовком, без наложения строк.
+        const int titleY = std::max(4, (topH - FONT_MED.lineHeight - FONT_SMALL.lineHeight) / 2);
+        const int subY = titleY + FONT_MED.lineHeight + 1;
+        if (titleY > 2) {
+            r.drawTextCentered(FONT_MED, SCREEN_W / 2, titleY, title, col, true, (int)(255 * envelope));
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, subY, sub,
+                               0xFFE8DCF8, true, (int)(210 * envelope));
+        }
+        const int botTextY = SCREEN_H - botH / 2 - FONT_SMALL.ascent / 2;
+        if (botTextY + FONT_SMALL.lineHeight < SCREEN_H) {
+            static const char* lastPhaseLines[2] = {"СТРАЖ СТАЛ ЗЛЕЕ", "ПОСЛЕДНЯЯ ФАЗА — ДОБЕЙ"};
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, botTextY, lastPhaseLines[phase == 3 ? 1 : 0],
+                               col, true, (int)(200 * envelope));
+        }
+    }
 
     void render(Renderer& r) {
         r.skillIconStyle = std::max(0, std::min(2, options.skillIconStyle));
