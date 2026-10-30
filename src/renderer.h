@@ -129,6 +129,23 @@ struct Renderer {
     // совсем, иначе однопоточный кадр платит за распараллеливание в каждом
     // пикселе.
     bool bandActive = false;
+
+    // Уровень эффектов кадра: 3 — полный, 2 — без мелких ореолов, 1 — ореолы
+    // в половинном разрешении, 0 — только крупные свечения. Ставит Game по
+    // настройке «Графика» и по времени кадра. Геометрия и логика от него не
+    // зависят: ниже только дешевеет растеризация.
+    int fxLevel = 3;
+    // Буфер ореолов в половинном разрешении. Свечение — низкочастотная
+    // картинка, поэтому вдвое меньше пикселей почти не видно, а работы вчетверо
+    // меньше. Заполняется аддитивно, поэтому порядок и потоки на картинку не
+    // влияют; к кадру прибавляется одной полосой (compositeGlow).
+    uint32_t* glowPixels = nullptr;
+    std::vector<uint32_t> glowOwn;
+    int glowW = 0, glowH = 0;
+    // Пока true, крупные ореолы копятся в половинном буфере: кадр прибавляет их
+    // одной полосой в том месте, где кончается пол и начинаются существа.
+    // Порядок важен: прибавка «в конце кадра» светила бы сквозь героя и стражей.
+    bool deferGlow = false;
     bool ownsPixels = true;   // полосы смотрят в буфер главного экземпляра
     bool explicitBand = false; // полоса задана извне (pixels не наш)
     std::vector<uint8_t> vignetteAlpha;   // запечённая карта затемнения
@@ -174,6 +191,14 @@ struct Renderer {
         vignetteH = -1;
     }
 
+    // Полоса рисует в тот же буфер ореолов, что и главный экземпляр: свечения
+    // складываются, поэтому делить их между полосами можно по строкам.
+    void shareGlowFrom(const Renderer& src) {
+        glowPixels = src.glowPixels;
+        glowW = src.glowW;
+        glowH = src.glowH;
+    }
+
     // Обрезка строк по полосе [y0, y1) — полуинтервал.
     inline void clampBandRows(int& y0, int& y1) const {
         if (y0 < bandY0) y0 = bandY0;
@@ -191,6 +216,10 @@ struct Renderer {
         height = newHeight;
         pixels = new uint32_t[(size_t)width * (size_t)height];
         for (size_t i = 0; i < (size_t)width * (size_t)height; ++i) pixels[i] = 0xFF0E0B16;
+        glowW = (width + 1) / 2;
+        glowH = (height + 1) / 2;
+        glowOwn.assign((size_t)glowW * (size_t)glowH, 0);
+        glowPixels = glowOwn.data();
         vignetteW = -1;   // виньетка пересчитается под новый размер
     }
 
@@ -515,7 +544,11 @@ struct Renderer {
         return &g;
     }
 
-    void addGlow(int cx, int cy, int r, uint32_t col, int maxIntensity = 180) {
+    // Свечение в произвольный буфер: полный кадр (pixels) или половинный
+    // буфер ореолов (glowPixels). Ширина, высота и границы строк вынесены
+    // наружу, чтобы обе ветки были одним кодом.
+    void addGlowRaw(uint32_t* buf, int bw, int bh, int cx, int cy, int r,
+                    uint32_t col, int maxIntensity, int clipY0, int clipY1) {
         if (r <= 0 || maxIntensity <= 0) return;
         // Яркость больше 255 давала выход за таблицу прибавок (256 входов).
         // Такая яркость и не нужна: свечение уже полностью закрывает канал.
@@ -523,19 +556,19 @@ struct Renderer {
         // Дешёвый отсев: свечение целиком за кадром. Частицы и снаряды улетают
         // за край постоянно, а до этой проверки для каждой из них считался
         // диапазон строк, корень и границы.
-        if (cx + r < 0 || cy + r < 0 || cx - r >= SCREEN_W || cy - r >= SCREEN_H) return;
+        if (cx + r < 0 || cy + r < 0 || cx - r >= bw || cy - r >= bh) return;
         if (const GlowSprite* gs = getGlowSprite(r, col, maxIntensity)) {
             const int side = gs->side;
-            const int gy0 = std::max(std::max(0, cy - r), bandY0), gy1 = std::min(std::min(SCREEN_H - 1, cy + r), bandY1 - 1);
+            const int gy0 = std::max(std::max(0, cy - r), clipY0), gy1 = std::min(std::min(bh - 1, cy + r), clipY1 - 1);
             const uint32_t* delta = gs->delta.data();
             const uint16_t* extent = gs->extent.data();
             for (int py = gy0; py <= gy1; ++py) {
                 const int ext = (int)extent[py - (cy - r)] - 1;
                 if (ext < 0) continue;
                 int dx = std::max(-ext, -cx);
-                const int dxEnd = std::min(ext, SCREEN_W - 1 - cx);
+                const int dxEnd = std::min(ext, bw - 1 - cx);
                 if (dx > dxEnd) continue;
-                uint32_t* dstRow = pixels + py * SCREEN_W + cx;
+                uint32_t* dstRow = buf + py * bw + cx;
                 const uint32_t* srcRow = delta + (size_t)(py - (cy - r)) * side + r;
                 int x = dx;
 #if RENDERER_SIMD
@@ -562,7 +595,7 @@ struct Renderer {
             return;
         }
         const int r2 = r * r;
-        const int y0 = std::max(std::max(0, cy - r), bandY0), y1 = std::min(std::min(SCREEN_H - 1, cy + r), bandY1 - 1);
+        const int y0 = std::max(std::max(0, cy - r), clipY0), y1 = std::min(std::min(bh - 1, cy + r), clipY1 - 1);
         const int cr = (col >> 16) & 0xFF, cg = (col >> 8) & 0xFF, cb = col & 0xFF;
         const std::vector<uint32_t>* kernel = getGlowKernel(r);
         const uint32_t* k = kernel ? kernel->data() : nullptr;
@@ -585,9 +618,9 @@ struct Renderer {
             if (rem < 0) continue;
             const int extent = (int)sqrtf((float)rem);
             const int dx0 = std::max(-extent, -cx);
-            const int dx1 = std::min(extent, SCREEN_W - 1 - cx);
+            const int dx1 = std::min(extent, bw - 1 - cx);
             if (dx0 > dx1) continue;
-            uint32_t* dstRow = pixels + py * SCREEN_W + cx;
+            uint32_t* dstRow = buf + py * bw + cx;
             if (k) {
                 int dx = dx0;
 #if RENDERER_SIMD
@@ -640,6 +673,80 @@ struct Renderer {
                 }
             }
         }
+    }
+
+    void addGlow(int cx, int cy, int r, uint32_t col, int maxIntensity = 180) {
+        // Три ступени экономии, и каждая следующая включает предыдущую:
+        //   1) мелкие ореолы не рисуются совсем (искры добычи и чисел урона —
+        //      это больше половины вызовов, а видно их на телефоне хуже, чем
+        //      стоит их цена);
+        //   2) крупные ореолы считаются в половинном разрешении и прибавляются
+        //      к кадру одной полосой до существ (см. compositeGlow);
+        //   3) порог мелких растёт, порог крупных падает.
+        int minRadius = 0, halfFrom = 1 << 30;
+        if (fxLevel == 2) { minRadius = 16; halfFrom = 96; }
+        else if (fxLevel == 1) { minRadius = 28; halfFrom = 64; }
+        else if (fxLevel <= 0) { minRadius = 48; halfFrom = 96; }
+        if (r < minRadius) return;
+        if (deferGlow && r >= halfFrom && glowPixels && glowW > 0 && glowH > 0) {
+            addGlowRaw(glowPixels, glowW, glowH, cx >> 1, cy >> 1,
+                       std::max(1, (r + 1) >> 1), col, maxIntensity,
+                       bandActive ? (bandY0 >> 1) : 0,
+                       bandActive ? ((bandY1 + 1) >> 1) : glowH);
+            return;
+        }
+        addGlowRaw(pixels, SCREEN_W, SCREEN_H, cx, cy, r, col, maxIntensity, bandY0, bandY1);
+    }
+
+    void clearGlow() {
+        if (fxLevel > 2 || !glowPixels) return;
+        memset(glowPixels, 0, sizeof(uint32_t) * (size_t)glowW * (size_t)glowH);
+    }
+
+    // Полоса чистит только свои строки: буфер общий на кадр.
+    void clearGlowBand() {
+        if (fxLevel > 2 || !glowPixels || !bandActive) return;
+        const int r0 = bandY0 >> 1, r1 = (bandY1 + 1) >> 1;
+        if (r1 > r0) memset(glowPixels + (size_t)r0 * glowW, 0, sizeof(uint32_t) * (size_t)(r1 - r0) * (size_t)glowW);
+    }
+
+    // Прибавить половинный буфер ореолов к кадру. Один проход по экрану;
+    // дешёвая альтернатива дорогим большим ореолам (см. addGlow).
+    void compositeGlow() {
+        if (fxLevel > 2 || !glowPixels || glowW <= 0) return;
+        const int cy0 = bandActive ? bandY0 : 0;
+        const int cy1 = bandActive ? bandY1 : SCREEN_H;
+        for (int y = cy0; y < cy1; ++y) {
+            const uint32_t* src = glowPixels + (size_t)(y >> 1) * (size_t)glowW;
+            uint32_t* dst = pixels + (size_t)y * (size_t)SCREEN_W;
+            int x = 0;
+#if RENDERER_SIMD
+            const __m128i alphaMask = _mm_set1_epi32((int)0xFF000000u);
+            for (; x + 7 < SCREEN_W; x += 8) {
+                const __m128i s = _mm_loadu_si128((const __m128i*)(src + (x >> 1)));
+                const __m128i lo = _mm_shuffle_epi32(s, _MM_SHUFFLE(1, 1, 0, 0));
+                const __m128i hi = _mm_shuffle_epi32(s, _MM_SHUFFLE(3, 3, 2, 2));
+                __m128i* d0 = (__m128i*)(dst + x);
+                __m128i* d1 = (__m128i*)(dst + x + 4);
+                _mm_storeu_si128(d0, _mm_or_si128(_mm_adds_epu8(_mm_loadu_si128(d0), lo), alphaMask));
+                _mm_storeu_si128(d1, _mm_or_si128(_mm_adds_epu8(_mm_loadu_si128(d1), hi), alphaMask));
+            }
+#endif
+            for (; x < SCREEN_W; ++x) {
+                const uint32_t d = src[x >> 1];
+                if (!d) continue;
+                uint32_t& p = dst[x];
+                int rr = (int)((p >> 16) & 0xFF) + (int)((d >> 16) & 0xFF);
+                int gg = (int)((p >> 8) & 0xFF) + (int)((d >> 8) & 0xFF);
+                int bb = (int)(p & 0xFF) + (int)(d & 0xFF);
+                if (rr > 255) rr = 255;
+                if (gg > 255) gg = 255;
+                if (bb > 255) bb = 255;
+                p = 0xFF000000u | ((uint32_t)rr << 16) | ((uint32_t)gg << 8) | (uint32_t)bb;
+            }
+        }
+        // Полоса чистит только свои строки: остальные ей не принадлежат.
+        if (bandActive) clearGlowBand(); else clearGlow();
     }
 
     void drawCircleRing(int cx, int cy, int r, int thickness, uint32_t col, int alpha = 255, bool additive = false) {
@@ -2436,7 +2543,11 @@ struct Renderer {
         captureFigureRegion(lx, ly, lw, lh);
         drawBossFigure(cx, cy, bossType, animTime, hitFlash, enraged, false, 1.12f, castPose, castBurst,
                        mirror, recoil, fade);
-        if (figureVolumeEnabled) applyFigureVolume(lx, ly, lw, lh, std::min(1.0f, fade), figureVolumeGradient, cx, cy, bossType);
+        // Ниже среднего уровня объём фигуры не считается: это отдельный проход
+        // по рамке 250x232 с тремя лучами на пиксель. Силуэт и подсветка
+        // остаются, уходит только светотень по форме.
+        if (figureVolumeEnabled && fxLevel >= 2)
+            applyFigureVolume(lx, ly, lw, lh, std::min(1.0f, fade), figureVolumeGradient, cx, cy, bossType);
     }
 
     // Смерть стража. Раньше босс исчезал между кадрами: попадал последний удар —
@@ -2476,7 +2587,8 @@ struct Renderer {
         captureFigureRegion(lx, ly, lw, lh);
         drawBossFigure(cx, cy + sink, bossType, animTime, p < 0.3f, true, false, shrink,
                        0.0f, p * 0.85f, false, p * 0.7f, 1.0f - p * 0.85f);
-        if (figureVolumeEnabled) applyFigureVolume(lx, ly, lw, lh, 1.0f - p * 0.8f, figureVolumeGradient, cx, cy, bossType);
+        if (figureVolumeEnabled && fxLevel >= 2)
+            applyFigureVolume(lx, ly, lw, lh, 1.0f - p * 0.8f, figureVolumeGradient, cx, cy, bossType);
         (void)fadeA;
     }
 

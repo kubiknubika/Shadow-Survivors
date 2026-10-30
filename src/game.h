@@ -185,7 +185,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 141;
+static constexpr int PATCH_NOTES_COUNT = 142;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -696,7 +696,22 @@ struct GameOptions {
     int messageSpeechEnabled = 1; // read combat messages aloud (SAPI)
     int skillIconStyle = 0; // 0 = вектор, 1 = ИИ-арт, 2 = набор «цвет».
     int campaignSnakeMap = 1; // 1 = змейка (новый UI), 0 = карта колонками (старый).
+    // 2.10.48 (хвост): графика. 0 — авто (ступень подбирается по времени кадра),
+    // 1 — высокое, 2 — среднее, 3 — быстрое, 4 — эконом.
+    int graphicsLevel = 0;
 };
+
+// Предыдущая раскладка настроек (без строки «Графика»): файл на 56 байт должен
+// читаться, иначе обновление игры сбрасывало бы все переключатели игрока.
+struct LegacyGameOptions56 {
+    uint32_t magic;
+    int sfxEnabled, musicEnabled, hitEffectsEnabled, screenShakeEnabled, advisorEnabled, hardModeEnabled;
+    uint32_t patchNotesHiddenVersion;
+    int projectileTrailsEnabled;
+    float sfxVolume, musicVolume;
+    int messageSpeechEnabled, skillIconStyle, campaignSnakeMap;
+};
+static_assert(sizeof(GameOptions) == 60, "2.10.48 options layout changed unexpectedly");
 
 struct SaveData {
     uint32_t magic = 0x53484457; // 'SHDW'
@@ -1086,7 +1101,22 @@ struct Game {
         FILE* f = openOptionsFile(false);
         if (f) {
             fseek(f, 0, SEEK_END); long n = ftell(f); rewind(f);
-            if (n == (long)sizeof(GameOptions)) {
+            if (n == (long)sizeof(LegacyGameOptions56)) {
+                LegacyGameOptions56 old{};
+                if (fread(&old, sizeof(old), 1, f) == 1 && old.magic == 0x53484346) {
+                    options = GameOptions{};
+                    options.sfxEnabled = old.sfxEnabled; options.musicEnabled = old.musicEnabled;
+                    options.hitEffectsEnabled = old.hitEffectsEnabled; options.screenShakeEnabled = old.screenShakeEnabled;
+                    options.advisorEnabled = old.advisorEnabled; options.hardModeEnabled = old.hardModeEnabled;
+                    options.patchNotesHiddenVersion = old.patchNotesHiddenVersion;
+                    options.projectileTrailsEnabled = old.projectileTrailsEnabled;
+                    options.sfxVolume = old.sfxVolume; options.musicVolume = old.musicVolume;
+                    options.messageSpeechEnabled = old.messageSpeechEnabled;
+                    options.skillIconStyle = old.skillIconStyle;
+                    options.campaignSnakeMap = old.campaignSnakeMap;
+                    options.graphicsLevel = 0;
+                }
+            } else if (n == (long)sizeof(GameOptions)) {
                 GameOptions saved{};
                 if (fread(&saved, sizeof(saved), 1, f) == 1 && saved.magic == 0x53484346) options = saved;
             } else if (n == (long)sizeof(LegacyOptionsCurrent)) {
@@ -6069,7 +6099,10 @@ struct Game {
                 // Mortar follows the place: cold violet grout in the ruins, soot in the ash.
                 r.drawRect(sx, sy, tileSize, tileSize, theme.mortar, 1);
                 // Cut-stone bevel on a third of the tiles: the floor reads as masonry, not noise.
-                if ((h & 3) == 1) {
+                // С быстрого уровня декор пола не рисуется: кладка, швы и тени
+                // остаются, уходят фаски и трещины — сотни вызовов на кадр.
+                const bool floorDecor = r.fxLevel >= 2;
+                if (floorDecor && (h & 3) == 1) {
                     r.drawLine(sx + 2, sy + 2, sx + tileSize - 3, sy + 2, theme.floorDetail, 1, 130);
                     r.drawLine(sx + 2, sy + 2, sx + 2, sy + tileSize - 3, theme.floorDetail, 1, 110);
                 }
@@ -6077,13 +6110,13 @@ struct Game {
                 // the player "new case, new place" before a single enemy appears.
                 switch (theme.propKind) {
                     case 0: // Руины: hairline cracks running through the slabs.
-                        if ((h & 7) == 2) {
+                        if (floorDecor && (h & 7) == 2) {
                             r.drawLine(sx + 12, sy + 8, sx + 30, sy + 26, theme.mortar, 1, 150);
                             r.drawLine(sx + 30, sy + 26, sx + 44, sy + 22, theme.mortar, 1, 120);
                         }
                         break;
                     case 1: // Крипта: sunken tomb slabs with a shallow groove.
-                        if ((h & 7) == 5) {
+                        if (floorDecor && (h & 7) == 5) {
                             r.fillRect(sx + 8, sy + 12, tileSize - 16, tileSize - 24, theme.floorDetail, 190);
                             r.drawRect(sx + 8, sy + 12, tileSize - 16, tileSize - 24, theme.mortar, 1, 160);
                             r.drawLine(sx + tileSize / 2, sy + 18, sx + tileSize / 2, sy + tileSize - 18, theme.mortar, 1, 120);
@@ -6431,6 +6464,12 @@ struct Game {
 
         // Ground-plane skill impacts are intentionally beneath actors and culled off-screen.
         renderSkillImpactMarks(r, camX, camY);
+
+        // Ореолы пола, знаков, огня и ауры посчитаны в половинном разрешении
+        // (см. Renderer::addGlow) и прибавляются к кадру здесь — до существ.
+        // В конце кадра они светили бы сквозь героя и стражей.
+        r.compositeGlow();
+        r.deferGlow = false;
 
         // 5. Monsters & Bosses
         for (const auto& m : monsters) {
@@ -6916,7 +6955,7 @@ struct Game {
         const Monster* debugBoss = nullptr;
         for (const Monster& m : monsters) if (m.isBoss && m.hp > 0.0f) { debugBoss = &m; break; }
         const bool hasBossRow = debugBoss != nullptr;
-        const int rows = 16 + (hasBossRow ? 1 : 0) + (hasMessage ? 2 : 0);
+        const int rows = 17 + (hasBossRow ? 1 : 0) + (hasMessage ? 2 : 0);
         const int labelW = 176;
         const int boxW = std::min(SCREEN_W - 16, 486), boxH = rows * lineH + pad * 2;
         const int bx = 8, by = 8;
@@ -6974,6 +7013,21 @@ struct Game {
                      debugAiIntent ? " • МЕТКИ" : "");
             put(15, "ИИ", line, (smartCount[0] + smartCount[1] + smartCount[2]) > 0 ? 0xFF7CE8FF : 0xFFE6E0F4);
         }
+        // Графика: что стоит в настройке, какая ступень реально играет и сколько
+        // стоит кадр. Без этой строки «тормозит» не с чем сопоставить.
+        {
+            const int tier = resolvedGraphicsTier();
+            // В ручном режиме уровень и ступень — одно и то же, печатать их
+            // дважды незачем; в АВТО видно, до какой ступени дошла игра.
+            if (options.graphicsLevel == 0)
+                snprintf(line, sizeof(line), "АВТО → %s  КАДР %.1f МС  ПОТОКОВ %d",
+                         graphicsTierName(tier), frameMsSmooth, renderThreads);
+            else
+                snprintf(line, sizeof(line), "%s  КАДР %.1f МС  ПОТОКОВ %d",
+                         graphicsTierName(tier), frameMsSmooth, renderThreads);
+            put(16, "ГРАФИКА", line,
+                frameMsSmooth > 20.0f ? 0xFFFF9B7E : (frameMsSmooth > 13.0f ? 0xFFFFD878 : 0xFF9BF0B0));
+        }
         if (hasBossRow) {
             // Что страж делает прямо сейчас и сколько ждать приёма. Раньше это
             // приходилось вычитывать из боя: таймеров на экране не было.
@@ -6993,9 +7047,9 @@ struct Game {
                      stateWord, (int)bdist, std::max(0.0f, debugBoss->abilityTimer),
                      countBossRetinue(),
                      bossRetinueCap(debugBoss->bossType, debugBoss->bossPhase, debugBoss->bossReinforced));
-            put(16, "СТРАЖ", line, 0xFFFFC878);
+            put(17, "СТРАЖ", line, 0xFFFFC878);
         }
-        const int msgRow = 16 + (hasBossRow ? 1 : 0);
+        const int msgRow = 17 + (hasBossRow ? 1 : 0);
         if (hasMessage) {
             snprintf(line, sizeof(line), "%s  %.1f С", storySpeaker.c_str(), storyTimer);
             put(msgRow, "НА ЭКРАНЕ", line, 0xFFC9A6FF);
@@ -10270,6 +10324,13 @@ struct Game {
         else if (optionId == 6) options.projectileTrailsEnabled = !options.projectileTrailsEnabled;
         else if (optionId == 7) options.skillIconStyle = (options.skillIconStyle + 1) % 3;
         else if (optionId == 9) options.campaignSnakeMap = options.campaignSnakeMap ? 0 : 1;
+        else if (optionId == 10) {
+            options.graphicsLevel = (options.graphicsLevel + 1) % 5;
+            // Ручной уровень фиксирует ступень сразу: иначе до следующего кадра
+            // в настройках показывалось бы одно, а рисовалось другое.
+            graphicsTier = std::max(1, options.graphicsLevel);
+            qualityEma = 0.0f; qualityCooldown = 0.0f;
+        }
         else if (optionId == 8) {
             options.messageSpeechEnabled = options.messageSpeechEnabled != 0 ? 0 : 1;
             sound.setVoiceEnabled(options.messageSpeechEnabled != 0);
@@ -10297,26 +10358,29 @@ struct Game {
     void renderSettingsMenu(Renderer& r) {
         static int lastRefreshSecond = -1;
         if ((int)globalTime != lastRefreshSecond) { lastRefreshSecond = (int)globalTime; refreshVoiceStats(); }
-        renderSubmenuFrame(r, "НАСТРОЙКИ", "shadow_survivors.cfg • звук • эффекты • стиль иконок • карта кампании");
+        renderSubmenuFrame(r, "НАСТРОЙКИ", "shadow_survivors.cfg • звук • эффекты • графика • стиль иконок • карта кампании");
 
-        const char* labels[9] = {
+        const char* labels[10] = {
             "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
             "Советник по сборке (ИИ)", "БЕЗДНА — давление выше; пауэрапы только с умных", "Следы снарядов",
             "Стиль иконок предметов", "Озвучка сообщений в бою",
-            "Карта кампании: змейка снизу вверх или карта актами"
+            "Карта кампании: змейка снизу вверх или карта актами",
+            "Графика: авто держит 60 fps и снижает эффекты само"
         };
         // Narrow portraits need shorter labels: the ВКЛ/ВЫКЛ value is right-aligned on the row.
-        static const char* labelsPortrait[9] = {
+        static const char* labelsPortrait[10] = {
             "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
             "Советник по сборке (ИИ)", "БЕЗДНА — сложнее", "Следы снарядов",
             "Стиль иконок предметов", "Озвучка сообщений в бою",
-            "Карта кампании"
+            "Карта кампании",
+            "Графика"
         };
-        const bool values[9] = {
+        const bool values[10] = {
             sound.enabled.load(std::memory_order_relaxed), options.hitEffectsEnabled != 0,
             options.screenShakeEnabled != 0, options.advisorEnabled != 0,
             options.hardModeEnabled != 0, options.projectileTrailsEnabled != 0, options.skillIconStyle != 0,
-            options.messageSpeechEnabled != 0, options.campaignSnakeMap != 0
+            options.messageSpeechEnabled != 0, options.campaignSnakeMap != 0,
+            options.graphicsLevel != 0
         };
         const bool portraitLayout = SCREEN_W < SCREEN_H;
         const char* const* rowLabels = portraitLayout ? labelsPortrait : labels;
@@ -10324,26 +10388,34 @@ struct Game {
         const int w = portraitLayout || SCREEN_W < 1100 ? SCREEN_W - 48 : 760;
         // Девять строк вместо восьми: в портрете они ужимаются, иначе нижние
         // строки уезжают под кнопку «назад».
-        const int h = portraitLayout ? 40 : 36, startY = portraitLayout ? 146 : 96, gap = portraitLayout ? 4 : 2;
-        char stateText[24];
-        for (int i = 0; i < 9; ++i) {
+        // Десять строк вместо девяти: под них в альбоме ужат шаг, иначе нижняя
+        // строка уезжала под ползунки громкости.
+        const int h = portraitLayout ? 40 : 34, startY = portraitLayout ? 146 : 88, gap = portraitLayout ? 4 : 2;
+        char stateText[28];
+        for (int i = 0; i < 10; ++i) {
             int y = startY + i * (h + gap);
             bool hov = mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h;
             uint32_t border = hov ? 0xFFFFD848 : (values[i] ? 0xFF68DDA0 : 0xFF685878);
             r.fillRoundedRect(x, y, w, h, 9, hov ? 0xFF2D2147 : 0xFF1A132C);
             r.drawRoundedRect(x, y, w, h, 9, border, hov ? 3 : 2);
-            r.drawText(FONT_MED, x + 24, y + 12, rowLabels[i], 0xFFEAE4F8);
             if (i == 6) {
                 static const char* iconStyles[3] = {"ВЕКТОР", "ИИ-АРТ", "ЦВЕТ"};
                 snprintf(stateText, sizeof(stateText), "%s", iconStyles[std::max(0, std::min(2, options.skillIconStyle))]);
             }
             else if (i == 8) snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ЗМЕЙКА" : "КАРТА");
+            else if (i == 9) snprintf(stateText, sizeof(stateText), "%s", graphicsLevelName(options.graphicsLevel));
             else snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ВКЛ" : "ВЫКЛ");
+            // Подпись ужимается под правый столбец значений: на 960×720 (такой
+            // кадр рисуется в окне 800×600 и на телефоне) длинная строка про
+            // графику иначе наезжала на «ВЫСОКОЕ».
+            const int stateW = r.textWidth(FONT_MED, stateText);
+            const std::string rowLabel = fitText(r, FONT_MED, rowLabels[i], w - 48 - stateW - 16);
+            r.drawText(FONT_MED, x + 24, y + 12, rowLabel.c_str(), 0xFFEAE4F8);
             r.drawTextRight(FONT_MED, x + w - 24, y + (h - 18) / 2, stateText, values[i] ? 0xFF68F0A0 : 0xFFFF8B98);
             if (mouseClicked && hov) toggleOption(i + 1);
         }
 
-        const int volumeY = startY + 9 * (h + gap) + 22;
+        const int volumeY = startY + 10 * (h + gap) + 20;
         auto drawVolume = [&](int channel, int y, const char* label, float value) {
             const int rowX = x, rowW = w, rowH = portraitLayout ? 44 : 38;
             const int trackW = std::min(310, rowW * 38 / 100);
@@ -10386,11 +10458,11 @@ struct Game {
             snprintf(voiceLine, sizeof(voiceLine), "ОЗВУЧКА: ВСЕ %d ФРАЗ НА МЕСТЕ — audio/voice/", voiceClips);
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 20, voiceLine, voiceMissing > 0 ? 0xFFFFC98A : 0xFF8CD8B0);
         if (portraitLayout) {
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 40, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] ПЕРЕКЛЮЧАТЕЛИ", 0xFFAAA0C8);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 40, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] И [0] ГРАФИКА — ПЕРЕКЛЮЧАТЕЛИ", 0xFFAAA0C8);
         } else {
             // Подсказки ниже счётчиков считаются от infoY: с девятой строкой
             // настроек фиксированный y=574 наезжал на строку про музыку.
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 40, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] ПЕРЕКЛЮЧАТЕЛИ • КЛИК МЫШЬЮ", 0xFFAAA0C8);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 40, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] ПЕРЕКЛЮЧАТЕЛИ • [0] ГРАФИКА • КЛИК МЫШЬЮ", 0xFFAAA0C8);
             r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 62, "ГОЛОС — ЗАПИСАННЫЕ ФРАЗЫ В audio/voice/; СПИСОК И СЧЁТЧИКИ В F3", 0xFF8C82A8);
         }
         int bw = std::min(340, SCREEN_W - 48), bh = 50;
@@ -10529,6 +10601,7 @@ struct Game {
             "2.10.45 • КАТАЛОГ СБОРОК: ЧТО СОБИРАЕТСЯ ЗА 5, 10 И 15 МИНУТ",
             "2.10.46 • РЕФАКТОРИНГ РЕНДЕРА: КАДР 14.0 -> 7.2 МС БЕЗ ИЗМЕНЕНИЯ КАРТИНКИ",
             "2.10.47 • РАСПАРАЛЛЕЛИВАНИЕ: КАДР ПО ПОЛОСАМ, БИТ-В-БИТ ТОТ ЖЕ",
+            "2.10.48 • ГРАФИКА: СТУПЕНИ, АВТО И ТЕЛЕФОН",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -10672,6 +10745,7 @@ struct Game {
             "Каталог сборок: 21 билд из существующих сорока предметов проверен по окнам забега. Стенд tools/build_probe.cpp получил блок 8: каждая сборка считается дважды — «сразу» (все ранги с нулевой секунды) и «честно» (ранги выдаются по одной прокачке, только когда игра дала уровень и предмет открылся по времени). Бюджет окна: 15–17 прокачек к 5-й минуте, 25–28 к 10-й, 33–37 к 15-й — планы на 30 и 39 рангов не влезают, последние карты приходят уже после закрытия окна. Опыт — тоже ресурс билда: самой сильной сборке достаётся 17.5 / 30.5 / 39.0 прокачек там, где средней — 17 / 26 / 37. Порядок карт важнее набора: пока «Угольный Фитиль» (открывается на 8-й минуте) стоял третьим в плане, «Ожог» успевала вложить 16 рангов из 24 прокачек; после перестановки поздних предметов в конец — 26 рангов при 25. Десять вложений вернулись одной сортировкой, и сгоревшие прокачки — это не слабый билд, а ошибка порядка карт. Зачистку решает контроль, а не урон: у «Морозного взрыва» 12 103 убийства и пик 82 живых врага, у молнии 10 913 и пик 151 при одинаковом уроне на убийство (около 2 300). Разрыв «сразу — честно» в среднем 4.4 %, максимум 16 %: поздний приход карт почти не стоит урона, сборку рушит только смерть на старте. В первом окне билды почти неразличимы (разброс 14 %), к десятому расходятся на 21 %. Слоты: 5 + убитые стражи + (уровень−1)/10, к 15-й минуте это 8–9 предметов, поэтому широкий билд — шесть-восемь предметов, а не всё открытое. Найдены и названы дыры: билда на щит нет (щит дают только Покров и Чаша), золото в забеге ничего не покупает (монета — четыре ранга в ноль боевой ценности), добивание не архетип (Палач капут на трёх рангах и не работает по стражам), нет отражения, дальнего боя, призыва и складывающегося урона по времени. Разбор — design/builds_catalog.md, картинка — design/builds_catalog.png.",
             "Программа стала быстрее: кадр 14.0 -> 7.2 мс на 1280x720 (-49%), 12.85 -> 6.64 на кадре 960x720 и 14.33 -> 7.64 в портрете 720x1280. Вывод тот же до пикселя: хеш кадра совпал со старой сборкой на всех трёх размерах.\n• Игровая логика ни при чём: update() стоил 0.03 мс, всё время съедал программный растеризатор src/renderer.h.\n• Полупрозрачная заливка, прибавление света и ядро свечения переведены на SSE2: формула ((канал*альфа + фон*(255-альфа)) >> 8) ложится на 16-битные дорожки без переполнения, а прибавление света — это paddusb, четыре пикселя за одну команду. Раньше каждая панель, тень и ореол считались по пикселю с проверкой границ, клипа и тремя сравнениями с 255.\n• addGlow (41% кадра) получил отсев свечений целиком за кадром, указатель на ядро вместо operator[], 32-битное умножение и таблицу «яркость -> прибавка» на вызов.\n• fillRoundedRect больше не идёт по пикселям ровной середины панели: на строку считается один отступ скругления, а середина заливается одним span - 122 тыс. вызовов на 600 кадров.\n• applyFigureVolume не зовёт figMaterial() на каждый пиксель фигуры (это switch и копия структуры из семи полей): материалы считаются до цикла, строки берутся указателями.\n• Подача кадра: когда окно ровно в логический кадр, SetDIBitsToDevice вместо StretchDIBits с HALFTONE.\n• Цену определяет логический кадр, а не окно: 800x600 и 1024x768 рисуют 960x720, 1920x1080 — 1280x720, портрет — 720x1280. Прежняя цифра «19.8 мс на 1920x1080» относилась к размеру, в который игра не рисует.\n• Скалярная ветка (-DRENDERER_NO_SIMD) даёт 11.97 мс и тот же хеш: ускорение не привязано к SSE2.\n• Новый стенд tools/perf_bench.cpp меряет кадр, печатает хеш и возвращает код 1, если кадр дороже 16.7 мс.\n• Что осталось: addGlow — 3.1 мс из 7.2 (без свечений кадр падает до 4.5 мс), applyFigureVolume 0.42 мс на вызов, blendSpan уже упирается в память. Пространственное ядро свечения пробовал: выигрыша нет.\n• Разбор с профилем до и после, командами и честными границами замера — design/perf_refactor.md.",
             "Кадр рисуется полосами: игра берёт до четырёх потоков, режет экран на горизонтальные полосы, и каждый поток рисует только свои строки.\n• Пиксель принадлежит ровно одной полосе, поэтому картинка не зависит от числа потоков: в стенде экранов все 10 экранов и кадр боя совпали с однопоточной сборкой до пикселя.\n• Проверка встроена в стенды: perf_bench 600 1280x720 2 и screen_check 2 рисуют тот же кадр в две полосы.\n• Шов между полосами обходит фигуру стража: объём фигуры считается по снимку области кадра, то есть читает уже нарисованные строки, и полоса не имеет права читать строки соседа.\n• Если стражи заняли экран и шов провести некуда, кадр честно рисуется одним потоком — это запасной путь, а не тихая ошибка.\n• Потоки не трогают игру: update() остался однопоточным (0.03 мс), дрожание молний считается один раз до запуска полос, таблицы свечения и смещений спрайтов собираются под замком или в потокобезопасной форме.\n• Пружина позы стража стала общей на кадр: иначе страж, переезжая из полосы в полосу, начинал позу заново.\n• Однопоточный путь тоже подешевел: готовое свечение кэшируется на набор (радиус, цвет, яркость) и складывается с кадром векторным сложением с насыщением, у растянутого спрайта появилась карта колонок вместо деления на каждый пиксель, текст и однопиксельные линии идут без проверки клипа на каждый пиксель.\n• Замер на кадре 1280x720 (эндлесс, 8-я минута, семь оружий, 600 кадров): 7.57 -> 7.12 мс в две полосы, портрет 720x1280: 7.53 -> 5.96 мс (-21%), 960x720: 6.92 -> 6.20 мс.\n• На сцене с добычей (5908 самоцветов на полу) кадр 12.55 -> 7.31 мс, а с полосами — 4.00 мс при той же картинке.\n• Потолок задают ядра стенда (их два) и общий HUD: полос становится больше только там, где есть ядра.\n• Подробности, профиль и честный список того, где ускорения нет, — design/perf_parallel.md.",
+            "Графика получила ступени: АВТО, ВЫСОКОЕ, СРЕДНЕЕ, БЫСТРОЕ, ЭКОНОМ.\n• 2.10.48: графика получила ступени. В настройках появилась строка «Графика» — АВТО, ВЫСОКОЕ, СРЕДНЕЕ, БЫСТРОЕ, ЭКОНОМ (клавиша 0). Ступень меняет только цену растеризации: правила, урон, телеграфы и метки остаются прежними.\n• АВТО держит кадр по времени работы, а не по ожиданию вертикальной синхронизации: при кадре дороже 20 мс ступень падает сразу, поднимается обратно только после устойчивых 11 мс и трёх секунд паузы, поэтому не дёргается на всплесках.\n• СРЕДНЕЕ: крупные ореолы (радиус от 96) считаются в половинном разрешении и прибавляются к кадру до существ — порядок смешивания сохранён, свет не проходит сквозь героя и стражей. Это −3.5 мс на кадр (12.55 -> 8.4 в сцене с добычей).\n• БЫСТРОЕ: мелкие ореолы (искры добычи, ореолы чисел урона) не рисуются совсем, объём фигуры стража не считается, у пола остаются кладка, швы и тени — уходят фаски, трещины и надгробья.\n• ЭКОНОМ: остаются только крупные свечения; полный список того, что пропадает на каждой ступени, — в design/mobile_phone.md и на листе design/mobile_levels.png.\n• Замер на одном и том же кадре (1280x720, эндлесс 8-я минута, сто сорок врагов, страж, два потока): ВЫСОКОЕ 7.0 мс, СРЕДНЕЕ 5.4, БЫСТРОЕ 3.4, ЭКОНОМ 3.6. Портрет 720x1280: 6.0 -> 3.2 мс. Сцена с добычей: 4.3 / 3.9 / 3.6 мс.\n• ВЫСОКОЕ — ровно та же картинка, что в 2.10.47: все десять экранов стенда и кадр боя совпали до пикселя, а ступени 2–4 совпадают между одним, двумя и четырьмя потоками растеризации.\n• Ключи запуска: --graphics 0..4 и --threads 1..8. На телефоне через эмулятор это быстрее, чем искать настройки мышью, а заодно даёт возможность сравнить ступени на одном и том же месте.\n• Файл настроек читает прежний 56-байтный формат, поэтому обновление не сбрасывает переключатели; строка «Графика» дописана в конец.\n• В панели F3 появилась строка «ГРАФИКА»: что выбрано в настройках, какая ступень реально играет, цена кадра и число потоков. Без неё «тормозит» не с чем сопоставить.\n• Подача кадра: если окно заметно больше логического кадра (телефон, эмулятор, 4K-монитор) и ступень уже снижена, кадр отдаётся без HALFTONE-сглаживания — это ещё несколько миллисекунд из тех, что раньше уходили в GDI, а не в игру.\n• Честно про телефон: это не порт на Android. Игра — программа win32, на телефоне она идёт через эмулятор Windows (Winlator и подобные), и перевод x86 в ARM стоит дороже самого рендера. Замеры на телефоне, что делать в эмуляторе и чего ждать — design/mobile_phone.md.\n• Разбор ступеней, лист кадров и то, что делать в эмуляторе на телефоне, — design/mobile_phone.md.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
@@ -12108,6 +12182,7 @@ struct Game {
             else if (key == 'O' || key == 'o') { settingsReturnState = STATE_PAUSED; state = STATE_SETTINGS; }
         } else if (state == STATE_SETTINGS) {
             if (key >= '1' && key <= '9') toggleOption(key - '0');
+            else if (key == '0') toggleOption(10);
             else if (key == 9) settingsVolumeFocus = (settingsVolumeFocus + 1) % 2;
             else if (key == 37 || key == 39) adjustSoundVolume(key == 37 ? -1 : 1);
             else if (key == 27) state = settingsReturnState;
@@ -12297,6 +12372,48 @@ struct Game {
         return true;
     }
 
+    // ── Графика ─────────────────────────────────────────────────────────────
+    // Ступень 1..4 — это то, что реально играет: 1 высокое, 2 среднее,
+    // 3 быстрое, 4 эконом. В режиме «АВТО» её двигает observeFrameTime.
+    int graphicsTier = 1;
+    float qualityEma = 0.0f;        // сглаженное время кадра, мс
+    float qualityCooldown = 0.0f;   // пауза после переключения, с
+
+    static const char* graphicsLevelName(int level) {
+        static const char* const names[5] = {"АВТО", "ВЫСОКОЕ", "СРЕДНЕЕ", "БЫСТРОЕ", "ЭКОНОМ"};
+        return names[std::max(0, std::min(4, level))];
+    }
+    static const char* graphicsTierName(int tier) {
+        static const char* const names[4] = {"ВЫСОКОЕ", "СРЕДНЕЕ", "БЫСТРОЕ", "ЭКОНОМ"};
+        return names[std::max(0, std::min(3, tier - 1))];
+    }
+    // Ступень → уровень эффектов рендерера: 3 полный, 2 без мелких ореолов,
+    // 1 ореолы в половине разрешения, 0 только крупные свечения.
+    static int fxLevelForTier(int tier) {
+        return tier <= 1 ? 3 : (tier == 2 ? 2 : (tier == 3 ? 1 : 0));
+    }
+    int resolvedGraphicsTier() const {
+        if (options.graphicsLevel == 0) return std::max(1, std::min(4, graphicsTier));
+        return std::max(1, std::min(4, options.graphicsLevel));
+    }
+
+    // Главный цикл зовёт это каждый кадр: время кадра — единственная честная
+    // мерка на незнакомом железе. Вниз переходим сразу (кадр дороже 20 мс —
+    // это меньше 50 fps), вверх только после устойчиво хорошего кадра, иначе
+    // ступень будет дёргаться на каждом всплеске.
+    void observeFrameTime(float ms) {
+        if (!std::isfinite(ms) || ms <= 0.0f || ms > 500.0f) return;
+        qualityEma = qualityEma <= 0.0f ? ms : qualityEma * 0.90f + ms * 0.10f;
+        if (qualityCooldown > 0.0f) qualityCooldown = std::max(0.0f, qualityCooldown - ms / 1000.0f);
+        if (options.graphicsLevel != 0) { graphicsTier = options.graphicsLevel; return; }
+        if (qualityCooldown > 0.0f) return;
+        if (qualityEma > 20.0f && graphicsTier < 4) {
+            ++graphicsTier; qualityCooldown = 1.2f; qualityEma = 0.0f;
+        } else if (qualityEma < 11.0f && graphicsTier > 1) {
+            --graphicsTier; qualityCooldown = 3.0f; qualityEma = 0.0f;
+        }
+    }
+
     // Полосный рендер мира и HUD. Возвращает false, если полосы не годятся и
     // кадр надо рисовать как обычно (один поток, весь экран).
     bool renderBands(Renderer& r, float camX, float camY) {
@@ -12329,6 +12446,9 @@ struct Game {
         for (int b = 1; b < bands; ++b) {
             Renderer* view = bandViews[b - 1].get();
             view->initBand(r.pixels, SCREEN_W, SCREEN_H, cuts[b], cuts[b + 1], r.skillIconStyle);
+            view->shareGlowFrom(r);
+            view->fxLevel = r.fxLevel;
+            view->deferGlow = true;
             workers.emplace_back([this, view, camX, camY]() {
                 renderWorld(*view, camX, camY);
                 renderMusicTempoEffects(*view);
@@ -12345,6 +12465,11 @@ struct Game {
 
     void render(Renderer& r) {
         r.skillIconStyle = std::max(0, std::min(2, options.skillIconStyle));
+        r.fxLevel = fxLevelForTier(resolvedGraphicsTier());
+        r.clearGlow();
+        // Крупные ореолы копятся в половинном буфере до конца пола: так порядок
+        // смешивания остаётся прежним (свет под существами, а не поверх них).
+        r.deferGlow = true;
         if (state == STATE_PATCH_NOTES) {
             renderPatchNotes(r);
         } else if (state == STATE_CUTSCENE) {
@@ -12399,6 +12524,10 @@ struct Game {
 
         if (cheatMenuOpen) renderCheatMenu(r);
         if (debugOverlay) drawDebugOverlay(r);
+
+        // Если кадр кончился раньше, чем начались существа (меню, карта, экран
+        // смерти), остаток буфера всё равно надо прибавить — иначе он потеряется.
+        r.compositeGlow();
 
         // Custom glowing arcane cursor
         r.drawCircleRing(mouseX, mouseY, 8, 2, 0xFFFFE068, 220);

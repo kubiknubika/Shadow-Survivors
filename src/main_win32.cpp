@@ -7,6 +7,8 @@
 #include <time.h>
 #include <exception>
 #include <string>
+#include <cstring>
+#include <cstdlib>
 #include "version.h"
 #include "game.h"
 
@@ -17,6 +19,11 @@ static WINDOWPLACEMENT g_wpPrev = { sizeof(g_wpPrev) };
 
 static int g_winW = 1280;
 static int g_winH = 720;
+// Ключи командной строки: на слабом железе быстрее задать ступень один раз,
+// чем искать её в настройках мышью. Пустое значение — не задано.
+static int g_forceThreads = 0;
+static int g_forceGraphics = -1;
+static bool g_useHalftone = true;
 static int g_viewX = 0, g_viewY = 0, g_viewW = 1280, g_viewH = 720;
 
 static void updateViewportRect(int clientW, int clientH) {
@@ -267,15 +274,31 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     g_bmi.bmiHeader.biBitCount = 32;
     g_bmi.bmiHeader.biCompression = BI_RGB;
 
+    // Ключи: ShadowSurvivors.exe --threads 4 --graphics 3
+    //   --threads N   1..8  сколько потоков рисуют кадр (0 — по числу ядер)
+    //   --graphics N  0..4  АВТО / высокое / среднее / быстрое / эконом
+    if (lpCmdLine && lpCmdLine[0]) {
+        for (const char* p = lpCmdLine; *p; ++p) {
+            if (strncmp(p, "--threads", 9) == 0) g_forceThreads = atoi(p + 9);
+            else if (strncmp(p, "--graphics", 10) == 0) g_forceGraphics = atoi(p + 10);
+        }
+        if (g_forceThreads < 0) g_forceThreads = 0;
+        if (g_forceThreads > 8) g_forceThreads = 8;
+        if (g_forceGraphics >= 0 && g_forceGraphics <= 4) g_game.options.graphicsLevel = g_forceGraphics;
+    }
+
     g_game.init();
     // Кадр рисуется полосами: по одному потоку на полосу, максимум четыре.
     // На одном ядре или в системе, где неизвестно число ядер, остаётся
     // однопоточный путь — он же и запасной, если полосы не годятся.
     {
         unsigned cores = std::thread::hardware_concurrency();
-        if (cores < 2) cores = 1;
-        if (cores > 4) cores = 4;
-        g_game.renderThreads = (int)cores;
+        if (g_forceThreads > 0) g_game.renderThreads = g_forceThreads;
+        else {
+            if (cores < 2) cores = 1;
+            if (cores > 4) cores = 4;
+            g_game.renderThreads = (int)cores;
+        }
     }
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
@@ -309,8 +332,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         float dt = (float)(now.QuadPart - lastCounter.QuadPart) / (float)freq.QuadPart;
         lastCounter = now;
 
+        // Время кадра меряется вокруг самой работы, а не вокруг ожидания
+        // вертикальной синхронизации: иначе при 60 Гц «АВТО» всегда видело бы
+        // 16.7 мс и не смогло бы отличить быстрый кадр от медленного.
+        LARGE_INTEGER workStart;
+        QueryPerformanceCounter(&workStart);
         g_game.update(dt);
         g_game.render(g_renderer);
+        LARGE_INTEGER workEnd;
+        QueryPerformanceCounter(&workEnd);
+        // Ступень графики в режиме «АВТО» двигается по времени кадра: на телефоне
+        // через эмулятор это единственная честная мерка.
+        g_game.observeFrameTime((float)(workEnd.QuadPart - workStart.QuadPart) * 1000.0f / (float)freq.QuadPart);
 
         // Present the full logical canvas at the client aspect ratio; world view is never cropped.
         if (g_viewX == 0 && g_viewY == 0 && g_viewW == SCREEN_W && g_viewH == SCREEN_H) {
@@ -319,6 +352,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             SetDIBitsToDevice(hdc, 0, 0, SCREEN_W, SCREEN_H, 0, 0, 0, SCREEN_H,
                               g_renderer.pixels, &g_bmi, DIB_RGB_COLORS);
         } else {
+            // HALFTONE — фильтр в софте: он сглаживает край, но гонит весь кадр
+            // через свой конвейер. Когда окно заметно больше логического кадра и
+            // ступень графики уже снижена, дешевле отдать без сглаживания: на
+            // телефоне это экономит несколько миллисекунд на каждом кадре.
+            const bool bigUpscale = g_viewW > (SCREEN_W * 3) / 2 || g_viewH > (SCREEN_H * 3) / 2;
+            const bool wantHalftone = !(bigUpscale && g_game.resolvedGraphicsTier() >= 2);
+            if (wantHalftone != g_useHalftone) {
+                g_useHalftone = wantHalftone;
+                SetStretchBltMode(hdc, g_useHalftone ? HALFTONE : COLORONCOLOR);
+                if (g_useHalftone) SetBrushOrgEx(hdc, 0, 0, NULL);
+            }
             StretchDIBits(
                 hdc,
                 g_viewX, g_viewY, g_viewW, g_viewH,

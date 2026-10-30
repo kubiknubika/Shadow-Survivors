@@ -8,6 +8,11 @@
 //
 //     g++ -O2 -std=c++17 -pthread -Isrc tools/screen_check.cpp -o build/screens_new
 //     build/screens_new 2          # тот же набор, но кадр в две полосы
+//     build/screens_new 2 3        # и на ступени графики 3 («быстрое»)
+//
+// Второй аргумент — ступень графики 1..4. На ступени 1 картинка обязана
+// совпадать со сборкой до правок; 2–4 меняют её осознанно, и там проверяется
+// другое: что один, два и четыре потока дают один и тот же кадр.
 //     git stash && g++ -O2 -std=c++17 -Isrc tools/screen_check.cpp -o build/screens_old && git stash pop
 //     build/screens_old > old.txt && build/screens_new > new.txt && diff old.txt new.txt
 //
@@ -30,6 +35,9 @@ int main(int argc, char** argv) {
     // Второй аргумент — число потоков: с ним тот же стенд проверяет, что
     // полосный кадр совпадает с однопоточным пиксель в пиксель.
     const int threads = argc > 1 ? std::max(1, atoi(argv[1])) : 1;
+    // Второй аргумент — уровень графики (1 высокое … 4 эконом): три нижних
+    // уровня меняют картинку осознанно, и их надо смотреть глазами.
+    const int graphicsLevel = argc > 2 ? std::max(1, std::min(4, atoi(argv[2]))) : 1;
     struct Case { const char* name; int state; };
     const Case cases[] = {
         {"меню", STATE_MENU},
@@ -51,6 +59,7 @@ int main(int argc, char** argv) {
         g.runTime = 240.0f;
         for (int i = 0; i < 5; ++i) g.itemLevels[i] = 3;
         g.renderThreads = threads;
+        g.options.graphicsLevel = graphicsLevel;
         g.state = (GameState)c.state;
         if (c.state == STATE_PLAYING || c.state == STATE_LEVELUP || c.state == STATE_CHEST || c.state == STATE_PAUSED) {
             for (int i = 0; i < 60; ++i) g.spawnMonster(i % 8, i % 9 == 0, false);
