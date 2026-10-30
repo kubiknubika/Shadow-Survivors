@@ -37,6 +37,7 @@
 #include <cmath>
 #include <functional>
 #include <cstdio>
+#include <cstddef>
 #include <cstring>
 #include <string>
 #include <sys/stat.h>
@@ -50,6 +51,13 @@
 
 static int g_failed = 0;
 static int g_passed = 0;
+
+// Рендерер игры: экран реагирует на касание только в отрисовке, поэтому стенду
+// нужно рисовать кадр так же, как это делает поток игры.
+static Renderer* fakeRender() { return &g_renderer; }
+// Слоты касаний живут в main_android.cpp; стенду они нужны, чтобы прогнать
+// схему без очереди ввода — когда поток игры на паузе.
+static TouchPointer* pointerSlots() { return g_pointer; }
 
 static void check(bool ok, const char* what, const char* detail = "") {
     if (ok) {
@@ -129,6 +137,7 @@ int main(int argc, char** argv) {
     callbacks.onResume(&activity);
 
     g_swapsAtStart = fake::swapCount();
+    const GameState firstState = g_game.state;   // что игра показала на старте
     const bool frames = waitFor("кадры", 3000, swapsGrew);
     check(frames, "кадры дошли до eglSwapBuffers");
     check(fake::glReady(), "EGL поднялся");
@@ -220,6 +229,101 @@ int main(int argc, char** argv) {
     check(resumed, "после возврата кадры снова идут");
     const bool audioBack = waitFor("звук", 3000, [] { return fake::audioRunning(); });
     check(audioBack, "после возврата звук снова играет");
+
+    // ── 4.5. Управление: первый запуск, схема, крестовина ──────────────────
+    printf("управление на телефоне\n");
+    check(g->touchControls, "Android включает телефонный интерфейс");
+    // Первый запуск: в каталоге ещё нет настроек, значит вопрос про схему
+    // должен был быть задан. Смотрим на состояние сразу после старта, пока
+    // стенд его не перезаписал (см. firstState в начале).
+    check(firstState == STATE_CONTROLS_SETUP, "при первом запуске показан выбор схемы движения");
+    check(g->options.touchScheme == 0, "схема по умолчанию — стик слева");
+
+    // Экран реагирует на касание только в отрисовке, а поток игры рисует сам и
+    // гасит клик. Поэтому ставим активность на паузу: тогда клик разбирает
+    // только стенд, и проверка не зависит от того, кто успел первым.
+    callbacks.onPause(&activity);
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+
+    const int uiW = SCREEN_W, uiH = SCREEN_H;
+    const int uiMargin = std::min(16, std::max(8, uiW / 24));
+    const int uiGap = uiW < 980 ? 10 : 16;
+    const int uiButtonH = uiW < uiH ? 52 : 50;
+    const int uiCardW = (uiW - 2 * uiMargin - 2 * uiGap) / 3;
+    const int uiCardH = std::min(430, (uiH - uiButtonH - 34) - 92);
+    const int uiCardY = 92 + std::max(0, ((uiH - uiButtonH - 34) - 92 - uiCardH) / 2);
+
+    auto tapAt = [&](float lx, float ly) {
+        g->mouseX = (int)lx;
+        g->mouseY = (int)ly;
+        g->mouseLeftDown = true;
+        g->mouseClicked = true;
+        g->render(*fakeRender());
+        g->mouseLeftDown = false;
+    };
+
+    g->state = STATE_CONTROLS_SETUP;
+    tapAt((float)(uiMargin + (uiCardW + uiGap) + uiCardW / 3), (float)(uiCardY + uiCardH / 2));
+    snprintf(detail, sizeof(detail), "схема %d", g->options.touchScheme);
+    check(g->options.touchScheme == TOUCH_SCHEME_STICK_RIGHT,
+          "касание второй карточки выбирает «стик справа»", detail);
+
+    tapAt((float)uiW / 2.0f, (float)(uiH - uiButtonH - 22 + uiButtonH / 2));
+    snprintf(detail, sizeof(detail), "touchSetupDone %d, state %s",
+             g->options.touchSetupDone, Game::stateName(g->state));
+    check(g->options.touchSetupDone == 1, "«дальше» сохраняет выбор", detail);
+    check(g->state != STATE_CONTROLS_SETUP, "после «дальше» экран закрывается", detail);
+
+    // Выбор лежит в файле настроек: следующий запуск его прочитает и снова
+    // спрашивать не станет. Проверяем именно байты файла, а не поле в памяти.
+    {
+        const std::string cfg = home + "/shadow_survivors.cfg";
+        const long size = fileSize(cfg);
+        snprintf(detail, sizeof(detail), "%ld байт, ждём %d", size, (int)sizeof(GameOptions));
+        check(size == (long)sizeof(GameOptions), "настройки с выбором схемы записаны", detail);
+        FILE* f = fopen(cfg.c_str(), "rb");
+        unsigned char chosen = 0xFF, done = 0xFF;
+        if (f) {
+            fseek(f, (long)offsetof(GameOptions, touchScheme), SEEK_SET);
+            if (fread(&chosen, 1, 1, f) != 1) chosen = 0xFF;
+            fseek(f, (long)offsetof(GameOptions, touchSetupDone), SEEK_SET);
+            if (fread(&done, 1, 1, f) != 1) done = 0xFF;
+            fclose(f);
+        }
+        snprintf(detail, sizeof(detail), "схема %d, флаг %d", (int)chosen, (int)done);
+        check(chosen == (unsigned char)TOUCH_SCHEME_STICK_RIGHT && done == 1,
+              "в файле лежит выбранная схема и отметка «спросили»", detail);
+    }
+
+    // Крестовина: кнопки двигают героя так же, как клавиатура.
+    g->options.touchScheme = TOUCH_SCHEME_DPAD_LEFT;
+    g->state = STATE_PLAYING;
+    g->playerX = uiW * 0.5f;
+    g->playerY = uiH * 0.5f;
+    {
+        TouchLayout l;
+        l.layout(uiW, uiH, TOUCH_SCHEME_DPAD_LEFT);
+        const float px = l.padRight.x + l.padRight.w / 2;
+        const float py = l.padRight.y + l.padRight.h / 2;
+        g->mouseClicked = false;
+        // Касание идёт через ту же очередь, что на телефоне, но разбирает его
+        // стенд: поток на паузе.
+        touchBegin(pointerSlots(), *g, l, 22, px, py);
+        touchUpdate(*g, pointerSlots());
+        snprintf(detail, sizeof(detail), "keyD %d, роль %d", (int)g->keyD, (int)pointerSlots()[0].role);
+        check(g->keyD, "кнопка «вправо» крестовины ставит keyD", detail);
+        touchUpdate(*g, pointerSlots());
+        g->update(1.0f / 60.0f);
+        g->update(1.0f / 60.0f);
+        snprintf(detail, sizeof(detail), "playerX %.1f (было %.1f)", g->playerX, uiW * 0.5f);
+        check(g->playerX > uiW * 0.5f + 1.0f, "герой пошёл вправо от крестовины", detail);
+        touchEnd(pointerSlots(), *g, 22);
+        touchUpdate(*g, pointerSlots());
+        check(!g->keyD, "отпускание кнопки снимает движение");
+    }
+    g->options.touchScheme = TOUCH_SCHEME_STICK_LEFT;
+    callbacks.onResume(&activity);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     // ── 5. Смена размера окна (поворот телефона, сплит, выход из полноэкранного) ──
     printf("окно другого размера\n");

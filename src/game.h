@@ -35,10 +35,15 @@ enum GameState {
     STATE_BOSS_MUSIC_TEST,
     STATE_MISSION_SELECT,
     STATE_MISSION_COMPLETE,
-    STATE_HERO_SELECT
+    STATE_HERO_SELECT,
+    STATE_CONTROLS_SETUP   // 2.10.53: выбор схемы движения на Android
 };
 
 enum RunMode { MODE_STORY = 0, MODE_ENDLESS = 1 };
+
+// Схема касаний (TouchScheme) нужна и в настройках, и в отрисовке, поэтому
+// подключается здесь: выше уже есть GameState, на который она опирается.
+#include "touch_input.h"
 
 struct CampaignMissionDef {
     const char* title;
@@ -185,7 +190,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 146;
+static constexpr int PATCH_NOTES_COUNT = 147;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -699,6 +704,13 @@ struct GameOptions {
     // 2.10.48 (хвост): графика. 0 — авто (ступень подбирается по времени кадра),
     // 1 — высокое, 2 — среднее, 3 — быстрое, 4 — эконом.
     int graphicsLevel = 0;
+    // 2.10.53: управление касаниями. Схему выбирает игрок на Android, на
+    // Windows эти поля просто лежат без дела: клавиатуре они не мешают.
+    // 0 — стик слева, 1 — стик справа (левша), 2 — крестовина.
+    int touchScheme = 0;
+    // 0 — выбор схемы ещё не показан: при первом запуске на Android игра сама
+    // предложит три варианта, вместо того чтобы молча включить первый.
+    int touchSetupDone = 0;
 };
 
 // Предыдущая раскладка настроек (без строки «Графика»): файл на 56 байт должен
@@ -711,7 +723,20 @@ struct LegacyGameOptions56 {
     float sfxVolume, musicVolume;
     int messageSpeechEnabled, skillIconStyle, campaignSnakeMap;
 };
-static_assert(sizeof(GameOptions) == 60, "2.10.48 options layout changed unexpectedly");
+// Раскладка 2.10.48–2.10.52 (60 байт, без полей управления касаниями): файл
+// настроек, сохранённый предыдущей сборкой, должен читаться, иначе обновление
+// сбрасывало бы все переключатели.
+struct LegacyGameOptions60 {
+    uint32_t magic;
+    int sfxEnabled, musicEnabled, hitEffectsEnabled, screenShakeEnabled, advisorEnabled, hardModeEnabled;
+    uint32_t patchNotesHiddenVersion;
+    int projectileTrailsEnabled;
+    float sfxVolume, musicVolume;
+    int messageSpeechEnabled, skillIconStyle, campaignSnakeMap;
+    int graphicsLevel;
+};
+static_assert(sizeof(LegacyGameOptions60) == 60, "2.10.52 options layout changed unexpectedly");
+static_assert(sizeof(GameOptions) == 68, "2.10.53 options layout changed unexpectedly");
 
 struct SaveData {
     uint32_t magic = 0x53484457; // 'SHDW'
@@ -848,7 +873,92 @@ struct Game {
         voiceMissing = MessageRegistry::voicedDefs() - voiceClips;
         messages.missingClips = voiceMissing;
     }
-    bool debugOverlay = false;     // F3 technical read-out
+    bool debugOverlay = false;     // панель отладки (F3 / кнопка «ОТЛ»)
+
+    // ── Касания (Android) ──────────────────────────────────────────────────
+    // touchControls включает «телефонный» интерфейс: подсказки без названий
+    // клавиш и экран выбора схемы движения. Ставит платформа, а не #ifdef:
+    // так обе версии интерфейса проверяются на одной машине стендами.
+    bool touchControls = false;
+    // Куда вернуться после экрана «УПРАВЛЕНИЕ»: в настройки, если игрок зашёл
+    // оттуда, или в меню при первом запуске.
+    GameState controlsReturnState = STATE_MENU;
+
+    // Подсказка для экрана. На Android клавиатуры нет, поэтому клавишные метки
+    // вида [ESC] и [ПРОБЕЛ] убираются, а строки, которые целиком про клавиши,
+    // заменяются на жесты. Таблица замен явная: «[X] СОТНЯ ВРАГОВ» в зале славы
+    // — это галочка, а не клавиша, и её трогать нельзя.
+    const char* keyHint(const char* text) const {
+        if (!touchControls || !text) return text;
+        struct HintRow { const char* keyboard; const char* touch; };
+        static const HintRow kFull[] = {
+            {"WASD • ДВИЖЕНИЕ   SPACE • РЫВОК   Q • СУПЕР",
+             "СТИК • ДВИЖЕНИЕ   КНОПКИ • РЫВОК И СУПЕР"},
+            {"ПКМ • КУРСОР   M/N • ЗВУК   F11 • ЭКРАН   ESC • ПАУЗА",
+             "ПАЛЕЦ СПРАВА • ПРИЦЕЛ И ОГОНЬ   II • ПАУЗА"},
+            {"[WASD / Стрелки] Движение • [ПКМ] Курсор • [Пробел] Рывок • [Q] Супер • [M] SFX [N] Музыка • [F11] Экран • [ESC] Пауза",
+             "Стик — движение • палец справа — прицел и огонь • СУПЕР и РЫВОК — кнопки • II — пауза"},
+            {"[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] И [0] ГРАФИКА — ПЕРЕКЛЮЧАТЕЛИ",
+             "КОСНИТЕСЬ СТРОКИ — ПЕРЕКЛЮЧАТЕЛЬ • ПОЛЗУНОК — ГРОМКОСТЬ"},
+            {"[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] ПЕРЕКЛЮЧАТЕЛИ • [0] ГРАФИКА • КЛИК МЫШЬЮ",
+             "КОСНИТЕСЬ СТРОКИ — ПЕРЕКЛЮЧАТЕЛЬ • ПОЛЗУНОК ГРОМКОСТИ — ПАЛЕЦ"},
+            {"ГОЛОС — ЗАПИСАННЫЕ ФРАЗЫ В audio/voice/; СПИСОК И СЧЁТЧИКИ В F3",
+             "ГОЛОС — ЗАПИСАННЫЕ ФРАЗЫ В audio/voice/; СПИСОК И СЧЁТЧИКИ — КНОПКА ОТЛ"},
+            {"WASD / СТРЕЛКИ — движение  •  ПРОБЕЛ / SHIFT — рывок  •  Q — суперумение",
+             "СТИК — движение  •  РЫВОК — кнопка  •  СУПЕР — кнопка рядом с рывком"},
+            {"1–4 / ЛКМ — улучшение  •  R — замена  •  ПКМ — бег за курсором  •  M / N — звук",
+             "ТАП ПО КАРТОЧКЕ — улучшение  •  «ЗАМЕНА» — обмен  •  палец справа — прицел"},
+            {"O — настройки  •  ESC — назад  •  1% врагов применяет тактики перехвата и уклонения",
+             "II — пауза и назад  •  1% врагов применяет тактики перехвата и уклонения"},
+            {"СТРЕЛКИ / A-D — НАВИГАЦИЯ • ENTER — ВЫБРАТЬ • МЫШЬ — НАВЕСТИ ИЛИ НАЖАТЬ",
+             "КОСНИТЕСЬ СЕКТОРА — ВЫБРАТЬ  •  ПАНЕЛЬ СНИЗУ — РАЗДЕЛЫ"},
+            {"КЛИК ИЛИ A / D  •  ЦИФРЫ 1–5 — ВЫБОР ГЕРОЯ",
+             "КОСНИТЕСЬ ГЕРОЯ ИЛИ СТРЕЛОК — ВЫБОР"},
+            {"КОЛЁСО МЫШИ  •  ↑ / ↓ — СТРОКА  •  PGUP / PGDN — ЭКРАН",
+             "ПРОВЕДИТЕ ПАЛЬЦЕМ — ПРОКРУТКА СПИСКА"},
+            {"РЫВОК ГОТОВ • SPACE", "РЫВОК ГОТОВ"},
+            {"РЫВОК ГОТОВ  •  ПРОБЕЛ", "РЫВОК ГОТОВ"},
+            {"КОЛЕСО МЫШИ ИЛИ PGDN / PGUP — ПРОКРУТКА ЗАМЕТКИ  •  ЛИСТАЙ [<- / ->] ИЛИ КНОПКАМИ",
+             "ПРОВЕДИТЕ ПАЛЬЦЕМ ПО ЗАМЕТКЕ — ПРОКРУТКА  •  ЛИСТАЙ КНОПКАМИ"},
+            {"Снизу вверх • колесо — прокрутка • клик по голове змеи выбирает ветку, вторая гаснет навсегда",
+             "Снизу вверх • проведите пальцем — прокрутка • тап по голове змеи выбирает ветку, вторая гаснет навсегда"},
+        };
+        for (const HintRow& row : kFull)
+            if (strcmp(row.keyboard, text) == 0) return row.touch;
+
+        // Остальные строки чистятся по списку меток: «НАЗАД [ESC]» на телефоне
+        // читается как «НАЗАД», и это правда — кнопка нажимается касанием.
+        static char ring[6][320];
+        static int cursor = 0;
+        char* out = ring[cursor];
+        cursor = (cursor + 1) % 6;
+        static const char* const kTokens[] = {
+            "[ESC]", "[ENTER]", "[TAB]", "[F9]", "[F3]", "[F11]",
+            "[ПРОБЕЛ / ЛКМ]", "[ПРОБЕЛ]", "[ЛКМ]", "[ПКМ]", "[SHIFT]",
+            "[WASD / Стрелки]", "[WASD]", "[Q]", "[M]", "[N]", "[0]", "[1–9]", "[←/→]",
+            // [X] здесь намеренно нет: «[X] СОТНЯ ВРАГОВ» — галочка зала славы,
+            // а не клавиша, и снимать её на телефоне нельзя.
+            "[G]", "[R]", "[O]", "[E]", "[C]", "[V]",
+        };
+        size_t o = 0;
+        for (size_t i = 0; text[i] && o + 1 < sizeof(ring[0]);) {
+            bool skipped = false;
+            for (const char* token : kTokens) {
+                const size_t len = strlen(token);
+                if (strncmp(text + i, token, len) == 0) {
+                    i += len;
+                    while (o > 0 && out[o - 1] == ' ') --o;   // пробел перед меткой
+                    skipped = true;
+                    break;
+                }
+            }
+            if (skipped) continue;
+            out[o++] = text[i++];
+        }
+        while (o > 0 && (out[o - 1] == ' ' || out[o - 1] == ',')) --o;
+        out[o] = 0;
+        return out;
+    }
     bool debugAiIntent = false;    // решения разумных мобов: строка состояния у каждого
     int debugAiStandCycle = 0;     // сколько раз звали «СТЕНД ИИ»: сдвигает углы тройки
     // Дебаг-меню (F9 или клавиша `). Раньше оно открывалось только по коду v404,
@@ -1037,6 +1147,15 @@ struct Game {
         patchNotesPage = PATCH_NOTES_COUNT - 1;
         patchNotesScroll = 0.0f;
         state = options.patchNotesHiddenVersion == PATCH_NOTES_VERSION ? STATE_MENU : STATE_PATCH_NOTES;
+        // Первый запуск на Android: сначала спросить, чем двигаться. Иначе игрок
+        // получает стик, о котором не просил, и ищет настройки сам.
+        if (touchControls) {
+            options.touchScheme = std::max(0, std::min(TOUCH_SCHEME_COUNT - 1, options.touchScheme));
+            if (!options.touchSetupDone) {
+                controlsReturnState = state;
+                state = STATE_CONTROLS_SETUP;
+            }
+        }
     }
 
 
@@ -1119,6 +1238,26 @@ struct Game {
             } else if (n == (long)sizeof(GameOptions)) {
                 GameOptions saved{};
                 if (fread(&saved, sizeof(saved), 1, f) == 1 && saved.magic == 0x53484346) options = saved;
+            } else if (n == (long)sizeof(LegacyGameOptions60)) {
+                LegacyGameOptions60 old{};
+                if (fread(&old, sizeof(old), 1, f) == 1 && old.magic == 0x53484346) {
+                    options = GameOptions{};
+                    options.sfxEnabled = old.sfxEnabled; options.musicEnabled = old.musicEnabled;
+                    options.hitEffectsEnabled = old.hitEffectsEnabled;
+                    options.screenShakeEnabled = old.screenShakeEnabled;
+                    options.advisorEnabled = old.advisorEnabled; options.hardModeEnabled = old.hardModeEnabled;
+                    options.patchNotesHiddenVersion = old.patchNotesHiddenVersion;
+                    options.projectileTrailsEnabled = old.projectileTrailsEnabled;
+                    options.sfxVolume = old.sfxVolume; options.musicVolume = old.musicVolume;
+                    options.messageSpeechEnabled = old.messageSpeechEnabled;
+                    options.skillIconStyle = old.skillIconStyle;
+                    options.campaignSnakeMap = old.campaignSnakeMap;
+                    options.graphicsLevel = old.graphicsLevel;
+                    // Управление касаниями — новое: схема по умолчанию, и вопрос
+                    // про неё будет задан при первом запуске на Android.
+                    options.touchScheme = 0;
+                    options.touchSetupDone = 0;
+                }
             } else if (n == (long)sizeof(LegacyOptionsCurrent)) {
                 LegacyOptionsCurrent old{};
                 if (fread(&old, sizeof(old), 1, f) == 1 && old.magic == 0x53484346) {
@@ -1175,6 +1314,7 @@ struct Game {
         // Old builds stored the music-track index here; anything non-zero simply means "on".
         options.messageSpeechEnabled = options.messageSpeechEnabled != 0 ? 1 : 0;
         options.skillIconStyle = std::max(0, std::min(2, options.skillIconStyle));
+        options.touchScheme = std::max(0, std::min(TOUCH_SCHEME_COUNT - 1, options.touchScheme));
         sound.musicVariant.store(0, std::memory_order_relaxed);
         sound.enabled.store(options.sfxEnabled != 0, std::memory_order_relaxed);
         sound.musicEnabled.store(options.musicEnabled != 0, std::memory_order_relaxed);
@@ -7245,7 +7385,10 @@ struct Game {
         const int panelW = std::min(portrait ? SCREEN_W - 24 : 560, SCREEN_W - 24);
         const int panelX = portrait ? 12 : 18;
         const bool twoLineHints = portrait || SCREEN_W < 1100;
-        int cursorY = SCREEN_H - (twoLineHints ? 54 : 36) - 10;
+        // На телефоне внизу слева стоят палец-стик и крестовина: стек уведомлений
+        // поднимается над ними, иначе предупреждение о страже читается сквозь кнопки.
+        const int touchLift = touchControls ? 150 : 0;
+        int cursorY = SCREEN_H - (twoLineHints ? 54 : 36) - 10 - touchLift;
         for (const Row& row : rows) {
             if (row.alpha <= 2 || row.text.empty()) continue;
             const int lines = textLineCount(r, row.text, panelW - 34);
@@ -7287,7 +7430,8 @@ struct Game {
         const float dash = dashCooldown <= 0.0f ? 1.0f : std::max(0.0f, 1.0f - dashCooldown / 3.0f);
         r.fillRoundedRect(pad + 9, 60, fullW - 18, 11, 4, 0xFF151522);
         r.fillRoundedRect(pad + 9, 60, (int)((fullW - 18) * dash), 11, 4, dash >= 1.0f ? 0xFF22AFC8 : 0xFF285B83);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 58, dash >= 1.0f ? "РЫВОК ГОТОВ • SPACE" : "РЫВОК ПЕРЕЗАРЯЖАЕТСЯ", 0xFFF0FCFF);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 58,
+                           dash >= 1.0f ? keyHint("РЫВОК ГОТОВ • SPACE") : "РЫВОК ПЕРЕЗАРЯЖАЕТСЯ", 0xFFF0FCFF);
 
         const int mins = (int)(runTime / 60.0f), secs = (int)runTime % 60;
         r.fillRect(pad, 84, fullW, 46, 0xE9100D1B);
@@ -7354,8 +7498,8 @@ struct Game {
         }
         drawCombatNotices(r);
         r.fillRect(0, SCREEN_H - 32, SCREEN_W, 32, 0xFF0E0A18, 218);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 27, "WASD • ДВИЖЕНИЕ   SPACE • РЫВОК   Q • СУПЕР", 0xFFDDD5EF);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 13, "ПКМ • КУРСОР   M/N • ЗВУК   F11 • ЭКРАН   ESC • ПАУЗА", 0xFFB8B0D0);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 27, keyHint("WASD • ДВИЖЕНИЕ   SPACE • РЫВОК   Q • СУПЕР"), 0xFFDDD5EF);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 13, keyHint("ПКМ • КУРСОР   M/N • ЗВУК   F11 • ЭКРАН   ESC • ПАУЗА"), 0xFFB8B0D0);
     }
 
     void renderHUD(Renderer& r, float camX, float camY) {
@@ -7394,7 +7538,7 @@ struct Game {
         r.fillRoundedRect(hpBarX, dashBarY, (int)(hpBarW * dashReady), dashBarH, 4, dashReady >= 1.0f ? 0xFF22AFC8 : 0xFF285B83);
         r.drawRoundedRect(hpBarX, dashBarY, hpBarW, dashBarH, 4, 0xFF55D9E9, 1);
         r.drawTextCentered(FONT_SMALL, hpBarX + hpBarW / 2, dashBarY + 1,
-            dashReady >= 1.0f ? "РЫВОК ГОТОВ  •  ПРОБЕЛ" : "РЫВОК ПЕРЕЗАРЯЖАЕТСЯ", 0xFFF0FCFF);
+            dashReady >= 1.0f ? keyHint("РЫВОК ГОТОВ  •  ПРОБЕЛ") : "РЫВОК ПЕРЕЗАРЯЖАЕТСЯ", 0xFFF0FCFF);
 
         // A two-row loadout tray caps width even when all twenty item slots are active.
         int activeItems = 0;
@@ -7596,7 +7740,7 @@ struct Game {
         else if (superCharge >= 100.0f)
             snprintf(superLabel, sizeof(superLabel), "НУЖНО HP ДЛЯ СУПЕРА");
         else snprintf(superLabel, sizeof(superLabel), "СУПЕР [Q] • ЗАРЯД");
-        r.drawTextCentered(FONT_SMALL, ux + uw / 2, 36, superLabel, 0xFFE8D8FF);
+        r.drawTextCentered(FONT_SMALL, ux + uw / 2, 36, keyHint(superLabel), 0xFFE8D8FF);
         r.fillRoundedRect(ux, uy, uw, uh, 5, 0xFF171025, 245);
         r.fillRoundedRect(ux, uy, (int)(uw * std::min(1.0f, superCharge / 100.0f)), uh, 5, superCharge >= 100.0f ? 0xFFFFB820 : 0xFF8D45C8, 245);
         r.drawRoundedRect(ux, uy, uw, uh, 5, superCharge >= 100.0f ? 0xFFFFE068 : 0xFF786090, 1);
@@ -7605,7 +7749,7 @@ struct Game {
         // 6. Bottom Controls Hint Strip
         r.fillRect(0, SCREEN_H - 26, SCREEN_W, 26, 0xFF0E0A18, 210);
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 22,
-            "[WASD / Стрелки] Движение • [ПКМ] Курсор • [Пробел] Рывок • [Q] Супер • [M] SFX [N] Музыка • [F11] Экран • [ESC] Пауза",
+            keyHint("[WASD / Стрелки] Движение • [ПКМ] Курсор • [Пробел] Рывок • [Q] Супер • [M] SFX [N] Музыка • [F11] Экран • [ESC] Пауза"),
             0xFFB8B0D0);
     }
 
@@ -8069,7 +8213,7 @@ struct Game {
         bool hov = (mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh);
         r.fillRoundedRect(bx, by, bw, bh, 10, hov ? 0xFFE8A020 : 0xFFB87018);
         r.drawRoundedRect(bx, by, bw, bh, 10, 0xFFFFF090, 2);
-        r.drawTextCentered(FONT_MED, SCREEN_W / 2, by + 12, "ЗАБРАТЬ [ПРОБЕЛ / ЛКМ]", 0xFFFFFFFF);
+        r.drawTextCentered(FONT_MED, SCREEN_W / 2, by + 12, keyHint("ЗАБРАТЬ [ПРОБЕЛ / ЛКМ]"), 0xFFFFFFFF);
 
         if (mouseClicked && hov) finishTreasureChest();
     }
@@ -8106,11 +8250,11 @@ struct Game {
         }
 
         UIButton btns[5] = {
-            {SCREEN_W / 2 - 352, my + mh - 125, 220, 46, "ПРОДОЛЖИТЬ [ESC]", 1},
+            {SCREEN_W / 2 - 352, my + mh - 125, 220, 46, keyHint("ПРОДОЛЖИТЬ [ESC]"), 1},
             {SCREEN_W / 2 - 116, my + mh - 125, 232, 46, sound.enabled ? "ЗВУК: ВКЛ [M]" : "ЗВУК: ВЫКЛ [M]", 2},
             {SCREEN_W / 2 + 132, my + mh - 125, 220, 46, "НАСТРОЙКИ [O]", 4},
             {SCREEN_W / 2 - 150, my + mh - 64,  300, 46, "ВЫЙТИ В ГЛАВНОЕ МЕНЮ", 3},
-            {mx + mw - 214, my + 14, 200, 34, "ОТЛАДКА [F9]", 5}
+            {mx + mw - 214, my + 14, 200, 34, keyHint("ОТЛАДКА [F9]"), 5}
         };
 
         for (int i = 0; i < 5; ++i) {
@@ -8237,7 +8381,7 @@ struct Game {
         bool hov = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
         r.fillRoundedRect(bx, by, bw, bh, 10, hov ? 0xFF286B82 : 0xFF1D455C);
         r.drawRoundedRect(bx, by, bw, bh, 10, 0xFF8DEEFF, 2);
-        r.drawTextCentered(FONT_MED, SCREEN_W / 2, by + 16, "В МЕНЮ [ENTER]", 0xFFFFFFFF);
+        r.drawTextCentered(FONT_MED, SCREEN_W / 2, by + 16, keyHint("В МЕНЮ [ENTER]"), 0xFFFFFFFF);
         if (mouseClicked && hov) state = STATE_MENU;
     }
 
@@ -9130,14 +9274,14 @@ struct Game {
         r.fillRect(backX, backY, backW, buttonH, backHover ? 0xFF49336F : 0xFF2A2040);
         r.drawRect(backX, backY, backW, buttonH, 0xFF8F78BA, 2);
         r.drawTextCentered(FONT_SMALL, backX + backW / 2, backY + (buttonH - FONT_SMALL.ascent) / 2,
-                           "НАЗАД К ГЕРОЮ [ESC]", 0xFFFFFFFF, false);
+                           keyHint("НАЗАД К ГЕРОЮ [ESC]"), 0xFFFFFFFF, false);
         bool forkHover = false;
         if (needForkShortcut) {
             forkHover = mouseX >= forkX && mouseX <= forkX + forkW && mouseY >= backY && mouseY <= backY + buttonH;
             r.fillRect(forkX, backY, forkW, buttonH, forkHover ? 0xFF6A4A18 : 0xFF4A3417);
             r.drawRect(forkX, backY, forkW, buttonH, 0xFFFFD878, 2);
             r.drawTextCentered(FONT_SMALL, forkX + forkW / 2, backY + (buttonH - FONT_SMALL.ascent) / 2,
-                               "К РАЗВИЛКЕ [TAB]", 0xFFFFE9A8, false);
+                               keyHint("К РАЗВИЛКЕ [TAB]"), 0xFFFFE9A8, false);
         }
         const bool canGo = unlocked || campaignCanChooseTrackHere(selected);
         char startLabel[96];
@@ -9147,12 +9291,12 @@ struct Game {
         else if (!unlocked && !isCampaignTrackChosen() && campaignTrackOf(selected) != 0)
             snprintf(startLabel, sizeof(startLabel), "СНАЧАЛА ВЫБЕРИ СЛЕД");
         else if (!unlocked) snprintf(startLabel, sizeof(startLabel), "ДЕЛО ЕЩЁ ЗАКРЫТО");
-        else if (completed) snprintf(startLabel, sizeof(startLabel), "ПЕРЕИГРАТЬ [ENTER]");
-        else snprintf(startLabel, sizeof(startLabel), "НАЧАТЬ ДЕЛО [ENTER]");
+        else if (completed) snprintf(startLabel, sizeof(startLabel), keyHint("ПЕРЕИГРАТЬ [ENTER]"));
+        else snprintf(startLabel, sizeof(startLabel), keyHint("НАЧАТЬ ДЕЛО [ENTER]"));
         r.fillRect(startX, startY, startW, buttonH, !canGo ? 0xFF302A36 : (startHover ? 0xFFB84042 : 0xFF762A38));
         r.drawRect(startX, startY, startW, buttonH, canGo ? 0xFFFFD878 : 0xFF625B68, 2);
         r.drawTextCentered(FONT_SMALL, startX + startW / 2, startY + (buttonH - FONT_SMALL.ascent) / 2,
-            startLabel, canGo ? 0xFFFFFFFF : 0xFF9A939F, false);
+            keyHint(startLabel), canGo ? 0xFFFFFFFF : 0xFF9A939F, false);
         if (mouseClicked && backHover) state = STATE_HERO_SELECT;
         else if (mouseClicked && forkHover) {
             // Курсор встаёт на дверь развилки А, выбранный след ещё не зафиксирован.
@@ -9392,7 +9536,7 @@ struct Game {
         // короткая версия включается по ширине, как это уже сделано в настройках.
         const char* snakeHint = SCREEN_W < 980
             ? "Снизу вверх • клик по голове выбирает ветку, вторая гаснет навсегда"
-            : "Снизу вверх • колесо — прокрутка • клик по голове змеи выбирает ветку, вторая гаснет навсегда";
+            : keyHint("Снизу вверх • колесо — прокрутка • клик по голове змеи выбирает ветку, вторая гаснет навсегда");
         renderSubmenuFrame(r, "КАМПАНИЯ • ЗМЕЙКА", snakeHint);
         // ── Раскладка под формат экрана ──────────────────────────────────────
         // Кнопки и досье растут вместе с окном: жёсткие «100 px снизу и 200 px на
@@ -9886,10 +10030,14 @@ struct Game {
         char record[128];
         snprintf(record, sizeof(record), "РЕКОРД %02d:%02d • УБИЙСТВ %d • БОССОВ %d", bMin, bSec, save.bestKills, save.bossesDefeated);
         char audio[96];
-        snprintf(audio, sizeof(audio), "[M] SFX %s • [N] MUSIC %s • [F11]", sound.enabled ? "ON" : "OFF", sound.musicEnabled ? "ON" : "OFF");
+        if (touchControls)
+            snprintf(audio, sizeof(audio), "SFX %s • MUSIC %s", sound.enabled ? "ON" : "OFF", sound.musicEnabled ? "ON" : "OFF");
+        else
+            snprintf(audio, sizeof(audio), "[M] SFX %s • [N] MUSIC %s • [F11]", sound.enabled ? "ON" : "OFF", sound.musicEnabled ? "ON" : "OFF");
         if (compactHeader) {
             r.drawText(FONT_SMALL, 12, 5, buf, 0xFFFFD838);
-            r.drawTextRight(FONT_SMALL, SCREEN_W - 12, 5, "[F11]", 0xFF98E8FF);
+            // «[F11]» — полноэкранный режим Windows: на телефоне такой клавиши нет.
+            if (!touchControls) r.drawTextRight(FONT_SMALL, SCREEN_W - 12, 5, "[F11]", 0xFF98E8FF);
             r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 25, record, 0xFFD0C8E8);
             r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 45, audio, 0xFF98E8FF);
         } else {
@@ -10173,7 +10321,7 @@ struct Game {
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 69,
             "F12 — АРЕНА ПРОСЛУШИВАНИЯ БОССА • БЕЗ ПРОГРЕССА И ИЗМЕНЕНИЙ СОХРАНЕНИЯ", 0xFFFFD878);
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 41,
-            "СТРЕЛКИ / A-D — НАВИГАЦИЯ • ENTER — ВЫБРАТЬ • МЫШЬ — НАВЕСТИ ИЛИ НАЖАТЬ",
+            keyHint("СТРЕЛКИ / A-D — НАВИГАЦИЯ • ENTER — ВЫБРАТЬ • МЫШЬ — НАВЕСТИ ИЛИ НАЖАТЬ"),
             0xFFB7AFD2);
         // Quiet build stamp: readable when you look for it, invisible while playing.
         char versionStamp[32];
@@ -10202,6 +10350,7 @@ struct Game {
             case STATE_MISSION_SELECT: return "MISSION_SELECT";
             case STATE_MISSION_COMPLETE: return "MISSION_COMPLETE";
             case STATE_HERO_SELECT: return "HERO_SELECT";
+            case STATE_CONTROLS_SETUP: return "CONTROLS_SETUP";
         }
         return "?";
     }
@@ -10294,7 +10443,7 @@ struct Game {
 
         const int instructionY = portraitLayout ? SCREEN_H - 41 : SCREEN_H - 82;
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, instructionY,
-                           "КЛИК ИЛИ A / D  •  ЦИФРЫ 1–5 — ВЫБОР ГЕРОЯ",
+                           keyHint("КЛИК ИЛИ A / D  •  ЦИФРЫ 1–5 — ВЫБОР ГЕРОЯ"),
                            0xFFC8BEDA);
         const int buttonH = 54;
         const int buttonY = portraitLayout ? SCREEN_H - 126 : SCREEN_H - 190;
@@ -10306,11 +10455,11 @@ struct Game {
         const bool continueHover = mouseX >= continueX && mouseX <= continueX + buttonW && mouseY >= buttonY && mouseY <= buttonY + buttonH;
         r.fillRect(backX, buttonY, buttonW, buttonH, backHover ? 0xFF49336F : 0xFF2A2040);
         r.drawRect(backX, buttonY, buttonW, buttonH, 0xFF8F78BA, 2);
-        r.drawTextCentered(FONT_SMALL, backX + buttonW / 2, buttonY + 17, "НАЗАД К РЕЖИМАМ [ESC]", 0xFFFFFFFF);
+        r.drawTextCentered(FONT_SMALL, backX + buttonW / 2, buttonY + 17, keyHint("НАЗАД К РЕЖИМАМ [ESC]"), 0xFFFFFFFF);
         r.fillRect(continueX, buttonY, buttonW, buttonH, continueHover ? 0xFFB84042 : 0xFF762A38);
         r.drawRect(continueX, buttonY, buttonW, buttonH, 0xFFFFD878, 2);
         r.drawTextCentered(FONT_SMALL, continueX + buttonW / 2, buttonY + 17,
-                           gameMode == MODE_STORY ? "К ВЫБОРУ МИССИИ [ENTER]" : "НАЧАТЬ ENDLESS [ENTER]", 0xFFFFFFFF);
+                           gameMode == MODE_STORY ? keyHint("К ВЫБОРУ МИССИИ [ENTER]") : keyHint("НАЧАТЬ ENDLESS [ENTER]"), 0xFFFFFFFF);
         if (mouseClicked && backHover) state = STATE_MENU;
         else if (mouseClicked && continueHover) confirmHeroSelection();
     }
@@ -10448,7 +10597,10 @@ struct Game {
             snprintf(musicLine, sizeof(musicLine), "МУЗЫКА: %d ТРЕК(ОВ) ИЗ audio/  •  ВСТРОЕННАЯ ТЕМА В РЕЗЕРВЕ", sound.externalMusicTrackCount());
         else
             snprintf(musicLine, sizeof(musicLine), "МУЗЫКА: ПАПКА audio/ ПУСТА — ИГРАЕТ ВСТРОЕННАЯ ТЕМА");
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY, musicLine, 0xFFAAA0C8);
+        // На телефоне ниже идут две строки вместо трёх: убираем строку про
+        // голос и подсказку про клавиши, иначе текст наезжает на кнопки.
+        const int infoShift = touchControls ? -8 : 0;
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + infoShift, musicLine, 0xFFAAA0C8);
         char voiceLine[160];
         if (voiceClips == 0)
             snprintf(voiceLine, sizeof(voiceLine), "ОЗВУЧКА: ПАПКА audio/voice/ ПУСТА — ФРАЗЫ ЖДУТ ЗАПИСИ");
@@ -10456,22 +10608,224 @@ struct Game {
             snprintf(voiceLine, sizeof(voiceLine), "ОЗВУЧКА: %d ИЗ %d ФРАЗ В audio/voice/ (%d ЕЩЁ НЕ ЗАПИСАНО)", voiceClips, MessageRegistry::voicedDefs(), voiceMissing);
         else
             snprintf(voiceLine, sizeof(voiceLine), "ОЗВУЧКА: ВСЕ %d ФРАЗ НА МЕСТЕ — audio/voice/", voiceClips);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 20, voiceLine, voiceMissing > 0 ? 0xFFFFC98A : 0xFF8CD8B0);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + infoShift + 20, voiceLine, voiceMissing > 0 ? 0xFFFFC98A : 0xFF8CD8B0);
         if (portraitLayout) {
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 40, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] И [0] ГРАФИКА — ПЕРЕКЛЮЧАТЕЛИ", 0xFFAAA0C8);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + infoShift + 40, keyHint("[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] И [0] ГРАФИКА — ПЕРЕКЛЮЧАТЕЛИ"), 0xFFAAA0C8);
         } else {
             // Подсказки ниже счётчиков считаются от infoY: с девятой строкой
             // настроек фиксированный y=574 наезжал на строку про музыку.
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 40, "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] ПЕРЕКЛЮЧАТЕЛИ • [0] ГРАФИКА • КЛИК МЫШЬЮ", 0xFFAAA0C8);
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + 62, "ГОЛОС — ЗАПИСАННЫЕ ФРАЗЫ В audio/voice/; СПИСОК И СЧЁТЧИКИ В F3", 0xFF8C82A8);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + infoShift + 40, keyHint("[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] ПЕРЕКЛЮЧАТЕЛИ • [0] ГРАФИКА • КЛИК МЫШЬЮ"), 0xFFAAA0C8);
+            // Строка про записанную озвучку — про F3 и клавиши: на телефоне её нет.
+            if (!touchControls)
+                r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + infoShift + 62, keyHint("ГОЛОС — ЗАПИСАННЫЕ ФРАЗЫ В audio/voice/; СПИСОК И СЧЁТЧИКИ В F3"), 0xFF8C82A8);
         }
         int bw = std::min(340, SCREEN_W - 48), bh = 50;
         int bx = (SCREEN_W - bw) / 2, by = portraitLayout ? SCREEN_H - 76 : 651;
+        // На телефоне рядом с «назад» стоит вход в выбор схемы движения: клавиш
+        // там нет, а менять схему хочется не только при первом запуске.
+        int setupX = 0, setupW = 0;
+        if (touchControls) {
+            const int gapBtn = 12;
+            bw = std::min(300, (SCREEN_W - 48 - gapBtn) / 2);
+            bx = (SCREEN_W - (bw * 2 + gapBtn)) / 2;
+            setupX = bx;
+            setupW = bw;
+            bx = setupX + bw + gapBtn;
+        }
         bool backHov = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
         r.fillRoundedRect(bx, by, bw, bh, 10, backHov ? 0xFF483480 : 0xFF281C48);
         r.drawRoundedRect(bx, by, bw, bh, 10, 0xFFFFD858, 2);
-        r.drawTextCentered(FONT_MED, SCREEN_W / 2, by + 12, "НАЗАД [ESC]", 0xFFFFFFFF);
+        r.drawTextCentered(FONT_MED, bx + bw / 2, by + 12, keyHint("НАЗАД [ESC]"), 0xFFFFFFFF);
         if (mouseClicked && backHov) state = settingsReturnState;
+        if (touchControls) {
+            const bool setupHov = mouseX >= setupX && mouseX <= setupX + setupW &&
+                                  mouseY >= by && mouseY <= by + bh;
+            r.fillRoundedRect(setupX, by, setupW, bh, 10, setupHov ? 0xFF2C4A6A : 0xFF1B2A3C);
+            r.drawRoundedRect(setupX, by, setupW, bh, 10, 0xFF8FD0E8, 2);
+            char schemeLine[64];
+            snprintf(schemeLine, sizeof(schemeLine), "УПРАВЛЕНИЕ: %s", touchSchemeName(options.touchScheme));
+            r.drawTextCentered(FONT_SMALL, setupX + setupW / 2, by + 8, schemeLine, 0xFFD6EEFF);
+            r.drawTextCentered(FONT_SMALL, setupX + setupW / 2, by + 27, "СМЕНИТЬ", 0xFF8FD0E8);
+            if (mouseClicked && setupHov) {
+                controlsReturnState = STATE_SETTINGS;
+                sound.play(SFX_CLICK, 0.02f);
+                state = STATE_CONTROLS_SETUP;
+            }
+        }
+    }
+
+    // ── Экран «УПРАВЛЕНИЕ»: выбор схемы движения на Android ────────────────
+    // Три карточки, каждая со схемой экрана. Показывается при первом запуске на
+    // телефоне и открывается кнопкой «УПРАВЛЕНИЕ» из настроек.
+    void setTouchScheme(int scheme) {
+        options.touchScheme = std::max(0, std::min(TOUCH_SCHEME_COUNT - 1, scheme));
+        sound.play(SFX_CLICK, 0.02f);
+    }
+
+    void finishControlsSetup() {
+        options.touchSetupDone = 1;
+        saveOptions();
+        state = controlsReturnState;
+        sound.play(SFX_CLICK, 0.03f);
+    }
+
+    // Мини-схема телефона: где палец, где кнопки. Рисуется той же геометрией,
+    // что и настоящее управление, — это уменьшенная копия, а не отдельная
+    // картинка, поэтому карточка не может разойтись с игрой.
+    void drawSchemePreview(Renderer& r, int x, int y, int w, int h, int scheme) {
+        const uint32_t skin = 0xFF0E0A18, frame = 0xFF4B3D62;
+        r.fillRoundedRect(x, y, w, h, 9, skin, 245);
+        r.drawRoundedRect(x, y, w, h, 9, frame, 1);
+        const bool mirror = scheme == TOUCH_SCHEME_STICK_RIGHT;
+        const bool dpad = scheme == TOUCH_SCHEME_DPAD_LEFT;
+        // Размеры кнопок в превью берутся от высоты: в широкой карточке от
+        // min(w,h) они получались точками, и схема читалась как пустая рамка.
+        const int side = std::max(12, std::min(h / 4, w / 9));
+        const int pad = std::max(8, std::min(h, w) / 14);
+        // Кнопки действия — на стороне, свободной от движения.
+        const int bigX = mirror ? x + pad : x + w - pad - side * 2 - 4;
+        const int bigY = y + h - pad - side;
+        r.fillRoundedRect(bigX, bigY, side, side, 4, 0xFFFFD24A, 210);
+        r.fillRoundedRect(bigX + side + 4, bigY, side, side, 4, 0xFF6FE0FF, 210);
+        // Движение — с другой стороны.
+        const int mx = mirror ? x + w - pad - side : x + pad + side;
+        const int my = y + h - pad - side;
+        if (dpad) {
+            const int b = std::max(7, side * 2 / 3), gap = std::max(2, b / 5);
+            const int step = b + gap;
+            r.fillRoundedRect(mx - b / 2, my - step - b / 2, b, b, 3, 0xFFE8DEFF, 220);
+            r.fillRoundedRect(mx - b / 2, my + step - b / 2, b, b, 3, 0xFFE8DEFF, 220);
+            r.fillRoundedRect(mx - step - b / 2, my - b / 2, b, b, 3, 0xFFE8DEFF, 220);
+            r.fillRoundedRect(mx + step - b / 2, my - b / 2, b, b, 3, 0xFFE8DEFF, 220);
+        } else {
+            // Стик и есть низ прямоугольника: так палец на телефоне лежит там же,
+            // а текст названия схемы в строке остаётся чистым.
+            const int ring = std::max(10, std::min(side, w / 8));
+            r.drawCircleRing(mx, my, ring, 2, 0xFFE8DEFF, 210);
+            r.fillCircle(mx, my, std::max(4, ring / 3), 0xFFB9A8E8, 230);
+        }
+        // Верхняя часть — прицел: маленькая точка у правого (или левого) верхнего угла.
+        const int aimX = mirror ? x + pad + side / 2 : x + w - pad - side / 2;
+        // Прицельная точка — у своего верхнего угла, а не там, где сейчас мышь:
+        // на стенде и на телефоне палец может оказаться где угодно.
+        const int aimY = y + h / 3;
+        r.fillCircle(aimX, aimY, std::max(3, side / 3), 0xFF8FD0E8, 230);
+        r.drawCircleRing(aimX, aimY, std::max(6, side), 1, 0xFF8FD0E8, 120);
+    }
+
+    void renderControlsSetup(Renderer& r) {
+        renderSubmenuFrame(r, "УПРАВЛЕНИЕ",
+                           "Чем двигаться на телефоне — потом можно сменить в настройках",
+                           0xFF8FD0E8, 68);
+        const bool portrait = SCREEN_W < SCREEN_H;
+        const bool compact = SCREEN_W < 980;
+        const int margin = std::min(16, std::max(8, SCREEN_W / 24));
+        const int top = 92;
+        const int buttonH = portrait ? 52 : 50;
+        const int bottom = SCREEN_H - buttonH - 34;
+        const int gap = compact ? 10 : 16;
+
+        static const char* descriptions[TOUCH_SCHEME_COUNT] = {
+            "Левый большой палец ведёт стик в нижней части экрана,\nправый — прицел и кнопки СУПЕР, РЫВОК.",
+            "То же зеркально: движение справа, прицел и кнопки слева.\nДля левшей.",
+            "Четыре кнопки-стрелки слева вместо стика.\nДиагональ — двумя пальцами сразу."
+        };
+
+        int selected = std::max(0, std::min(TOUCH_SCHEME_COUNT - 1, options.touchScheme));
+        bool clickedAny = false;
+        if (!compact) {
+            // Три карточки в ряд.
+            const int cardW = (SCREEN_W - 2 * margin - 2 * gap) / 3;
+            const int cardH = std::min(430, bottom - top);
+            const int cardY = top + std::max(0, (bottom - top - cardH) / 2);
+            for (int i = 0; i < TOUCH_SCHEME_COUNT; ++i) {
+                const int x = margin + i * (cardW + gap);
+                const bool active = i == selected;
+                const bool hov = mouseX >= x && mouseX <= x + cardW && mouseY >= cardY && mouseY <= cardY + cardH;
+                r.fillRoundedRect(x, cardY, cardW, cardH, 12, hov ? 0xFF241B3E : 0xFF181129, 245);
+                r.drawRoundedRect(x, cardY, cardW, cardH, 12,
+                                  active ? 0xFFFFD878 : (hov ? 0xFFB9A8E8 : 0xFF4B3D62),
+                                  active ? 3 : (hov ? 2 : 1));
+                const int previewH = std::min(cardH / 3, 150);
+                drawSchemePreview(r, x + 16, cardY + 16, cardW - 32, previewH, i);
+                r.drawTextCentered(FONT_MED, x + cardW / 2, cardY + previewH + 30,
+                                   touchSchemeName(i), active ? 0xFFFFE28A : 0xFFEAE4F8);
+                const int textX = x + 20, textW = cardW - 40;
+                int ty = cardY + previewH + 66;
+                const char* desc = descriptions[i];
+                // Описание рисуется как две строки: так карточка не зависит от
+                // ширины шрифта и не режет слова.
+                char line[128];
+                size_t pos = 0;
+                while (desc[pos] && ty < cardY + cardH - 56) {
+                    size_t end = pos;
+                    while (desc[end] && desc[end] != '\n') ++end;
+                    const size_t len = std::min(sizeof(line) - 1, end - pos);
+                    memcpy(line, desc + pos, len);
+                    line[len] = 0;
+                    r.drawTextCentered(FONT_SMALL, x + cardW / 2, ty, line, 0xFFC8BFDC);
+                    ty += FONT_SMALL.lineHeight + 4;
+                    pos = desc[end] ? end + 1 : end;
+                }
+                if (active) {
+                    const int badgeW = 128, badgeH = 26;
+                    const int bx = x + (cardW - badgeW) / 2, by = cardY + cardH - 40;
+                    r.fillRoundedRect(bx, by, badgeW, badgeH, 8, 0xFF2E5C3C, 240);
+                    r.drawRoundedRect(bx, by, badgeW, badgeH, 8, 0xFF68DDA0, 2);
+                    r.drawTextCentered(FONT_SMALL, bx + badgeW / 2, by + 5, "ВЫБРАНО", 0xFF9CF0C0);
+                } else {
+                    r.drawTextCentered(FONT_SMALL, x + cardW / 2, cardY + cardH - 36,
+                                       "КОСНИТЕСЬ, ЧТОБЫ ВЫБРАТЬ", 0xFF8C82A8);
+                }
+                if (mouseClicked && hov) { setTouchScheme(i); clickedAny = true; }
+            }
+        } else {
+            // Узкий экран и портрет: карточки строками, схема слева, текст справа.
+            const int rowH = std::max(96, std::min(190, (bottom - top - 2 * gap) / 3));
+            const int blockH = rowH * TOUCH_SCHEME_COUNT + gap * (TOUCH_SCHEME_COUNT - 1);
+            const int blockTop = top + std::max(0, (bottom - top - blockH) / 2);
+            for (int i = 0; i < TOUCH_SCHEME_COUNT; ++i) {
+                const int y = blockTop + i * (rowH + gap);
+                const bool active = i == selected;
+                const bool hov = mouseX >= margin && mouseX <= SCREEN_W - margin && mouseY >= y && mouseY <= y + rowH;
+                r.fillRoundedRect(margin, y, SCREEN_W - 2 * margin, rowH, 12,
+                                  hov ? 0xFF241B3E : 0xFF181129, 245);
+                r.drawRoundedRect(margin, y, SCREEN_W - 2 * margin, rowH, 12,
+                                  active ? 0xFFFFD878 : (hov ? 0xFFB9A8E8 : 0xFF4B3D62),
+                                  active ? 3 : (hov ? 2 : 1));
+                const int prevW = std::min(rowH - 20, 190);
+                drawSchemePreview(r, margin + 10, y + 10, prevW, rowH - 20, i);
+                const int textX = margin + 20 + prevW;
+                const int textW = SCREEN_W - margin * 2 - prevW - 40;
+                r.drawText(FONT_MED, textX, y + 12, touchSchemeName(i),
+                           active ? 0xFFFFE28A : 0xFFEAE4F8);
+                r.drawTextWrapped(FONT_SMALL, textX, y + 40, textW,
+                                  i == 0 ? "Левая рука — движение, правая — прицел и кнопки."
+                                  : (i == 1 ? "То же зеркально, для левшей: движение справа."
+                                            : "Кнопки-стрелки вместо стика, диагональ двумя пальцами."),
+                                  0xFFC8BFDC, false);
+                if (active) {
+                    r.drawTextRight(FONT_SMALL, SCREEN_W - margin - 16, y + 14, "ВЫБРАНО", 0xFF9CF0C0);
+                }
+                if (mouseClicked && hov) { setTouchScheme(i); clickedAny = true; }
+            }
+        }
+        (void)clickedAny;
+
+        char nowLine[96];
+        snprintf(nowLine, sizeof(nowLine), "ВЫБРАНО: %s  •  СМЕНИТЬ МОЖНО В НАСТРОЙКАХ",
+                 touchSchemeName(options.touchScheme));
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - buttonH - 46,
+                           nowLine, 0xFF9C93B8);
+
+        const int bw = std::min(340, SCREEN_W - 2 * margin), bh = buttonH;
+        const int bx = (SCREEN_W - bw) / 2, by = SCREEN_H - bh - 22;
+        const bool hov = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
+        r.fillRoundedRect(bx, by, bw, bh, 10, hov ? 0xFF483480 : 0xFF281C48);
+        r.drawRoundedRect(bx, by, bw, bh, 10, 0xFFFFD858, 2);
+        r.drawTextCentered(FONT_MED, SCREEN_W / 2, by + 12,
+                           options.touchSetupDone ? "ГОТОВО" : "ДАЛЬШЕ", 0xFFFFFFFF);
+        if (mouseClicked && hov) finishControlsSetup();
     }
 
     void closePatchNotes() {
@@ -10606,6 +10960,7 @@ struct Game {
             "2.10.50 • ANDROID: ИНСТРУКЦИЯ ПО СБОРКЕ И БАТНИК",
             "2.10.51 • ПРОВЕРКА ANDROID-СБОРКИ: ЧТО НАЙДЕНО И ИСПРАВЛЕНО",
             "2.10.52 • ANDROID-СЛОЙ ЗАПУСТИЛСЯ БЕЗ ТЕЛЕФОНА: НАЙДЕНА МЁРТВАЯ КЛАВИАТУРА",
+            "2.10.53 • ANDROID СПРАШИВАЕТ, ЧЕМ ДВИГАТЬСЯ, И ПРЯЧЕТ КЛАВИШИ",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -10754,6 +11109,7 @@ struct Game {
             "Инструкция по сборке под Android и сборщик одной командой.\n• 2.10.50: в корне репозитория появились ANDROID_BUILD.md и build_android.bat. Раньше собрать APK можно было только из Android Studio — теперь двойной щелчок по батнику делает то же самое и объясняет, что пошло не так.\n• build_android.bat берёт номер версии из src/version.h, то есть APK, exe и хроника в игре всегда с одним номером. Аргументы: release (подписан отладочным ключом, ставится сразу), install (собрать и поставить через adb), clean; их можно совмещать в любом порядке.\n• Батник сам ищет инструменты: Java — JAVA_HOME, потом JDK внутри Android Studio, потом PATH; SDK — ANDROID_HOME, ANDROID_SDK_ROOT, %LOCALAPPDATA%\\Android\\Sdk, и пишет android\\local.properties; Gradle — android\\gradlew.bat, потом PATH, потом своя копия в build\\gradle-dist (скачивается один раз).\n• Весь вывод Gradle идёт в build\\android_build.log, готовый APK копируется в build\\ShadowSurvivors_<версия>_<тип>.apk рядом с Windows-сборкой. При ошибке батник показывает последние строки журнала и всегда оставляет окно открытым — молчаливого закрытия с ошибкой больше нет.\n• android/app/build.gradle принимает appVersion и appVersionCode свойствами, поэтому батник передаёт версию без правки файлов; release подписан отладочным ключом, чтобы APK сразу ставился на свой телефон (для Google Play нужен свой keystore).\n• ANDROID_BUILD.md: что нужно поставить, три способа сборки (батник, Android Studio, консоль), установка по кабелю и без, где лежат сейв и crash.log, таблица частых ошибок с причинами (JDK 17, лицензии SDK, NDK, ABI, подпись, нехватка места).\n• .gitignore: android/local.properties, каталоги сборки Gradle и *.apk — APK такой же бинарник, как exe, и в репозиторий не идёт.\n• Честно: батник в этой среде не запускался — здесь нет Windows, JDK, SDK и NDK. Проверено статически: CRLF, кодировка UTF-8 с chcp 65001, все метки и переходы, кавычки в путях с пробелами, поведение при отсутствии инструментов. Первый настоящий прогон — на вашей машине; ответ на любую неудачу целиком лежит в build\\android_build.log.",
             "Проверка Android-сборки без телефона: что прогнано, что нашлось.\n• 2.10.51: прогнано всё, что можно прогнать без Windows, JDK, SDK и NDK. Стенды: десять экранов на одном, двух и четырёх потоках растеризации и на всех четырёх ступенях графики — кадр совпал бит-в-бит, то есть полосы и ступени не ломают картинку. perf_bench: 5.9 мс на кадр 1280x720 в два потока, 4.8 мс на портрете 720x1280. check_android.sh: main_android.cpp компилируется против заглушек NDK, ядро игры собирается без Windows.\n• Найдено и исправлено в build_android.bat: версия Java читалась командой внутри for /f в кавычках, а путь JDK из Android Studio («C:\\Program Files\\...») содержит пробелы — команда разваливалась на «C:\\Program», и вместо версии оставалось unknown. Теперь java -version пишется в файл, а из файла читается версия: пробелы в пути больше ни на что не влияют.\n• Там же: хвост журнала печатался PowerShell без указания кодировки — Windows PowerShell 5.1 берёт ANSI, и кириллица из журнала превращалась в мусор; добавлено -Encoding UTF8. Путь к adb собирался со слэшами вперёд — теперь зовётся обычным путём Windows. При ошибке батник возвращает код 1 (двойной щелчок по-прежнему ждёт клавишу). Добавлены предупреждения, если в SDK нет NDK или platform-tools: раньше это вылезало позже и непонятнее.\n• Новый стенд tools/check_android_bat.py: проверяет батник (UTF-8, CRLF, метки и переходы, баланс скобок в блоках if, кавычки в set, объявленность каждой !переменной!, отсутствие команды в кавычках внутри for /f), проект (lib_name в манифесте против имени CMake-цели, глубину ../ до src/, applicationId, ndkVersion, minSdk, targetSdk, abiFilters) и инструкцию (версия и versionCode по умолчанию в android/app/build.gradle против src/version.h, существование каждого названного файла).\n• Чекер проверен мутациями: в батник и проект по одному вносились 12 настоящих поломок (битая метка, незакрытый блок, LF вместо CRLF, чужая версия в gradle, lib_name не тот, CMake ищет src не на той глубине, инструкция ссылается на удалённый файл и прочее) — пойманы все 12. Заодно он поймал мою же правку: перевод строки LF в середине батника.\n• Лист design/touch_controls.png сверен с тем, что код рисует сейчас: 0 отличающихся пикселей из 1085440 — нарисованная схема управления не разошлась с кодом.\n• Честно: APK по-прежнему не собирался — в этой среде нет Windows, JDK, SDK и NDK. Десктопный .exe тоже не компилировался: нет mingw, а main_win32.cpp без windows.h не собрать. Проверено то, что проверяется файлами и стендами; первый настоящий прогон батника — на вашей машине, ответ на любую неудачу целиком в build\\android_build.log.",
             "Android-слой теперь не только компилируется, но и исполняется без телефона.\n• 2.10.52: появился стенд tools/android_smoke.cpp и поддельный NDK tools/android_host/ — около 60 функций EGL, GLES2, AAudio, ALooper, AInputQueue, ANativeWindow и ассетов, реализованных по-настоящему. Заголовки те же, что в проверке типов, поэтому исполняется именно src/main_android.cpp, а не его модель.\n• Стенд поднимает активность, отдаёт окно 2400x1080, шлёт касания и клавиши, уводит в паузу и возвращает, меняет размер окна и закрывает приложение. 27 проверок: кадры доходят до eglSwapBuffers, логический кадр 20:9 равен 1600x720, окно 1920x1000 даёт кадр 1376x720 с полями по краям, касание двигает героя, кнопка паузы ставит паузу, AKEYCODE_D ставит keyD, звук идёт и замолкает на паузе, ассеты копируются из assets/audio, сейв пишется на паузе и на выходе.\n• Найдено и исправлено: touchUpdate каждый кадр обнулял keyW/A/S/D, если палец не на стике. На телефоне это значит, что физическая клавиатура (планшет, Chromebook, Android TV с геймпадом) работала ровно один кадр: AKEYCODE_D ставил флаг, следующий touchUpdate его снимал. Сброс убран — отпускание пальца снимает флаги само (touchEnd), зависший палец закрывается ACTION_CANCEL.\n• Новый стенд tools/touch_probe.cpp: 51 проверка схемы касаний против настоящей игры — стик и мёртвая зона 14 px, кнопки рывка, супера, паузы и F3, прицел, два пальца одновременно, тап вместо клика в меню (через отрисовку зала славы) и три минуты забега под управлением пальца без падений.\n• check_android.sh стал прогоном из трёх ступеней: синтаксис против заглушек, чекер батника и проекта, затем оба исполняющих стенда. Есть --quick для быстрого прогона без исполнения.\n• check_android_bat.py дополнительно проверяет ресурсы: манифест и strings.xml разбираются как XML, все пять иконок mipmap-* на месте и ровно нужного размера, ссылки из манифеста существуют. В проверку ссылок добавлен README.md — инструкция не может сослаться на удалённый файл.\n• Оба новых стенда проверены мутациями: 6 поломок схемы касаний и 7 поломок Android-слоя пойманы все. Проверка сейва при выходе специально удаляет файл перед закрытием — иначе проходил бы сейв, оставшийся от паузы.\n• README.md в корне: что нужно поставить на Windows и на Android, как собрать и запустить, ключи --threads и --graphics, управление, где лежат сейв, настройки и музыка, update.bat, список стендов и честный раздел о том, что проверено, а что нет.\n• Честно: APK по-прежнему не собирался — нет Windows, JDK, SDK и NDK; на живом телефоне игра не запускалась. Поддельный NDK идеален там, где телефон бывает неправ: драйверы GPU, задержка AAudio, поведение системы при нехватке памяти. Первый настоящий запуск — ваш.",
+            "Android больше не решает за игрока, чем двигаться.\n• При первом запуске APK открывается экран «УПРАВЛЕНИЕ»: три схемы на выбор — стик слева (как было), стик справа для левши и крестовина из четырёх кнопок. Каждая нарисована так же, как будет выглядеть на экране боя, поэтому выбираешь руками, а не по названию. Выбор запоминается, второй раз экран не появляется.\n• Сменить схему можно когда угодно: в настройках рядом с «НАЗАД» теперь кнопка «УПРАВЛЕНИЕ» с названием текущей схемы.\n• На Android из интерфейса убраны названия клавиш: «НАЗАД [ESC]» стало «НАЗАД», «ПРОДОЛЖИТЬ [ESC]» — «ПРОДОЛЖИТЬ», подсказка боя «WASD • ДВИЖЕНИЕ SPACE • РЫВОК Q • СУПЕР» заменена на «СТИК — ДВИЖЕНИЕ • РЫВОК — КНОПКА • СУПЕР — КНОПКА», а строка про записанную озвучку и F3 на телефоне не показывается вовсе. На Windows всё осталось как было: те же подсказки с клавишами.\n• Кнопка отладки на телефоне называется «ОТЛ», а не «F3»: такой клавиши там нет.\n• Списки (справка, патчноуты, выбор дела) листаются пальцем: жест вверх-вниз прокручивает на щелчок колеса каждые 22 px, дрожание пальца на 5 px не листает.\n• Найдено и исправлено: в меню касание в нижней левой четверти превращалось в невидимый стик, и строка настроек под пальцем не нажималась. Стик теперь живёт только в бою и только в двух схемах из трёх; в крестовине пальцы двигают кнопками.\n• Файл настроек вырос с 60 до 68 байт. Старый файл читается как есть: схема и отметка «выбор показан» дописаны в хвост, остальные переключатели не сбрасываются.\n• Стенды: touch_probe вырос с 51 до 109 проверок (три схемы, крестовина и диагональ, зеркало, прокрутка пальцем, чтение и запись файла настроек), android_smoke — с 27 до 38 (первый запуск показывает выбор, касание карточки выбирает, «ДАЛЬШЕ» пишет схему в файл, крестовина двигает героя). Новые проверки прогнаны мутациями: стик в верхней половине экрана, стик в меню и «отпускание одной кнопки снимает все» ловятся.\n• Честно: APK по-прежнему не собирался и на телефоне не запускался — здесь нет Windows, JDK, SDK и NDK. Настоящий размер кнопок под большой палец проверяется только на устройстве.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
@@ -10816,7 +11172,7 @@ struct Game {
         // Подсказка не должна быть шире панели: в узком окне она обрезалась краем.
         const char* pageHint = compactPatch
             ? (pageScrolls ? "КОЛЕСО / PGDN — ПРОКРУТКА  •  <-/-> — ЗАМЕТКА" : "ЗАМЕТКА ЦЕЛИКОМ  •  <-/-> — ДРУГАЯ")
-            : (pageScrolls ? "КОЛЕСО МЫШИ ИЛИ PGDN / PGUP — ПРОКРУТКА ЗАМЕТКИ  •  ЛИСТАЙ [<- / ->] ИЛИ КНОПКАМИ"
+            : (pageScrolls ? keyHint("КОЛЕСО МЫШИ ИЛИ PGDN / PGUP — ПРОКРУТКА ЗАМЕТКИ  •  ЛИСТАЙ [<- / ->] ИЛИ КНОПКАМИ")
                            : "ЗАМЕТКА ЦЕЛИКОМ НА ЭКРАНЕ  •  ЛИСТАЙ [<- / ->] ИЛИ КНОПКАМИ");
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, pageHintY, pageHint, pageScrolls ? 0xFFFFD878 : 0xFFB9ADCC);
         const int btnW = compactPatch ? (panelW - 60) / 2 : 280;
@@ -10843,7 +11199,7 @@ struct Game {
         bool closeHover = mouseX >= closeX && mouseX <= closeX + closeW && mouseY >= closeY && mouseY <= closeY + closeH;
         r.fillRoundedRect(closeX, closeY, closeW, closeH, 8, closeHover ? 0xFF684A9C : 0xFF3B2B5A);
         r.drawRoundedRect(closeX, closeY, closeW, closeH, 8, 0xFFFFD858, 2);
-        r.drawTextCentered(FONT_MED, closeX + closeW/2, closeY + 12, "В ИГРУ [ENTER]", 0xFFFFFFFF);
+        r.drawTextCentered(FONT_MED, closeX + closeW/2, closeY + 12, keyHint("В ИГРУ [ENTER]"), 0xFFFFFFFF);
         if (mouseClicked) {
             if (mouseX >= cbx && mouseX <= cbx + 410 && mouseY >= cby - 2 && mouseY <= cby + 28) patchNotesDoNotShowAgain = !patchNotesDoNotShowAgain;
             else if (mouseX >= prevX && mouseX <= prevX + btnW && mouseY >= btnY && mouseY <= btnY + btnH) patchNotesGoPage(-1);
@@ -11275,10 +11631,10 @@ struct Game {
         const bool exitHov = mouseX >= rightX && mouseX <= rightX + bw && mouseY >= by && mouseY <= by + bh;
         r.fillRect(leftX, by, bw, bh, pageHov ? 0xFF4A3480 : 0xFF281C48);
         r.drawRect(leftX, by, bw, bh, 0xFFBFA0E8, 2);
-        r.drawTextCentered(FONT_SMALL, leftX + bw / 2, by + 18, hallPage == 0 ? "РЕЕСТР СВИДЕТЕЛЯ [TAB]" : "ЗАЛ СЛАВЫ [TAB]", 0xFFFFFFFF);
+        r.drawTextCentered(FONT_SMALL, leftX + bw / 2, by + 18, hallPage == 0 ? keyHint("РЕЕСТР СВИДЕТЕЛЯ [TAB]") : keyHint("ЗАЛ СЛАВЫ [TAB]"), 0xFFFFFFFF);
         r.fillRect(rightX, by, bw, bh, exitHov ? 0xFF543D36 : 0xFF281C26);
         r.drawRect(rightX, by, bw, bh, 0xFFB86A53, 2);
-        r.drawTextCentered(FONT_SMALL, rightX + bw / 2, by + 18, "В МЕНЮ [ESC]", 0xFFFFFFFF);
+        r.drawTextCentered(FONT_SMALL, rightX + bw / 2, by + 18, keyHint("В МЕНЮ [ESC]"), 0xFFFFFFFF);
         if (mouseClicked && pageHov) { hallPage = 1 - hallPage; sound.play(SFX_CLICK, 0.02f); }
         if (mouseClicked && exitHov) { state = STATE_MENU; sound.play(SFX_CLICK, 0.02f); }
     }
@@ -11404,10 +11760,10 @@ struct Game {
         r.fillRoundedRect(leftX, by, bw, bh, 9, pageHov ? 0xFF4A3480 : 0xFF281C48);
         r.drawRoundedRect(leftX, by, bw, bh, 9, 0xFFBFA0E8, 2);
         r.drawTextCentered(FONT_MED, leftX + bw / 2, by + 12,
-            hallPage == 0 ? "РЕЕСТР СВИДЕТЕЛЯ [TAB]" : "ЗАЛ СЛАВЫ [TAB]", 0xFFFFFFFF);
+            hallPage == 0 ? keyHint("РЕЕСТР СВИДЕТЕЛЯ [TAB]") : keyHint("ЗАЛ СЛАВЫ [TAB]"), 0xFFFFFFFF);
         r.fillRoundedRect(rightX, by, bw, bh, 9, exitHov ? 0xFF543D36 : 0xFF281C26);
         r.drawRoundedRect(rightX, by, bw, bh, 9, exitHov ? 0xFFFF9C72 : 0xFFB86A53, 2);
-        r.drawTextCentered(FONT_MED, rightX + bw / 2, by + 12, "В МЕНЮ [ESC]", 0xFFFFFFFF);
+        r.drawTextCentered(FONT_MED, rightX + bw / 2, by + 12, keyHint("В МЕНЮ [ESC]"), 0xFFFFFFFF);
         if (mouseClicked && pageHov) { hallPage = 1 - hallPage; sound.play(SFX_CLICK, 0.02f); }
         if (mouseClicked && exitHov) { state = STATE_MENU; sound.play(SFX_CLICK, 0.02f); }
     }
@@ -11621,7 +11977,7 @@ struct Game {
         const int footerW = std::min(320, (SCREEN_W - 48) / 2), footerGap = 16;
         const int footerX = (SCREEN_W - (2 * footerW + footerGap)) / 2;
         UIButton btns[2] = {
-            {footerX, footerY, footerW, 52, "НАЗАД В МЕНЮ [ESC]", 1},
+            {footerX, footerY, footerW, 52, keyHint("НАЗАД В МЕНЮ [ESC]"), 1},
             // Было «СРАЗУ В БОЙ!»: кнопка молча кидала в забег с последним героем и
             // последним делом, поэтому было непонятно, куда именно она ведёт.
             // Теперь путь из кузницы идёт через выбор героя, а дальше — выбор дела.
@@ -11726,7 +12082,7 @@ struct Game {
         const bool hov = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
         r.fillRoundedRect(bx, by, bw, bh, 10, hov ? 0xFF483480 : 0xFF281C48);
         r.drawRoundedRect(bx, by, bw, bh, 10, 0xFFFFD858, 2);
-        r.drawTextCentered(FONT_MED, SCREEN_W / 2, by + 12, "К АРСЕНАЛУ [ESC]", 0xFFFFFFFF);
+        r.drawTextCentered(FONT_MED, SCREEN_W / 2, by + 12, keyHint("К АРСЕНАЛУ [ESC]"), 0xFFFFFFFF);
         if (mouseClicked && hov) { sound.play(SFX_CLICK, 0.02f); helpPage = 0; }
     }
 
@@ -11739,9 +12095,9 @@ struct Game {
         const int helpPad = compactHelp ? 20 : 42, helpW = SCREEN_W - 2 * helpPad;
         r.fillRoundedRect(helpPad, 82, helpW, 82, 10, 0xFF1E1538);
         r.drawRoundedRect(helpPad, 82, helpW, 82, 10, 0xFF6852A0, 2);
-        r.drawText(FONT_SMALL, helpPad + 18, 92, "WASD / СТРЕЛКИ — движение  •  ПРОБЕЛ / SHIFT — рывок  •  Q — суперумение", 0xFFE0D8F8);
-        r.drawText(FONT_SMALL, helpPad + 18, 113, "1–4 / ЛКМ — улучшение  •  R — замена  •  ПКМ — бег за курсором  •  M / N — звук", 0xFFE0D8F8);
-        r.drawText(FONT_SMALL, helpPad + 18, 134, "O — настройки  •  ESC — назад  •  1% врагов применяет тактики перехвата и уклонения", 0xFFBEEAFF);
+        r.drawText(FONT_SMALL, helpPad + 18, 92, keyHint("WASD / СТРЕЛКИ — движение  •  ПРОБЕЛ / SHIFT — рывок  •  Q — суперумение"), 0xFFE0D8F8);
+        r.drawText(FONT_SMALL, helpPad + 18, 113, keyHint("1–4 / ЛКМ — улучшение  •  R — замена  •  ПКМ — бег за курсором  •  M / N — звук"), 0xFFE0D8F8);
+        r.drawText(FONT_SMALL, helpPad + 18, 134, keyHint("O — настройки  •  ESC — назад  •  1% врагов применяет тактики перехвата и уклонения"), 0xFFBEEAFF);
 
         const int visibleRows = portraitHelp ? 8 : 4;
         const int totalRows = (ITEM_COUNT + 1) / 2;
@@ -11805,14 +12161,14 @@ struct Game {
         const int hintY = listBottom + 4;
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, hintY, range, 0xFFFFD878);
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, hintY + FONT_SMALL.lineHeight,
-            "КОЛЁСО МЫШИ  •  ↑ / ↓ — СТРОКА  •  PGUP / PGDN — ЭКРАН", 0xFFBEB3D4);
+            keyHint("КОЛЁСО МЫШИ  •  ↑ / ↓ — СТРОКА  •  PGUP / PGDN — ЭКРАН"), 0xFFBEB3D4);
 
         const int bw = std::min(320, SCREEN_W - 48), bh = 48;
         const int bx = (SCREEN_W - bw) / 2, by = SCREEN_H - 56;
         const bool hov = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
         r.fillRoundedRect(bx, by, bw, bh, 10, hov ? 0xFF483480 : 0xFF281C48);
         r.drawRoundedRect(bx, by, bw, bh, 10, 0xFFFFD858, 2);
-        r.drawTextCentered(FONT_MED, SCREEN_W / 2, by + 12, "ВЕРНУТЬСЯ В МЕНЮ [ESC]", 0xFFFFFFFF);
+        r.drawTextCentered(FONT_MED, SCREEN_W / 2, by + 12, keyHint("ВЕРНУТЬСЯ В МЕНЮ [ESC]"), 0xFFFFFFFF);
         if (mouseClicked && hov) {
             sound.play(SFX_CLICK, 0.02f);
             state = STATE_MENU;
@@ -12106,6 +12462,11 @@ struct Game {
             } else if (key == 'S' || key == 's') { mainMenuFocus = 0; activateMainMenuItem(0); }
             else if (key == 'E' || key == 'e') { mainMenuFocus = 1; activateMainMenuItem(1); }
             else if (key == 13 || key == 32) activateMainMenuItem(mainMenuFocus);
+        } else if (state == STATE_CONTROLS_SETUP) {
+            // Экран есть только на Android, но клавиши обрабатываются всегда:
+            // так его можно пройти и стендом, и на телефоне с клавиатурой.
+            if (key >= '1' && key <= '3') setTouchScheme(key - '1');
+            else if (key == 27 || key == 13 || key == 32) finishControlsSetup();
         } else if (state == STATE_HERO_SELECT) {
             if (key == 27) state = STATE_MENU;
             else if (key >= '1' && key <= '5' && isHeroUnlocked(key - '1')) selectedHero = key - '1';
@@ -12504,6 +12865,8 @@ struct Game {
             renderExtractionScreen(r);
         } else if (state == STATE_CAMPAIGN_END) {
             renderCampaignEnding(r);
+        } else if (state == STATE_CONTROLS_SETUP) {
+            renderControlsSetup(r);
         } else {
             float shakeX = 0.0f, shakeY = 0.0f;
             if (options.screenShakeEnabled && screenShake > 0.0f) {

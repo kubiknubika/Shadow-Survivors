@@ -15,6 +15,8 @@
 //     build/touch_probe -v           # печатать каждую проверку
 #include <cstdio>
 #include <cstring>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <cstdlib>
 #include <cmath>
 #include <vector>
@@ -387,6 +389,297 @@ static void testLongRun() {
     touchEnd(p, g, 50);
 }
 
+// ── 8. Три схемы движения: раскладка, крестовина, зеркало ───────────────────
+static void testSchemes() {
+    printf("схемы движения\n");
+    Renderer r;
+    r.resize(1600, 720);
+    for (int scheme = 0; scheme < TOUCH_SCHEME_COUNT; ++scheme) {
+        TouchLayout l;
+        l.layout(1600, 720, scheme);
+        char tag[64];
+        snprintf(tag, sizeof(tag), "схема «%s»", touchSchemeName(scheme));
+
+        // Кнопки действия всегда внутри экрана и не перекрывают друг друга.
+        const TouchRect* all[] = {&l.dash, &l.ult, &l.pause, &l.debug,
+                                  &l.padUp, &l.padDown, &l.padLeft, &l.padRight};
+        bool inside = true;
+        for (const TouchRect* b : all)
+            if (b->x < 0 || b->y < 0 || b->x + b->w > 1600 || b->y + b->h > 720) inside = false;
+        check(inside, "все кнопки внутри экрана", tag);
+
+        // Движение и прицел не должны делить одну и ту же точку: палец в
+        // «своём» углу обязан стать движением, а в противоположном — прицелом.
+        const float moveX = l.mirrored() ? 1500.0f : 120.0f;
+        const float aimX = l.mirrored() ? 120.0f : 1500.0f;
+        check(l.inMoveZone(moveX, 600.0f), "нижний угол своей стороны — зона движения", tag);
+        check(!l.inMoveZone(aimX, 600.0f), "противоположный угол — не зона движения", tag);
+        check(!l.inMoveZone(moveX, 100.0f), "верх экрана всегда прицел", tag);
+    }
+
+    // Крестовина: одна кнопка — одно направление, две — диагональ.
+    {
+        Game g;
+        freshGame(g, 1600, 720);
+        TouchPointer p[TOUCH_MAX_POINTERS];
+        TouchLayout l;
+        l.layout(1600, 720, TOUCH_SCHEME_DPAD_LEFT);
+        float x, y;
+
+        center(l.padRight, x, y);
+        touchBegin(p, g, l, 60, x, y);
+        check(p[0].role == TOUCH_PAD_RIGHT, "кнопка «вправо» крестовины — это вправо");
+        touchUpdate(g, p);
+        check(g.keyD && !g.keyA && !g.keyW && !g.keyS, "крестовина вправо ставит только D");
+        g.playerX = 800.0f;
+        step(g, 20);
+        check(g.playerX > 805.0f, "крестовина действительно двигает героя");
+
+        // Вторая кнопка вместе с первой — диагональ, как две клавиши.
+        center(l.padUp, x, y);
+        touchBegin(p, g, l, 61, x, y);
+        touchUpdate(g, p);
+        check(g.keyD && g.keyW, "две кнопки крестовины дают диагональ");
+
+        // Отпускаем верх — вправо остаётся нажатым. Проверяем сразу после
+        // отпускания: touchEnd не имеет права трогать чужие кнопки.
+        touchEnd(p, g, 61);
+        check(g.keyD && !g.keyW, "отпускание одной кнопки не снимает вторую");
+        touchUpdate(g, p);
+        check(g.keyD && !g.keyW, "и на следующем кадре вправо остаётся");
+        touchEnd(p, g, 60);
+        touchUpdate(g, p);
+        check(!g.keyD && !g.keyW, "после отпускания обеих движения нет");
+
+        // В крестовине нет стика: палец в её углу не должен включать стик.
+        touchBegin(p, g, l, 62, 40.0f, 640.0f);
+        check(p[0].role != TOUCH_STICK, "в схеме с крестовиной стика нет");
+        touchEnd(p, g, 62);
+    }
+
+    // Зеркальная схема: движение справа, кнопки слева.
+    {
+        Game g;
+        freshGame(g, 1600, 720);
+        TouchPointer p[TOUCH_MAX_POINTERS];
+        TouchLayout l;
+        l.layout(1600, 720, TOUCH_SCHEME_STICK_RIGHT);
+        touchBegin(p, g, l, 70, 1400.0f, 600.0f);
+        check(p[0].role == TOUCH_STICK, "в зеркальной схеме стик справа");
+        touchMove(p, g, 70, 1280.0f, 600.0f);
+        touchUpdate(g, p);
+        check(g.keyA && !g.keyD, "стик справа, ведём влево — герой идёт влево");
+        touchEnd(p, g, 70);
+        check(l.dash.x < 1600 / 2, "в зеркальной схеме кнопки рывка слева");
+        touchBegin(p, g, l, 71, 200.0f, 300.0f);
+        check(p[0].role == TOUCH_AIM, "в зеркальной схеме прицел слева");
+        touchEnd(p, g, 71);
+    }
+}
+
+// ── 8.4. Файл настроек: старый 60-байтный читается, новый пишется ──────────
+static void testOptionsFile() {
+    printf("файл настроек\n");
+    Renderer r;
+    r.resize(1600, 720);
+    char savedCwd[1024];
+    if (!getcwd(savedCwd, sizeof(savedCwd))) savedCwd[0] = 0;
+    const char* dir = "/tmp/shadow_touch_probe_cfg";
+    mkdir(dir, 0700);
+    // Старый файл: ровно раскладка 2.10.52, без полей управления. Обновление
+    // игры не должно сбрасывать переключатели игрока.
+    {
+        LegacyGameOptions60 old{};
+        old.magic = 0x53484346;
+        old.sfxEnabled = 0;
+        old.musicEnabled = 1;
+        old.hitEffectsEnabled = 0;
+        old.screenShakeEnabled = 1;
+        old.advisorEnabled = 0;
+        old.hardModeEnabled = 1;
+        old.patchNotesHiddenVersion = 3050;
+        old.projectileTrailsEnabled = 0;
+        old.sfxVolume = 0.31f;
+        old.musicVolume = 0.77f;
+        old.messageSpeechEnabled = 0;
+        old.skillIconStyle = 2;
+        old.campaignSnakeMap = 0;
+        old.graphicsLevel = 4;
+        chdir(dir);
+        FILE* f = fopen("shadow_survivors.cfg", "wb");
+        bool wrote = f && fwrite(&old, sizeof(old), 1, f) == 1;
+        if (f) fclose(f);
+        check(wrote && sizeof(old) == 60, "стенд записал настройки 2.10.52 (60 байт)");
+
+        Game g;
+        g.simulationMode = true;
+        srand(4242);
+        g.init();
+        check(g.options.sfxEnabled == 0 && g.options.hardModeEnabled == 1,
+              "старые настройки прочитаны, а не сброшены");
+        check(g.options.graphicsLevel == 4 && g.options.skillIconStyle == 2,
+              "хвост старых настроек на месте");
+        check(g.options.touchScheme == TOUCH_SCHEME_STICK_LEFT && g.options.touchSetupDone == 0,
+              "новых полей в старом файле нет — схема по умолчанию и вопрос при запуске");
+        check(sizeof(GameOptions) == 68, "новые настройки занимают 68 байт");
+
+        // Запись и чтение нового файла: выбор схемы переживает перезапуск.
+        g.options.touchScheme = TOUCH_SCHEME_DPAD_LEFT;
+        g.options.touchSetupDone = 1;
+        g.simulationMode = false;
+        g.saveOptions();
+        g.simulationMode = true;
+        Game again;
+        again.simulationMode = true;
+        srand(4242);
+        again.init();
+        check(again.options.touchScheme == TOUCH_SCHEME_DPAD_LEFT,
+              "выбранная схема переживает перезапуск");
+        check(again.options.touchSetupDone == 1, "вопрос про схему второй раз не задаётся");
+        check(again.options.graphicsLevel == 4 && again.options.sfxEnabled == 0,
+              "остальные настройки при этом не поехали");
+        remove("shadow_survivors.cfg");
+    }
+    if (savedCwd[0]) chdir(savedCwd);
+}
+
+// ── 8.5. В меню нет стика: касание в нижней левой четверти — это клик ───────
+static void testNoStickInMenus() {
+    printf("стик только в бою\n");
+    Renderer r;
+    r.resize(1600, 720);
+    Game g;
+    freshGame(g, 1600, 720);
+    TouchPointer p[TOUCH_MAX_POINTERS];
+    TouchLayout l;
+    l.layout(1600, 720);
+
+    // Строка настроек, которую на телефоне нельзя было нажать: левый нижний угол.
+    g.state = STATE_SETTINGS;
+    touchBegin(p, g, l, 90, 300.0f, 420.0f);
+    check(p[0].role == TOUCH_AIM, "в настройках касание слева-снизу — это клик, а не стик");
+    check(g.mouseClicked, "клик в настройках доходит до игры");
+    check(!g.keyW && !g.keyA && !g.keyS && !g.keyD, "меню не двигает героя");
+    touchEnd(p, g, 90);
+
+    // В бою та же точка — стик: там движение и нужно.
+    g.state = STATE_PLAYING;
+    touchBegin(p, g, l, 91, 300.0f, 420.0f);
+    check(p[0].role == TOUCH_STICK, "в бою та же точка — стик");
+    touchEnd(p, g, 91);
+}
+
+// ── 9. Прокрутка списков пальцем (колеса на телефоне нет) ───────────────────
+static void testSwipeScroll() {
+    printf("прокрутка пальцем\n");
+    Renderer r;
+    r.resize(1600, 720);
+    Game g;
+    freshGame(g, 1600, 720);
+    TouchPointer p[TOUCH_MAX_POINTERS];
+    TouchLayout l;
+    l.layout(1600, 720);
+
+    // В бою прокрутки нет: там палец — это прицел, и колесо ничего не листает.
+    g.state = STATE_PLAYING;
+    touchBegin(p, g, l, 80, 1200.0f, 400.0f);
+    touchMove(p, g, 80, 1200.0f, 260.0f);
+    check(g.mouseWheelDelta == 0, "в бою движение пальцем не превращается в колесо");
+    touchEnd(p, g, 80);
+
+    // В списках — превращается: свайп вверх листает вниз (как колесо от себя).
+    g.state = STATE_HELP;
+    g.mouseWheelDelta = 0;
+    touchBegin(p, g, l, 81, 1200.0f, 500.0f);
+    for (int i = 1; i <= 10; ++i) touchMove(p, g, 81, 1200.0f, 500.0f - i * 10.0f);
+    snprintf(nullptr, 0, "");
+    check(g.mouseWheelDelta != 0, "свайп вверх по списку листает список");
+    const int delta = g.mouseWheelDelta;
+    check(delta < 0 || delta > 0, "направление прокрутки определено");
+    touchEnd(p, g, 81);
+
+    // Дрожание пальца на 5 px не листает.
+    g.mouseWheelDelta = 0;
+    touchBegin(p, g, l, 82, 1200.0f, 500.0f);
+    for (int i = 1; i <= 6; ++i) touchMove(p, g, 82, 1200.0f, 500.0f - i * 3.0f);
+    check(g.mouseWheelDelta == 0, "мелкое дрожание пальца список не листает");
+    touchEnd(p, g, 82);
+}
+
+// ── 10. Подсказки и первый запуск: телефонный интерфейс без клавиш ──────────
+static void testTouchUi() {
+    printf("телефонный интерфейс\n");
+    Renderer r;
+    r.resize(1600, 720);
+
+    // Клавиатурный билд не должен меняться: подсказка остаётся как была.
+    {
+        Game g;
+        freshGame(g, 1600, 720);
+        check(strcmp(g.keyHint("НАЗАД [ESC]"), "НАЗАД [ESC]") == 0,
+              "на клавиатуре подсказки не трогаются");
+    }
+
+    Game g;
+    g.simulationMode = true;
+    g.touchControls = true;
+    g.options.touchSetupDone = 0;
+    g.options.touchScheme = 0;
+    srand(4242);
+    g.init();
+    check(g.state == STATE_CONTROLS_SETUP, "первый запуск на Android спрашивает схему движения");
+
+    // Выбор схемы и переход дальше.
+    g.setTouchScheme(TOUCH_SCHEME_DPAD_LEFT);
+    check(g.options.touchScheme == TOUCH_SCHEME_DPAD_LEFT, "схема выбирается касанием карточки");
+    g.render(r);                              // экран должен отрисоваться без падений
+    g.onKeyPress('2');
+    check(g.options.touchScheme == TOUCH_SCHEME_STICK_RIGHT, "цифра 2 выбирает стик справа");
+    g.finishControlsSetup();
+    check(g.options.touchSetupDone == 1, "после «дальше» вопрос больше не задаётся");
+    check(g.state != STATE_CONTROLS_SETUP, "после выбора экран закрывается");
+
+    // Второй запуск: вопрос уже не задаётся.
+    Game g2;
+    g2.simulationMode = true;
+    g2.touchControls = true;
+    g2.options.touchSetupDone = 1;
+    srand(4242);
+    g2.init();
+    check(g2.state != STATE_CONTROLS_SETUP, "при повторном запуске экран не мешает");
+
+    // Подсказки телефона: ни одной клавиши.
+    g2.state = STATE_PLAYING;
+    const char* hints[] = {
+        "НАЗАД [ESC]", "ПРОДОЛЖИТЬ [ESC]", "ОТЛАДКА [F9]", "ЗАБРАТЬ [ПРОБЕЛ / ЛКМ]",
+        "В МЕНЮ [ENTER]", "К РАЗВИЛКЕ [TAB]", "НАЗАД К ГЕРОЮ [ESC]",
+        "WASD • ДВИЖЕНИЕ   SPACE • РЫВОК   Q • СУПЕР",
+        "ПКМ • КУРСОР   M/N • ЗВУК   F11 • ЭКРАН   ESC • ПАУЗА",
+    };
+    for (const char* hint : hints) {
+        const char* converted = g2.keyHint(hint);
+        char detail[200];
+        snprintf(detail, sizeof(detail), "«%s» -> «%s»", hint, converted);
+        const bool noKeys = !strstr(converted, "[ESC]") && !strstr(converted, "[ENTER]") &&
+                            !strstr(converted, "[TAB]") && !strstr(converted, "[F9]") &&
+                            !strstr(converted, "[F3]") && !strstr(converted, "[F11]") &&
+                            !strstr(converted, "[ПРОБЕЛ") && !strstr(converted, "WASD") &&
+                            !strstr(converted, "ПКМ") && !strstr(converted, "SPACE") &&
+                            !strstr(converted, "M/N") && !strstr(converted, "ESC") &&
+                            !strstr(converted, "ENTER") && !strstr(converted, "Q • ");
+        check(noKeys && converted[0] != 0, "подсказка телефона без клавиш", detail);
+    }
+    // И не должна превращать галочку зала славы в клавишу.
+    check(strcmp(g2.keyHint("[X] СОТНЯ ВРАГОВ"), "[X] СОТНЯ ВРАГОВ") == 0,
+          "галочка «[X] СОТНЯ ВРАГОВ» остаётся галочкой");
+
+    // Раскладка кнопок следует за выбранной схемой.
+    TouchLayout l0, l1;
+    l0.layout(1600, 720, TOUCH_SCHEME_STICK_LEFT);
+    l1.layout(1600, 720, TOUCH_SCHEME_STICK_RIGHT);
+    check(l0.dash.x != l1.dash.x, "смена схемы двигает кнопки на другую сторону");
+}
+
 int main(int argc, char** argv) {
     g_verbose = argc > 1 && strcmp(argv[1], "-v") == 0;
     printf("стенд касаний: схема из src/touch_input.h против настоящей игры\n\n");
@@ -397,6 +690,11 @@ int main(int argc, char** argv) {
     testMultiTouch();
     testTapIsClick();
     testLongRun();
+    testSchemes();
+    testOptionsFile();
+    testNoStickInMenus();
+    testSwipeScroll();
+    testTouchUi();
     printf("\nитого: %d проверок, провалов %d\n", g_passed + g_failed, g_failed);
     return g_failed == 0 ? 0 : 1;
 }

@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <algorithm>
 #include "renderer.h"
 #include "game.h"
@@ -38,6 +39,10 @@ int main(int argc, char** argv) {
     // Второй аргумент — уровень графики (1 высокое … 4 эконом): три нижних
     // уровня меняют картинку осознанно, и их надо смотреть глазами.
     const int graphicsLevel = argc > 2 ? std::max(1, std::min(4, atoi(argv[2]))) : 1;
+    // Третий аргумент «touch» включает телефонный интерфейс: подсказки без
+    // названий клавиш и кнопка «УПРАВЛЕНИЕ» в настройках. Тот же стенд с теми же
+    // экранами, только глазами телефона.
+    const bool touchUi = argc > 3 && strcmp(argv[3], "touch") == 0;
     struct Case { const char* name; int state; };
     const Case cases[] = {
         {"меню", STATE_MENU},
@@ -50,11 +55,14 @@ int main(int argc, char** argv) {
         {"пауза", STATE_PAUSED},
         {"сундук", STATE_CHEST},
         {"прокачка", STATE_LEVELUP},
+        {"управление", STATE_CONTROLS_SETUP},
     };
     SCREEN_W = 1280; SCREEN_H = 720;
     for (const Case& c : cases) {
         Renderer r; r.resize(SCREEN_W, SCREEN_H);
-        Game g; g.simulationMode = true; srand(4242); g.init();
+        Game g; g.simulationMode = true;
+        g.touchControls = touchUi;      // до init(): от него зависит первый экран
+        srand(4242); g.init();
         g.gameMode = MODE_ENDLESS;
         g.runTime = 240.0f;
         for (int i = 0; i < 5; ++i) g.itemLevels[i] = 3;

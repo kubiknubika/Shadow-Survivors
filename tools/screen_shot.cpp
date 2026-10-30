@@ -58,12 +58,16 @@ int main(int argc, char** argv) {
     const char* out = argc > 3 ? argv[3] : "/tmp/shot.bmp";
     const int threads = argc > 4 ? std::max(1, atoi(argv[4])) : 1;
     const int graphics = argc > 5 ? std::max(1, std::min(4, atoi(argv[5]))) : 1;
+    // Любой аргумент «touch» включает телефонный интерфейс: подсказки без
+    // названий клавиш и экран выбора схемы движения.
+    bool touchUi = false;
+    for (int i = 1; i < argc; ++i) if (strcmp(argv[i], "touch") == 0) touchUi = true;
 
     struct Case { const char* name; int state; } cases[] = {
         {"menu", STATE_MENU}, {"settings", STATE_SETTINGS}, {"help", STATE_HELP},
         {"patchnotes", STATE_PATCH_NOTES}, {"hall", STATE_HALL}, {"hero", STATE_HERO_SELECT},
         {"play", STATE_PLAYING}, {"pause", STATE_PAUSED}, {"chest", STATE_CHEST},
-        {"levelup", STATE_LEVELUP},
+        {"levelup", STATE_LEVELUP}, {"controls", STATE_CONTROLS_SETUP},
     };
     int state = strcmp(screen, "debug") == 0 ? STATE_PLAYING : STATE_SETTINGS;
     for (const Case& c : cases) if (strcmp(c.name, screen) == 0) state = c.state;
@@ -73,6 +77,7 @@ int main(int argc, char** argv) {
     r.resize(w, h);
     Game g;
     g.simulationMode = true;
+    g.touchControls = touchUi;
     srand(4242);
     g.init();
     g.gameMode = MODE_ENDLESS;

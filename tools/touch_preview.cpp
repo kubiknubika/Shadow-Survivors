@@ -7,7 +7,7 @@
 //     g++ -O2 -std=c++17 -pthread -Isrc tools/touch_preview.cpp -o build/touch
 //     build/touch 1600x720 phone.bmp     # экран телефона 20:9
 //     build/touch 1280x720 desktop.bmp
-//     build/touch 1280x720 sheet.bmp 1   # лист А5 с подписями
+//     build/touch 1280x720 sheet.bmp 1   # лист с тремя схемами движения
 //
 // Второй номер (третий аргумент) включает режим листа: два кадра рядом, как в
 // design/touch_controls.png.
@@ -50,12 +50,13 @@ static bool parseSize(const char* s, int& w, int& h) {
 }
 
 // Один кадр боя с нажатым стиком и пальцем на цели.
-static void renderScene(int w, int h, int graphics, std::vector<uint32_t>& out) {
+static void renderScene(int w, int h, int graphics, int scheme, std::vector<uint32_t>& out) {
     SCREEN_W = w; SCREEN_H = h;
     Renderer r;
     r.resize(w, h);
     Game g;
     g.simulationMode = true;
+    g.touchControls = true;    // стенд телефона: подсказки без названий клавиш
     srand(4242);
     g.init();
     g.gameMode = MODE_ENDLESS;
@@ -71,12 +72,22 @@ static void renderScene(int w, int h, int graphics, std::vector<uint32_t>& out) 
     }
 
     TouchLayout layout;
-    layout.layout(w, h);
+    layout.layout(w, h, scheme);            // та же функция, что в игре
     TouchPointer pointers[TOUCH_MAX_POINTERS];
-    // Стик слева, палец прицела справа, большой палец ещё и на рывке — так
-    // видно, что три касания одновременно работают.
-    touchBegin(pointers, g, layout, 1, (float)w * 0.18f, (float)h * 0.78f);
-    touchMove(pointers, g, 1, (float)w * 0.18f + 42.0f, (float)h * 0.78f - 26.0f);
+    if (layout.dpad()) {
+        // Крестовина: два пальца — вправо и вверх, то есть диагональ.
+        touchBegin(pointers, g, layout, 1,
+                   layout.padRight.x + layout.padRight.w * 0.5f,
+                   layout.padRight.y + layout.padRight.h * 0.5f);
+        touchBegin(pointers, g, layout, 4,
+                   layout.padUp.x + layout.padUp.w * 0.5f,
+                   layout.padUp.y + layout.padUp.h * 0.5f);
+    } else {
+        // Стик под большим пальцем: слева или справа, смотря какая схема.
+        const float sx = layout.mirrored() ? (float)w * 0.82f : (float)w * 0.18f;
+        touchBegin(pointers, g, layout, 1, sx, (float)h * 0.78f);
+        touchMove(pointers, g, 1, sx + (layout.mirrored() ? -42.0f : 42.0f), (float)h * 0.78f - 26.0f);
+    }
     touchBegin(pointers, g, layout, 2, (float)w * 0.62f, (float)h * 0.55f);
     touchBegin(pointers, g, layout, 3, layout.dash.x + layout.dash.w * 0.5f, layout.dash.y + layout.dash.h * 0.5f);
     g.mouseX = (int)((float)w * 0.62f);
@@ -97,26 +108,20 @@ int main(int argc, char** argv) {
 
     if (!sheet) {
         std::vector<uint32_t> frame;
-        renderScene(w, h, 1, frame);
+        const int scheme = argc > 4 ? atoi(argv[4]) : 0;
+        renderScene(w, h, 1, scheme, frame);
         writeBmp(path, frame.data(), w, h);
         printf("%s  %dx%d\n", path, w, h);
         return 0;
     }
 
-    // Лист: сверху телефон 20:9 (1600×720), снизу 16:9 (1280×720). Оба кадра
-    // приведены к одной ширине, иначе 20:9 и 16:9 не сравнить глазами.
-    const int phoneW = 1600, phoneH = 720, deskW = 1280, deskH = 720;
-    std::vector<uint32_t> phone, desk;
-    renderScene(phoneW, phoneH, 1, phone);
-    renderScene(deskW, deskH, 1, desk);
-
-    const int outW = 1000 + 24;
-    const int scalePhone = 960;                     // 1600 -> 960 (0.6)
-    const int phoneOutH = phoneH * scalePhone / phoneW;
-    const int scaleDesk = 960;                      // 1280 -> 960 (0.75)
-    const int deskOutH = deskH * scaleDesk / deskW;
+    // Лист: три схемы движения, телефон 20:9 (1600×720). Кадры приведены к
+    // одной ширине, чтобы схемы сравнивались глазами, а не по названию.
+    const int cellW = 1600, cellH = 720, scale = 960;
+    const int outCellH = cellH * scale / cellW;
+    const int outW = scale + 24;
     const int labelH = 26, pad = 12;
-    const int outH = pad + labelH + phoneOutH + pad + labelH + deskOutH + pad;
+    const int outH = pad + 3 * (labelH + outCellH + pad);
     SCREEN_W = outW; SCREEN_H = outH;
     Renderer canvas;
     canvas.resize(outW, outH);
@@ -133,16 +138,20 @@ int main(int argc, char** argv) {
         return x0;
     };
 
+    const char* captions[TOUCH_SCHEME_COUNT] = {
+        "1 СТИК СЛЕВА — движение левым большим пальцем, прицел и кнопки справа",
+        "2 СТИК СПРАВА — то же зеркально, для левшей: движение правой рукой",
+        "3 КРЕСТОВИНА — четыре кнопки-стрелки, диагональ двумя пальцами",
+    };
     int y = pad;
-    canvas.drawText(FONT_SMALL, 12, y + 6,
-                    "ТЕЛЕФОН, 20:9 — кадр 1600×720: стик слева, прицел справа, кнопки у больших пальцев", 0xFFE8E0F8);
-    y += labelH;
-    place(phone, phoneW, phoneH, scalePhone, phoneOutH, y);
-    y += phoneOutH + pad;
-    canvas.drawText(FONT_SMALL, 12, y + 6,
-                    "16:9 — кадр 1280×720: та же схема, кнопки прижаты к краям независимо от формата", 0xFFE8E0F8);
-    y += labelH;
-    place(desk, deskW, deskH, scaleDesk, deskOutH, y);
+    for (int scheme = 0; scheme < TOUCH_SCHEME_COUNT; ++scheme) {
+        std::vector<uint32_t> frame;
+        renderScene(cellW, cellH, 1, scheme, frame);
+        canvas.drawText(FONT_SMALL, 12, y + 6, captions[scheme], 0xFFE8E0F8);
+        y += labelH;
+        place(frame, cellW, cellH, scale, outCellH, y);
+        y += outCellH + pad;
+    }
 
     writeBmp(path, canvas.pixels, outW, outH);
     printf("%s  %dx%d\n", path, outW, outH);

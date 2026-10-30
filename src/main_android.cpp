@@ -311,7 +311,11 @@ static void stopAudio() {
 static TouchPointer g_pointer[TOUCH_MAX_POINTERS];
 static TouchLayout g_touchLayout;
 
-static void layoutButtons() { g_touchLayout.layout(SCREEN_W, SCREEN_H); }
+// Схему движения выбирает игрок (экран «УПРАВЛЕНИЕ»): раскладка пересчитывается
+// на кадр, поэтому смена схемы видна сразу, без перезапуска.
+static void layoutButtons() {
+    g_touchLayout.layout(SCREEN_W, SCREEN_H, g_game.options.touchScheme);
+}
 
 // Экранные координаты -> логический кадр (обратное к viewRect).
 static void toLogical(float sx, float sy, float& lx, float& ly) {
@@ -683,6 +687,9 @@ void ANativeActivity_onCreate(ANativeActivity* activity, void* savedState, size_
     SCREEN_W = 1280;
     SCREEN_H = 720;
     g_renderer.resize(SCREEN_W, SCREEN_H);
+    // Ставится до init(): он решает, показать ли при первом запуске выбор схемы
+    // движения, и рисует подсказки без названий клавиш.
+    g_game.touchControls = true;
     g_game.init();
     {
         unsigned cores = std::thread::hardware_concurrency();
