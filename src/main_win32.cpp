@@ -275,7 +275,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     QueryPerformanceCounter(&lastCounter);
 
     HDC hdc = GetDC(hwnd);
+    // HALFTONE нужен только когда кадр действительно растягивается: это
+    // фильтр в софте, и на 1:1 он всё равно гоняет буфер через свой конвейер.
+    // 1:1 отдаём напрямую через SetDIBitsToDevice (см. ниже).
     SetStretchBltMode(hdc, HALFTONE);
+    SetBrushOrgEx(hdc, 0, 0, NULL);
 
     MSG msg;
     bool running = true;
@@ -299,15 +303,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         g_game.render(g_renderer);
 
         // Present the full logical canvas at the client aspect ratio; world view is never cropped.
-        StretchDIBits(
-            hdc,
-            g_viewX, g_viewY, g_viewW, g_viewH,
-            0, 0, SCREEN_W, SCREEN_H,
-            g_renderer.pixels,
-            &g_bmi,
-            DIB_RGB_COLORS,
-            SRCCOPY
-        );
+        if (g_viewX == 0 && g_viewY == 0 && g_viewW == SCREEN_W && g_viewH == SCREEN_H) {
+            // Окно ровно в логический кадр (например 1280×720): растяжения нет,
+            // значит и HALFTONE не нужен — отдаём строки как есть.
+            SetDIBitsToDevice(hdc, 0, 0, SCREEN_W, SCREEN_H, 0, 0, 0, SCREEN_H,
+                              g_renderer.pixels, &g_bmi, DIB_RGB_COLORS);
+        } else {
+            StretchDIBits(
+                hdc,
+                g_viewX, g_viewY, g_viewW, g_viewH,
+                0, 0, SCREEN_W, SCREEN_H,
+                g_renderer.pixels,
+                &g_bmi,
+                DIB_RGB_COLORS,
+                SRCCOPY
+            );
+        }
 
         // DWM frame pacing follows the active monitor refresh rate (including 120/144/165 Hz).
         // This synchronizes the GDI/DIB presentation to compositor vblank and avoids tearing.

@@ -6,6 +6,16 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+// SIMD-ветки ниже нужны для трёх самых горячих операций кадра (свечение,
+// полупрозрачная заливка, добавление света). На x86-64 SSE2 есть всегда; на
+// другой платформе или при сборке с -DRENDERER_NO_SIMD остаётся тот же
+// скалярный код, что и раньше, поэтому картинка не зависит от флагов.
+#if defined(__SSE2__) && !defined(RENDERER_NO_SIMD)
+#define RENDERER_SIMD 1
+#include <emmintrin.h>
+#else
+#define RENDERER_SIMD 0
+#endif
 #include "font_atlas.h"
 #include "sprite_atlas.h"
 #include "skill_icon_atlas.h"
@@ -213,7 +223,33 @@ struct Renderer {
         }
         const int sr = (col >> 16) & 0xFF, sg = (col >> 8) & 0xFF, sb = col & 0xFF;
         const int inv = 255 - alpha;
-        for (int x = x0; x <= x1; ++x) {
+        int x = x0;
+#if RENDERER_SIMD
+        // Полупрозрачная заливка — самая частая операция кадра (панели, тени,
+        // вода, ореолы). Формула ((канал*alpha + фон*(255-alpha)) >> 8) точно
+        // ложится на 16-битные дорожки: каждое произведение ≤ 65025, сумма
+        // ≤ 65025, то есть переполнения нет, а насыщение не нужно вовсе.
+        {
+            const __m128i zero = _mm_setzero_si128();
+            const __m128i alphaVec = _mm_set1_epi16((short)alpha);
+            const __m128i invVec = _mm_set1_epi16((short)inv);
+            const __m128i alphaMask = _mm_set1_epi32((int)0xFF000000u);
+            // Цвет, уже умноженный на alpha: на строку он один и тот же.
+            const __m128i srcBytes = _mm_set1_epi32((int)((uint32_t)(sr << 16) | (uint32_t)(sg << 8) | (uint32_t)sb));
+            const __m128i preLo = _mm_mullo_epi16(_mm_unpacklo_epi8(srcBytes, zero), alphaVec);
+            const __m128i preHi = _mm_mullo_epi16(_mm_unpackhi_epi8(srcBytes, zero), alphaVec);
+            for (; x + 3 <= x1; x += 4) {
+                const __m128i dst = _mm_loadu_si128((const __m128i*)(row + x));
+                const __m128i lo = _mm_srli_epi16(
+                    _mm_add_epi16(preLo, _mm_mullo_epi16(_mm_unpacklo_epi8(dst, zero), invVec)), 8);
+                const __m128i hi = _mm_srli_epi16(
+                    _mm_add_epi16(preHi, _mm_mullo_epi16(_mm_unpackhi_epi8(dst, zero), invVec)), 8);
+                _mm_storeu_si128((__m128i*)(row + x),
+                                 _mm_or_si128(_mm_packus_epi16(lo, hi), alphaMask));
+            }
+        }
+#endif
+        for (; x <= x1; ++x) {
             const uint32_t dst = row[x];
             const int dr = (dst >> 16) & 0xFF, dg = (dst >> 8) & 0xFF, db = dst & 0xFF;
             row[x] = 0xFF000000u | (((sr * alpha + dr * inv) >> 8) << 16)
@@ -228,15 +264,18 @@ struct Renderer {
             x0 = std::max(x0, clipX0); x1 = std::min(x1, clipX1);
             y0 = std::max(y0, clipY0); y1 = std::min(y1, clipY1);
         }
-        if (x0 >= x1 || y0 >= y1) return;
+        if (x0 >= x1 || y0 >= y1 || alpha <= 0) return;
+        // Полуразмерная заливка идёт через blendSpan: там те же вычисления, но
+        // без проверки границ и клипа на каждый пиксель. Раньше blendPixel
+        // вызывался построчно-постолбцово и тратил на это больше, чем на саму
+        // арифметику цвета.
         if (alpha >= 255) {
             for (int py = y0; py < y1; ++py) {
                 uint32_t* row = pixels + py * SCREEN_W;
-                for (int px = x0; px < x1; ++px) row[px] = col;
+                std::fill(row + x0, row + x1, col);
             }
-        } else if (alpha > 0) {
-            for (int py = y0; py < y1; ++py)
-                for (int px = x0; px < x1; ++px) blendPixel(px, py, col, alpha);
+        } else {
+            for (int py = y0; py < y1; ++py) blendSpan(py, x0, x1 - 1, col, alpha);
         }
     }
 
@@ -253,9 +292,9 @@ struct Renderer {
             uint32_t c = lerpColor(topCol, botCol, t);
             if (alpha >= 255) {
                 uint32_t* row = pixels + py * SCREEN_W;
-                for (int px = x0; px < x1; ++px) row[px] = c;
+                std::fill(row + x0, row + x1, c);
             } else {
-                for (int px = x0; px < x1; ++px) blendPixel(px, py, c, alpha);
+                blendSpan(py, x0, x1 - 1, c, alpha);
             }
         }
     }
@@ -271,20 +310,25 @@ struct Renderer {
         if (rad <= 0) { fillRect(x, y, w, h, col, alpha); return; }
         if (rad * 2 > w) rad = w / 2;
         if (rad * 2 > h) rad = h / 2;
-        int x0 = std::max(0, x), y0 = std::max(0, y);
-        int x1 = std::min(SCREEN_W, x + w), y1 = std::min(SCREEN_H, y + h);
-        int r2 = rad * rad;
+        const int x0 = std::max(0, x), y0 = std::max(0, y);
+        const int x1 = std::min(SCREEN_W, x + w), y1 = std::min(SCREEN_H, y + h);
+        if (x0 >= x1 || y0 >= y1 || alpha <= 0) return;
+        const int r2 = rad * rad;
+        // Скругление — это отступ по краям строки, а не отдельная проверка на
+        // каждый пиксель: раньше вся панель (включая ровную середину) шла
+        // пиксель за пикселем через blendPixel с проверкой границ и клипа.
         for (int py = y0; py < y1; ++py) {
             int dy = 0;
             if (py < y + rad) dy = (y + rad) - py;
             else if (py >= y + h - rad) dy = py - (y + h - rad - 1);
-            for (int px = x0; px < x1; ++px) {
-                int dx = 0;
-                if (px < x + rad) dx = (x + rad) - px;
-                else if (px >= x + w - rad) dx = px - (x + w - rad - 1);
-                if (dx > 0 && dy > 0 && dx * dx + dy * dy > r2) continue;
-                blendPixel(px, py, col, alpha);
+            int inset = 0;
+            if (dy > 0) {
+                const int rem = r2 - dy * dy;
+                if (rem < 0) continue;
+                inset = rad - (int)sqrtf((float)rem);
+                if (inset < 0) inset = 0;
             }
+            blendSpan(py, x + inset, x + w - 1 - inset, col, alpha);
         }
     }
 
@@ -330,6 +374,8 @@ struct Renderer {
         }
     }
 
+    // Ядро свечения считается один раз на радиус и живёт в таблице: в кадре
+    // это десятки тысяч обращений, поэтому читается оно по сырому указателю.
     static const std::vector<uint32_t>* getGlowKernel(int radius) {
         if (radius <= 0 || radius > 256) return nullptr;
         static std::vector<std::vector<uint32_t>> kernels(513);
@@ -347,10 +393,26 @@ struct Renderer {
 
     void addGlow(int cx, int cy, int r, uint32_t col, int maxIntensity = 180) {
         if (r <= 0 || maxIntensity <= 0) return;
+        // Дешёвый отсев: свечение целиком за кадром. Частицы и снаряды улетают
+        // за край постоянно, а до этой проверки для каждой из них считался
+        // диапазон строк, корень и границы.
+        if (cx + r < 0 || cy + r < 0 || cx - r >= SCREEN_W || cy - r >= SCREEN_H) return;
         const int r2 = r * r;
         const int y0 = std::max(0, cy - r), y1 = std::min(SCREEN_H - 1, cy + r);
         const int cr = (col >> 16) & 0xFF, cg = (col >> 8) & 0xFF, cb = col & 0xFF;
         const std::vector<uint32_t>* kernel = getGlowKernel(r);
+        const uint32_t* k = kernel ? kernel->data() : nullptr;
+        // Таблица «яркость → прибавка» на этот вызов: в кадре десятки свечений,
+        // и три умножения на каждый пиксель дороже, чем 256 входов таблицы.
+        // Значения те же, что и в прежней формуле ((канал * intensity) >> 8).
+        // Прибавка упакована в те же байты, что и пиксель (r<<16 | g<<8 | b):
+        // тогда к четырём пикселям сразу можно прибавить вектор одной командой.
+        uint32_t addPacked[256];
+        for (int i = 0; i < 256; ++i) {
+            addPacked[i] = ((uint32_t)((cr * i) >> 8) << 16)
+                         | ((uint32_t)((cg * i) >> 8) << 8)
+                         | (uint32_t)((cb * i) >> 8);
+        }
         for (int py = y0; py <= y1; ++py) {
             const int dy = py - cy, dy2 = dy * dy;
             const int rem = r2 - 1 - dy2; // the glow is defined for d² < r²
@@ -359,21 +421,57 @@ struct Renderer {
             const int dx0 = std::max(-extent, -cx);
             const int dx1 = std::min(extent, SCREEN_W - 1 - cx);
             if (dx0 > dx1) continue;
-            uint32_t* row = pixels + py * SCREEN_W;
-            for (int dx = dx0; dx <= dx1; ++dx) {
-                const int d2 = dx * dx + dy2;
-                const int intensity = kernel
-                    ? (int)((maxIntensity * (uint64_t)(*kernel)[d2]) >> 16)
-                    : (int)((maxIntensity * (256 - (d2 * 256) / r2) * (256 - (d2 * 256) / r2)) >> 16);
-                if (intensity <= 0) continue;
-                uint32_t& dst = row[cx + dx];
-                int rr = ((dst >> 16) & 0xFF) + ((cr * intensity) >> 8);
-                int gg = ((dst >> 8) & 0xFF) + ((cg * intensity) >> 8);
-                int bb = (dst & 0xFF) + ((cb * intensity) >> 8);
-                if (rr > 255) rr = 255;
-                if (gg > 255) gg = 255;
-                if (bb > 255) bb = 255;
-                dst = 0xFF000000u | ((uint32_t)rr << 16) | ((uint32_t)gg << 8) | (uint32_t)bb;
+            uint32_t* dstRow = pixels + py * SCREEN_W + cx;
+            if (k) {
+                int dx = dx0;
+#if RENDERER_SIMD
+                // Прибавление света — это сложение байтов с насыщением, ровно
+                // то, что делает paddusb: четыре пикселя за команду, без
+                // разбора на каналы и без трёх сравнений с 255 на каждый.
+                // Альфа принудительно в 255 — так же, как в скалярной ветке.
+                const __m128i alphaMask = _mm_set1_epi32((int)0xFF000000u);
+                for (; dx + 3 <= dx1; dx += 4) {
+                    const uint32_t a0 = addPacked[(maxIntensity * (int)k[(dx + 0) * (dx + 0) + dy2]) >> 16];
+                    const uint32_t a1 = addPacked[(maxIntensity * (int)k[(dx + 1) * (dx + 1) + dy2]) >> 16];
+                    const uint32_t a2 = addPacked[(maxIntensity * (int)k[(dx + 2) * (dx + 2) + dy2]) >> 16];
+                    const uint32_t a3 = addPacked[(maxIntensity * (int)k[(dx + 3) * (dx + 3) + dy2]) >> 16];
+                    const __m128i diff = _mm_set_epi32((int)a3, (int)a2, (int)a1, (int)a0);
+                    __m128i* quad = (__m128i*)(dstRow + dx);
+                    const __m128i sum = _mm_adds_epu8(_mm_loadu_si128(quad), diff);
+                    _mm_storeu_si128(quad, _mm_or_si128(sum, alphaMask));
+                }
+#endif
+                for (; dx <= dx1; ++dx) {
+                    // maxIntensity ≤ 255, ядро ≤ 65536 — произведение влезает
+                    // в 32 бита, 64-битное умножение здесь было лишним.
+                    const int intensity = (maxIntensity * (int)k[dx * dx + dy2]) >> 16;
+                    if (intensity <= 0) continue;
+                    const uint32_t d = addPacked[intensity];
+                    uint32_t& dst = dstRow[dx];
+                    int rr = ((dst >> 16) & 0xFF) + (int)((d >> 16) & 0xFF);
+                    int gg = ((dst >> 8) & 0xFF) + (int)((d >> 8) & 0xFF);
+                    int bb = (dst & 0xFF) + (int)(d & 0xFF);
+                    if (rr > 255) rr = 255;
+                    if (gg > 255) gg = 255;
+                    if (bb > 255) bb = 255;
+                    dst = 0xFF000000u | ((uint32_t)rr << 16) | ((uint32_t)gg << 8) | (uint32_t)bb;
+                }
+            } else {
+                for (int dx = dx0; dx <= dx1; ++dx) {
+                    const int d2 = dx * dx + dy2;
+                    const int falloff = 256 - (d2 * 256) / r2;
+                    const int intensity = (maxIntensity * falloff * falloff) >> 16;
+                    if (intensity <= 0) continue;
+                    const uint32_t d = addPacked[intensity];
+                    uint32_t& dst = dstRow[dx];
+                    int rr = ((dst >> 16) & 0xFF) + (int)((d >> 16) & 0xFF);
+                    int gg = ((dst >> 8) & 0xFF) + (int)((d >> 8) & 0xFF);
+                    int bb = (dst & 0xFF) + (int)(d & 0xFF);
+                    if (rr > 255) rr = 255;
+                    if (gg > 255) gg = 255;
+                    if (bb > 255) bb = 255;
+                    dst = 0xFF000000u | ((uint32_t)rr << 16) | ((uint32_t)gg << 8) | (uint32_t)bb;
+                }
             }
         }
     }
@@ -415,8 +513,24 @@ struct Renderer {
         x0 = std::max(0, x0); x1 = std::min(SCREEN_W - 1, x1);
         if (x0 > x1) return;
         const int cr = (col >> 16) & 0xFF, cg = (col >> 8) & 0xFF, cb = col & 0xFF;
+        const uint32_t addPacked = ((uint32_t)((cr * intensity) >> 8) << 16)
+                                 | ((uint32_t)((cg * intensity) >> 8) << 8)
+                                 | (uint32_t)((cb * intensity) >> 8);
         uint32_t* row = pixels + y * SCREEN_W;
-        for (int x = x0; x <= x1; ++x) {
+        int x = x0;
+#if RENDERER_SIMD
+        // Свет прибавляется к каналу с отсечкой на 255 — это paddusb, четыре
+        // пикселя за команду. Раньше на каждый пиксель было три сравнения.
+        {
+            const __m128i diff = _mm_set1_epi32((int)addPacked);
+            const __m128i alphaMask = _mm_set1_epi32((int)0xFF000000u);
+            for (; x + 3 <= x1; x += 4) {
+                __m128i* quad = (__m128i*)(row + x);
+                _mm_storeu_si128(quad, _mm_or_si128(_mm_adds_epu8(_mm_loadu_si128(quad), diff), alphaMask));
+            }
+        }
+#endif
+        for (; x <= x1; ++x) {
             uint32_t& dst = row[x];
             int rr = ((dst >> 16) & 0xFF) + ((cr * intensity) >> 8);
             int gg = ((dst >> 8) & 0xFF) + ((cg * intensity) >> 8);
@@ -949,17 +1063,26 @@ struct Renderer {
             }
             return 0;
         };
+        // Материал зависит только от типа стража (или от «это пергамент»),
+        // поэтому таблица считается до цикла, а не на каждый пиксель фигуры.
+        const FigMaterial matBase = figMaterial(matId);
+        const FigMaterial matParch = figMaterialParchment();
         for (int j = 0; j <= bottom; ++j) {
+            const uint8_t* maskRow = &figureMask[(size_t)j * w];
+            const uint16_t* colorRow = &figureColor[(size_t)j * w];
+            const int sy = y0 + j;
+            if (sy < 0 || sy >= H) continue;
+            uint32_t* pixRow = pixels + (size_t)sy * W;
             for (int i = 0; i < w; ++i) {
-                if (!solidAt(i, j)) continue;
-                const int sx = x0 + i, sy = y0 + j;
-                if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
-                uint32_t c = pixels[(size_t)sy * W + sx];
+                if (!maskRow[i]) continue;
+                const int sx = x0 + i;
+                if (sx < 0 || sx >= W) continue;
+                uint32_t c = pixRow[sx];
                 // Материал по цвету детали: пергамент, страницы и кость узнаются
                 // по высокой светлоте при низкой насыщенности, остальное — по типу
                 // стража. Один и тот же приём для стали и для ткани — это и была
                 // причина, по которой линейка читалась отлитой из одного металла.
-                const uint16_t key = figureColor[(size_t)j * w + i];
+                const uint16_t key = colorRow[i];
                 const int r5 = (key >> 10) & 0x1F, g5 = (key >> 5) & 0x1F, b5 = key & 0x1F;
                 const int lum8 = ((r5 * 77 + g5 * 150 + b5 * 29) >> 8) * 8;
                 // Тёплое и светлое — пергамент, страницы, кость, маска. Камень
@@ -967,7 +1090,7 @@ struct Renderer {
                 // поэтому одним порогом насыщенности их не разделить.
                 const int chroma = std::max(r5, std::max(g5, b5)) - std::min(r5, std::min(g5, b5));
                 const bool parchment = (lum8 > 150) && (chroma <= 6) && (r5 > b5 + 2);
-                const FigMaterial mat = parchment ? figMaterialParchment() : figMaterial(matId);
+                const FigMaterial mat = parchment ? matParch : matBase;
                 // Тональная рампа по материалу. Ступенчатую (три тона по осям
                 // кадра) пробовал: на крупном теле она даёт прямой диагональный
                 // шов через всю фигуру — у Азарота балахон делился на светлую и
