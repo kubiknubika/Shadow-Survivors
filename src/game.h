@@ -5811,7 +5811,10 @@ struct Game {
                 // Страж поворачивается к герою и дёргается от попадания: раньше он
                 // смотрел в одну сторону при любом движении, а удар давал только
                 // белую вспышку без отдачи.
-                const float recoil = m.hitFlashTimer > 0.0f ? std::min(1.0f, m.hitFlashTimer / 0.18f) : 0.0f;
+                // Вспышка живёт 0.10–0.12 с (см. попадания), поэтому нормируем по 0.12:
+                // с делителем 0.18 отдача никогда не доходила до полной и попадание
+                // выглядело вялым.
+                const float recoil = m.hitFlashTimer > 0.0f ? std::min(1.0f, m.hitFlashTimer / 0.12f) : 0.0f;
                 if (m.hp > 0.0f)
                     r.drawBossSprite(sx, sy, m.bossType, globalTime + m.animOffset, m.hitFlashTimer > 0.0f,
                                      m.bossPhase >= 3, m.bossReinforced, castPose, castBurst, m.facing < 0, recoil);
