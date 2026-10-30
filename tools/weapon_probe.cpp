@@ -9,6 +9,9 @@
 //
 //   • 220 px — одна мишень на дистанции: урон «по площади» на средней дистанции;
 //   • 90 px — одна мишень вплотную: проверка, достаёт ли оружие ближнего боя;
+//   • 20 px — живой моб в упор (не прибит к точке): сюда попадают только те,
+//     у кого нет «мёртвой середины». Именно этого столбца не хватило прошлому
+//     аудиту: вихрь на 4-м ранге бил в 90 px и не бил в 20;
 //   • в движ. — одна мишень обходит героя по кругу 110 px/с: проверка упреждения
 //     и наведения (стоячую цель любое оружие бьёт, идущую — не всякое);
 //   • толпа — 24 мишени на кольце 120–330 px: урон по площади;
@@ -78,7 +81,7 @@ static std::vector<Dummy> layoutTargets(int count, float inner, float outer) {
 // Один замер: ставит оружие, мишени и гоняет игру, пока не выйдет время.
 static Result measure(Game& g, int itemId, int level, bool evolved, int targetCount,
                       float inner, float outer, float seconds, float orbitSpeed = 0.0f,
-                      int passiveId = -1) {
+                      int passiveId = -1, bool pinTargets = true) {
     Result res;
     const float dt = 1.0f / 60.0f;
 
@@ -155,8 +158,13 @@ static Result measure(Game& g, int itemId, int level, bool evolved, int targetCo
             if (it == dummyIds.end()) continue;
             const size_t slot = (size_t)(it - dummyIds.begin());
             const Dummy& d = spots[dummySlot[slot]];
-            m.x = d.x; m.y = d.y;
-            m.vx = m.vy = 0.0f;
+            // В сценарии «в упор» мишень не прибита к точке: живой моб подходит
+            // и упирается в героя сам. Иначе оружие, которое выталкивает врага
+            // из мёртвой середины (вихрь), выглядело бы сломанным.
+            if (pinTargets || slot != 0) {
+                m.x = d.x; m.y = d.y;
+                m.vx = m.vy = 0.0f;
+            }
             m.hp = INF_HP;
             m.maxHp = INF_HP;
             // Мишень двигаем мы, а не ИИ, поэтому направление шага задаём сами:
@@ -250,7 +258,7 @@ int main(int argc, char** argv) {
     const int onlyWeapon = argc > 2 ? atoi(argv[2]) : -1;
     const char* csvPath = (argc > 4 && !strcmp(argv[3], "--csv")) ? argv[4] : nullptr;
     FILE* csv = csvPath ? fopen(csvPath, "w") : nullptr;
-    if (csv) fprintf(csv, "weapon,level,far220,close90,moving,crowd,perCast,castsPerMin,targetsPerCast\n");
+    if (csv) fprintf(csv, "weapon,level,far220,close90,near20,moving,crowd,perCast,castsPerMin,targetsPerCast\n");
 
     SCREEN_W = 1280; SCREEN_H = 720;
     Renderer r; r.resize(SCREEN_W, SCREEN_H);
@@ -274,12 +282,12 @@ int main(int argc, char** argv) {
     printf("Замер %.0f с на строку, зерно rand фиксировано, крит только базовые 8%%.\n", seconds);
     printf("Мишени: 220 px и 90 px — одна цель на месте; «в движ.» — одна цель по кругу 110 px/с;\n");
     printf("толпа — %d целей на кольце 120–330 px. Урон = снятое здоровье мишеней.\n\n", CROWD);
-    printf("%-30s %5s %8s %8s %8s %8s %9s %7s\n",
-           "оружие", "ранг", "220 px", "90 px", "в движ.", "толпа", "за удар", "сраб/м");
+    printf("%-30s %5s %8s %8s %8s %8s %8s %9s %7s\n",
+           "оружие", "ранг", "220 px", "90 px", "20 px", "в движ.", "толпа", "за удар", "сраб/м");
 
     struct Row {
         const char* name; int level;
-        Result far, close, moving, crowd;
+        Result far, close, near, moving, crowd;
     };
     std::vector<Row> rows;
 
@@ -294,20 +302,22 @@ int main(int argc, char** argv) {
             srand(20260201);
             Result close = measure(g, w, level, evolved, 1, 90.0f, 90.0f, seconds);
             srand(20260201);
+            Result near = measure(g, w, level, evolved, 1, 20.0f, 20.0f, seconds, 0.0f, -1, false);
+            srand(20260201);
             Result moving = measure(g, w, level, evolved, 1, 220.0f, 220.0f, seconds, 110.0f);
             srand(20260201);
             Result crowd = measure(g, w, level, evolved, CROWD, 120.0f, 330.0f, seconds);
             char label[64];
             if (evolved) snprintf(label, sizeof(label), "%s (эволюция)", weaponName[w]);
             else snprintf(label, sizeof(label), "%s", weaponName[w]);
-            printf("%-30s %5d %8.0f %8.0f %8.0f %8.0f %9.0f %7.1f\n",
-                   label, level, far.dps(), close.dps(), moving.dps(), crowd.dps(),
+            printf("%-30s %5d %8.0f %8.0f %8.0f %8.0f %8.0f %9.0f %7.1f\n",
+                   label, level, far.dps(), close.dps(), near.dps(), moving.dps(), crowd.dps(),
                    crowd.perCast(), crowd.casts / std::max(0.001, crowd.seconds) * 60.0);
-            if (csv) fprintf(csv, "%s,%d,%.0f,%.0f,%.0f,%.0f,%.0f,%.1f,%.1f\n", weaponName[w], level,
-                             far.dps(), close.dps(), moving.dps(), crowd.dps(), crowd.perCast(),
+            if (csv) fprintf(csv, "%s,%d,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.1f,%.1f\n", weaponName[w], level,
+                             far.dps(), close.dps(), near.dps(), moving.dps(), crowd.dps(), crowd.perCast(),
                              crowd.casts / std::max(0.001, crowd.seconds) * 60.0,
                              crowd.targetsPerCast);
-            rows.push_back({weaponName[w], level, far, close, moving, crowd});
+            rows.push_back({weaponName[w], level, far, close, near, moving, crowd});
         }
     }
 
@@ -347,6 +357,16 @@ int main(int argc, char** argv) {
         if (onlyWeapon >= 0 && strcmp(row.name, weaponName[std::max(0, onlyWeapon)]) != 0) continue;
         printf("  %-22s ранг %d: %.1f\n", row.name, row.level, row.crowd.targetsPerCast);
     }
+    // Оружие, которое не бьёт того, кто стоит в упор, — сломанное оружие:
+    // именно так вихрь на 4-м ранге пропускал врагов в мёртвой середине.
+    for (const Row& row : rows) {
+        if (row.level != 4 && row.level != 8) continue;
+        if (row.near.dps() < 1.0) {
+            printf("  %s на ранге %d не наносит урона мишени в 20 px\n", row.name, row.level);
+            ++failures;
+        }
+    }
+
     // Обещание «цепной» молнии: одна активация должна задевать больше одной цели.
     for (const Row& row : rows) {
         if (strcmp(row.name, weaponName[3]) != 0 || row.level != 8) continue;
@@ -378,7 +398,7 @@ int main(int argc, char** argv) {
 
     // ── Оружие тиров ────────────────────────────────────────────────────────
     printf("\nоружие тиров (уровень 8):\n");
-    printf("%-30s %8s %8s %8s %8s %9s %7s\n", "оружие", "220 px", "90 px", "в движ.", "толпа", "за удар", "сраб/м");
+    printf("%-30s %8s %8s %8s %8s %8s %9s %7s\n", "оружие", "220 px", "90 px", "20 px", "в движ.", "толпа", "за удар", "сраб/м");
     for (int t = 0; t < 4; ++t) {
         const int id = 24 + t;
         if (onlyWeapon >= 0 && onlyWeapon != id) continue;
