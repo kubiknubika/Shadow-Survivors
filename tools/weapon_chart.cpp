@@ -416,7 +416,7 @@ static void drawStrategy(Renderer& r, const std::vector<StratRow>& rows) {
                    0xFF9C93B4, false); y += 22;
     }
     if (standStart && moveStart) {
-        snprintf(buf, sizeof(buf), "• Стиль: на старте обход по кругу удваивает жизнь (%.1f -> %.1f с).", standStart->survived, moveStart->survived);
+        snprintf(buf, sizeof(buf), "• Стиль: на старте обход по кругу продлевает жизнь (%.1f -> %.1f с).", standStart->survived, moveStart->survived);
         r.drawText(FONT_SMALL, 46, y, buf, 0xFFBFB4D8, false); y += 22;
     }
     if (standStrong && moveStrong) {
@@ -428,7 +428,7 @@ static void drawStrategy(Renderer& r, const std::vector<StratRow>& rows) {
                  deep->survived, axe->survived, deep->survived / std::max(1.0, axe->survived));
         r.drawText(FONT_SMALL, 46, y, buf, 0xFFBFB4D8, false); y += 22;
     }
-    r.drawText(FONT_SMALL, 46, y, "• Решения: забег на 5 минут даёт 18 прокачек; симбиоз (оружие 9 + резонанс IV) забирает 13 из них — 72 %.",
+    r.drawText(FONT_SMALL, 46, y, "• Решения: забег на 5 минут даёт 16 прокачек; симбиоз (оружие 9 + резонанс IV) забирает 13 из них — 81 %.",
                0xFFBFB4D8, false);
     y += 40;
 
