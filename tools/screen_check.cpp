@@ -69,6 +69,11 @@ int main(int argc, char** argv) {
         {"пауза", STATE_PAUSED, -1, -1, false},
         {"сундук", STATE_CHEST, -1, -1, false},
         {"прокачка", STATE_LEVELUP, -1, -1, false},
+        // Кузница и договоры — единственный экран с ценами и шкалами рангов, и
+        // до этой строки он в сверку не входил: правка витрины проходила мимо
+        // всех пломб. Ранги выставляются заранее, иначе кадр показывает только
+        // «Ранг 0» и незакрашенные отрезки.
+        {"кузница", STATE_SHOP, -1, -1, false},
         {"управление", STATE_CONTROLS_SETUP, -1, -1, false},
         {"вид кнопок", STATE_BUTTON_LOOK, -1, -1, false},
         {"праздники", STATE_HOLIDAY, -2, -1, false},
@@ -98,6 +103,12 @@ int main(int argc, char** argv) {
         g.renderThreads = threads;
         g.options.graphicsLevel = graphicsLevel;
         g.state = (GameState)c.state;
+        if (c.state == STATE_SHOP) {
+            // Разные ранги в одном кадре: подпись «Ранг N / 12», закрашенная
+            // шкала и цена следующего ранга должны попасть в контрольную сумму.
+            g.save.gold = 150000;
+            for (int i = 0; i < 6; ++i) g.save.metaRanks[i] = i * 2;
+        }
         if (c.state == STATE_PLAYING || c.state == STATE_LEVELUP || c.state == STATE_CHEST || c.state == STATE_PAUSED) {
             for (int i = 0; i < 60; ++i) g.spawnMonster(i % 8, i % 9 == 0, false);
         }

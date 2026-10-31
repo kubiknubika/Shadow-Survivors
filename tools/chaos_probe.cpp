@@ -36,10 +36,6 @@
 #include "game.h"
 
 static int failures = 0;
-static void expect(bool ok, const char* fmt, ...) {
-    (void)fmt;
-    if (!ok) ++failures;
-}
 template <typename... Args>
 static void check(bool ok, const char* fmt, Args... args) {
     if (ok) return;
@@ -268,52 +264,57 @@ static void checkPortalPromise() {
 
 
 // ── 6. Кривая цен кузницы ──────────────────────────────────────────────────
-// Цена растёт в 1,55 раза за ранг, а добыча за забег — линейно (замер: 20 минут
-// в «Бесконечной ночи» дают 19–30 тыс. золота при бессмертии, то есть это
-// потолок добычи, а не мастерства). Отсюда скучный, но важный факт: витрина
-// обещает 50 рангов, а ранги после ~20 стоят больше, чем игрок соберёт за всю
-// жизнь. Ни один стенд этого не видел, потому что все они меряют бой.
+// Цены и вклад рангов берутся у самой игры (getMetaUpgradeCost, getEnemyOathCost,
+// getMetaUpgradeEffectRank). Раньше стенд пересчитывал кривую по своей копии
+// формулы — и мерил не игру, а себя: в отчёте оказались «ранги по 1,55 и 2,1
+// трлн», хотя в кузнице другая кривая. Теперь любая правка цен меняет отчёт.
+//
+// Добыча измерена отдельно (20 минут «Бесконечной ночи», бессмертие, три зерна:
+// 19 105 / 21 504 / 29 861 золота). 25 тыс. — осторожная середина.
 static void checkShopCurve() {
     printf("кривая цен кузницы\n");
-    for (int id = 0; id < 6; ++id) {
-        long double total = 0.0L, price = META_DEFS[id].baseCost;
-        long long last = 0;
-        for (int r = 0; r < META_DEFS[id].maxRank; ++r) {
-            total += price;
-            last = (long long)llround((double)price);
-            price *= 1.55L;
-        }
-        check(total > 0.0L, "сумма цен строки %d отрицательна", id);
-        check(last > 0, "цена последнего ранга строки %d равна %lld", id, last);
-        if (id == 0) {
-            printf("  «Сила клинка»: ранг XII стоит %.0Lf золота, полные 50 рангов — %.2Le\n", (long double)124995.0L, total);
-        }
-    }
-    // Обещание витрины должно быть исполнимо хоть в каком-то разумном числе
-    // забегов: считаем, что хороший забег даёт 25 тыс. золота.
     const long double perRun = 25000.0L;
-    long double price12 = 0.0L, p = 650.0L;
-    for (int r = 0; r < 12; ++r) { price12 += p; p *= 1.55L; }
-    const long double runs12 = price12 / perRun;
-    check(runs12 < 25.0L, "12-й ранг одной строки требует %.0Lf забегов", runs12);
-    printf("  при 25 тыс. золота за забег: 12-й ранг — %.0Lf забегов, 20-й — ~170, 50-й — ~1e8\n", runs12);
-    {
-        // Ранг ставим ТОЛЬКО через setEnemyOathRank: в сейве договоры лежат
-        // двумя половинами по три (так сохранены старые смещения), и прямая
-        // запись save.enemyOathRanks[id] для id = 3…5 — выход за массив.
-        // Компилятор об этом честно предупреждает (-Waggressive-loop-optimizations).
+    long double allStats = 0.0L;
+    for (int id = 0; id < 6; ++id) {
         Game g;
         g.ignoreSavedState = true;
         g.simulationMode = true;
-        for (int id = 0; id < ENEMY_OATH_COUNT; ++id) {
-            g.setEnemyOathRank(id, ENEMY_OATHS[id].maxRank - 1);
-            const int cost = g.getEnemyOathCost(id);
-            check(cost > 0, "цена договора %d на последнем ранге плохая: %d", id, cost);
+        long double total = 0.0L;
+        int previous = 0;
+        for (int rank = 0; rank < META_DEFS[id].maxRank; ++rank) {
+            g.save.metaRanks[id] = rank;
+            const int cost = g.getMetaUpgradeCost(id);
+            check(cost > 0, "цена ранга %d строки %d не положительна: %d", rank, id, cost);
+            check(cost > previous, "цена не растёт: ранг %d строки %d стоит %d, а предыдущий %d",
+                  rank, id, cost, previous);
+            previous = cost;
+            total += cost;
         }
+        g.save.metaRanks[id] = META_DEFS[id].maxRank;
+        check(g.getMetaUpgradeEffectRank(id) == (float)META_DEFS[id].maxRank,
+              "на максимуме вклад строки %d равен %.2f, а не %d",
+              id, g.getMetaUpgradeEffectRank(id), META_DEFS[id].maxRank);
+        allStats += total;
+        if (id == 0)
+            printf("  «Сила клинка»: все %d рангов — %.0Lf золота (≈ %.0Lf забегов)\n",
+                   META_DEFS[id].maxRank, total, total / perRun);
     }
-    printf("  последние ранги всех шести договоров — в пределах int\n");
+    // Потолок витрины должен быть исполним: если прокачать ВСЁ до максимума
+    // стоит больше пары сотен забегов, витрина снова врёт.
+    const long double runs = allStats / perRun;
+    check(runs <= 250.0L, "вся кузница стоит %.0Lf забегов (предел 250)", runs);
+    printf("  вся кузница (шесть строк до максимума) — %.0Lf золота, ≈ %.0Lf забегов\n", allStats, runs);
+    for (int id = 0; id < ENEMY_OATH_COUNT; ++id) {
+        Game g;
+        g.ignoreSavedState = true;
+        g.simulationMode = true;
+        g.setEnemyOathRank(id, ENEMY_OATHS[id].maxRank - 1);
+        const int cost = g.getEnemyOathCost(id);
+        check(cost > 0, "цена договора %d на последнем ранге плохая: %d", id, cost);
+        check((long double)cost <= 20.0L * perRun, "последний ранг договора %d не по карману: %d", id, cost);
+    }
+    printf("  последние ранги всех шести договоров по карману и в пределах int\n");
 }
-
 
 // ── 7. Договоры лежат двумя половинами ─────────────────────────────────────
 // SaveData объявляет enemyOathRanks[3] и (в хвосте) enemyOathRanksAdditional[3]:
@@ -326,18 +327,9 @@ static void checkOathHalves() {
     Game g;
     g.ignoreSavedState = true;
     g.simulationMode = true;
-    // Смещения полей сейва — это формат файла. Они не обязаны лежать подряд:
-    // вторая половина договоров добавлена в хвост структуры, чтобы старые
-    // смещения остались на месте. Проверяем именно это: адреса не сдвинулись.
-    // Меняются они только вместе с миграцией (loadSave читает по размеру файла),
-    // и тогда эту пломбу надо осознанно переписать.
-    check(offsetof(SaveData, enemyOathRanks) == 68, "первая половина договоров съехала: %zu вместо 68",
-          offsetof(SaveData, enemyOathRanks));
-    check(offsetof(SaveData, enemyOathRanksAdditional) == 88, "вторая половина договоров съехала: %zu вместо 88",
-          offsetof(SaveData, enemyOathRanksAdditional));
-    check(offsetof(SaveData, campaignFork) == 116, "выбор развилок съехал: %zu вместо 116",
-          offsetof(SaveData, campaignFork));
-    check(sizeof(SaveData) == 120, "сейв сменил размер: %zu вместо 120 (нужна миграция)", sizeof(SaveData));
+    // Смещения полей сейва стерегут static_assert'ы в game.h: перестановка
+    // ломает сборку, а не сейв игрока. Здесь проверяется то, что компилятор
+    // увидеть не может, — поведение: половины не пересекаются.
     for (int id = 0; id < ENEMY_OATH_COUNT; ++id) {
         Game one;
         one.ignoreSavedState = true;
@@ -350,7 +342,7 @@ static void checkOathHalves() {
                   id, other, one.getEnemyOathRank(other), expectRank);
         }
     }
-    printf("  шесть договоров не пересекаются, смещения сейва (68/88/116, 120 байт) на месте\n");
+    printf("  шесть договоров не пересекаются: ранг одного не трогает соседний\n");
 }
 
 int main(int argc, char** argv) {

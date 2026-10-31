@@ -240,6 +240,17 @@ inline HolidayWindow holidayWindow(HolidayId id, int year) {
     }
 }
 
+// Точна ли дата этого праздника в этом году. Плавающие праздники считаются по
+// правилу (Пасха, Масленица), а лунный новый год — по таблице известных лет:
+// вне её окно приблизительное, и интерфейс обязан это говорить, а не молчать.
+// Проверка живёт здесь, рядом с таблицей, чтобы календарь не повторял знание о
+// том, какие праздники табличные.
+inline bool holidayDateCertain(HolidayId id, int year) {
+    if (!holidayValid(id)) return true;
+    if (holidayDef(id).kind != HOLIDAY_KIND_LUNAR) return true;
+    return holidayLunarYearKnown(year);
+}
+
 inline bool holidayIsActive(HolidayId id, int month, int day, int year) {
     const HolidayWindow w = holidayWindow(id, year);
     return holidayInWindow(month, day, w.startMonth, w.startDay, w.endMonth, w.endDay);
