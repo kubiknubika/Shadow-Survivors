@@ -25,7 +25,7 @@ cd /d "%~dp0"
 
 rem Своя версия: по ней видно, свежий файл запущен или закешированный.
 set "SELF=2.10.36"
-set SELF_VER=2.12.8
+set SELF_VER=2.12.9
 set "REMOTE=origin"
 set "WANT=%~1"
 set "FORCED="
