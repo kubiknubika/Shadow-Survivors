@@ -29,6 +29,7 @@
 #include <algorithm>
 #include "renderer.h"
 #include "game.h"
+#include "touch_input.h"
 
 // ── Окна, которые бывают у игрока. Не «размеры кадра», а размеры окна:
 // логический кадр из них выводит logicalScreenSize, и один и тот же кадр
@@ -93,6 +94,8 @@ static const Screen kScreens[] = {
     {"выход с добычей", STATE_EXTRACTION, 0, -1},
     {"финал кампании", STATE_CAMPAIGN_END, 0, -1},
     {"арена музыки", STATE_BOSS_MUSIC_TEST, 0, -1},
+    {"катсцена", STATE_CUTSCENE, 0, -1},
+    {"дело закрыто", STATE_MISSION_COMPLETE, 0, -1},
 };
 static const int kScreenCount = sizeof(kScreens) / sizeof(kScreens[0]);
 
@@ -193,8 +196,10 @@ static bool prepare(Game& g, const Screen& sc) {
     g.activeHoliday = g.resolveActiveHoliday();
     g.holidayBannerShown = false;
     g.holidayWaveTimer = 40.0f;
-    g.gameMode = MODE_ENDLESS;
+    g.gameMode = sc.state == STATE_MISSION_COMPLETE ? MODE_STORY : MODE_ENDLESS;
     g.runTime = 240.0f;
+    g.cutsceneId = 0;
+    g.cutsceneTimer = 3.0f;
     g.renderThreads = 1;
     for (int i = 0; i < 5; ++i) g.itemLevels[i] = 3;
     g.state = (GameState)sc.state;
@@ -251,22 +256,45 @@ int main(int argc, char** argv) {
     std::map<std::string, int> countByScreen, countByKind;
     std::map<std::string, std::string> whereByKey;
     int clips = 0, overlaps = 0, cuts = 0;
+    long long linesChecked = 0;
     std::string detail;
 
     for (const auto& frame : frames) {
         if (onlyW && (frame.first != onlyW || frame.second != onlyH)) continue;
         SCREEN_W = frame.first;
         SCREEN_H = frame.second;
-        for (int si = 0; si < kScreenCount; ++si) {
-            const Screen& sc = kScreens[si];
+        for (int si = 0; si < kScreenCount * 3; ++si) {
+            // Каждый экран проверяется дважды: на компьютере и на телефоне.
+            // Телефонный интерфейс — это другие подсказки (без названий клавиш),
+            // другие кнопки в настройках и касания в бою, и он тоже должен
+            // влезать в кадр.
+            const Screen& sc = kScreens[si % kScreenCount];
+            const int mode = si / kScreenCount;   // 0 компьютер, 1 телефон, 2 телефон с крупными кнопками
+            const bool phone = mode > 0;
+            const char* modeSuffix = mode == 0 ? "" : (mode == 1 ? " (телефон)" : " (телефон, кнопки 160%)");
             Renderer r;
             r.resize(SCREEN_W, SCREEN_H);
             r.textJournalEnabled = true;   // без него журнал пуст
             Game g;
             prepare(g, sc);
+            if (phone) {
+                g.touchControls = true;
+                if (mode == 2) g.options.touchButtonScale = TOUCH_SIZE_MAX;
+                g.state = (GameState)sc.state;
+            }
             r.clear(0xFF000000);
             r.clearTextLayouts();
             g.render(r);
+            // Телефонное управление рисуется не в Game::render, а отдельным
+            // слоем поверх кадра (так его зовёт main_android.cpp). Без этого
+            // вызова стенд не видел подписи кнопок стика и крестовины — то
+            // есть самую частую картинку на телефоне.
+            if (phone) {
+                TouchLayout touchLayout;
+                touchLayout.layout(SCREEN_W, SCREEN_H, g.options.touchScheme, g.options.touchButtonScale);
+                TouchPointer pointers[TOUCH_MAX_POINTERS] = {};
+                drawTouchOverlay(r, g, pointers, touchLayout, g.touchSkin());
+            }
 
             std::vector<Visible> lines;
             for (const auto& tl : r.textLayouts) {
@@ -282,33 +310,34 @@ int main(int argc, char** argv) {
 
                 // 1. Вылет за кадр: часть строки видна, часть срезана краем.
                 if (ink.x0 < 0 || ink.y0 < 0 || ink.x1 > SCREEN_W || ink.y1 > SCREEN_H) {
-                    const std::string key = std::string(sc.name) + "|" + tl.text;
+                    const std::string key = std::string(sc.name) + (std::string(modeSuffix) + "|") + tl.text;
                     char buf[256];
                     snprintf(buf, sizeof(buf),
                              "  [вылет] \"%s\" %d,%d %dx%d при кадре %dx%d\n",
                              tl.text.c_str(), ink.x0, ink.y0, ink.x1 - ink.x0, ink.y1 - ink.y0,
                              SCREEN_W, SCREEN_H);
                     ++clips;
-                    countByScreen[sc.name] += 1;
+                    countByScreen[std::string(sc.name) + modeSuffix] += 1;
                     countByKind["вылет"] += 1;
                     if (!whereByKey.count(key)) whereByKey[key] = buf;
                     if (verbose) detail += buf;
                 }
                 // 2. Строка шире своего окна: по горизонтали её режет клип.
                 if (tl.clipped && (ink.x1 - ink.x0) > (cx1 - cx0)) {
-                    const std::string key = std::string(sc.name) + "|" + tl.text + "|cut";
+                    const std::string key = std::string(sc.name) + (std::string(modeSuffix) + "|") + tl.text + "|cut";
                     char buf[256];
                     snprintf(buf, sizeof(buf),
                              "  [обрезка] \"%s\" %dx%d в окне %d при кадре %dx%d\n",
                              tl.text.c_str(), ink.x1 - ink.x0, cx1 - cx0, cx1 - cx0,
                              SCREEN_W, SCREEN_H);
                     ++cuts;
-                    countByScreen[sc.name] += 1;
+                    countByScreen[std::string(sc.name) + modeSuffix] += 1;
                     countByKind["обрезка"] += 1;
                     if (!whereByKey.count(key)) whereByKey[key] = buf;
                     if (verbose) detail += buf;
                 }
 
+                ++linesChecked;
                 Visible v;
                 v.ink = ink;
                 v.text = tl.text;
@@ -316,6 +345,12 @@ int main(int argc, char** argv) {
                 v.letters = hasLetters(tl.text.c_str());
                 lines.push_back(v);
             }
+
+            // Сколько строк нарисовал экран: по этой цифре видно, что экран
+            // действительно отрисовался, а не остался пустым кадром.
+            if (verbose)
+                detail += "  .. " + std::string(sc.name) + modeSuffix +
+                          ": строк " + std::to_string(lines.size()) + "\n";
 
             // 3. Наложение: чернила двух строк интерфейса пересекаются.
             //    Числа без букв не считаются — иначе каждый показатель HUD
@@ -328,8 +363,8 @@ int main(int argc, char** argv) {
                     // Разные окна прокрутки не пересекаются на экране.
                     if (lines[a].cx1 <= lines[b].cx0 || lines[b].cx1 <= lines[a].cx0) continue;
                     if (lines[a].cy1 <= lines[b].cy0 || lines[b].cy1 <= lines[a].cy0) continue;
-                    const std::string key = std::string(sc.name) + "|" + lines[a].text +
-                                            "|" + lines[b].text;
+                    const std::string key = std::string(sc.name) + std::string(modeSuffix) + "|" +
+                                            lines[a].text + "|" + lines[b].text;
                     char buf[512];
                     snprintf(buf, sizeof(buf),
                              "  [наложение] \"%s\" (%d,%d %dx%d) × \"%s\" (%d,%d %dx%d) при %dx%d\n",
@@ -339,7 +374,7 @@ int main(int argc, char** argv) {
                              lines[b].ink.x1 - lines[b].ink.x0, lines[b].ink.y1 - lines[b].ink.y0,
                              SCREEN_W, SCREEN_H);
                     ++overlaps;
-                    countByScreen[sc.name] += 1;
+                    countByScreen[std::string(sc.name) + modeSuffix] += 1;
                     countByKind["наложение"] += 1;
                     if (!whereByKey.count(key)) whereByKey[key] = buf;
                     if (verbose) detail += buf;
@@ -360,7 +395,10 @@ int main(int argc, char** argv) {
         printf("\n");
     }
 
-    printf("\nвылетов: %d, наложений: %d, обрезок: %d\n", clips, overlaps, cuts);
+    printf("\nпроверено: %d кадров x %d экранов x 3 интерфейса (компьютер, телефон "
+           "и телефон с кнопками 160 %%), %lld строк\n",
+           (int)frames.size(), kScreenCount, linesChecked);
+    printf("вылетов: %d, наложений: %d, обрезок: %d\n", clips, overlaps, cuts);
     if (clips == 0 && overlaps == 0) {
         printf("ОК: ни одного вылета и ни одного наложения\n");
         return 0;

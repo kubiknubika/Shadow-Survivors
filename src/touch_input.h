@@ -274,6 +274,16 @@ static constexpr int TOUCH_MAX_POINTERS = 8;
 // клик: иначе касание в нижней левой четверти экрана (там, где строки настроек)
 // превращалось в невидимый стик и не нажимало ничего. На Windows проблема не
 // видна: там мышь кликает в любой точке.
+// Оверлей кнопок — только когда он не мешает. Прокачка и сундук закрывают
+// экран карточками, и кнопки рисовались прямо поверх текста: при размере 160 %
+// «СУПЕР» и «РЫВОК» ложились на описания предметов (стенд tools/ui_probe.cpp
+// находил это на 720×960/1024/1280). Хуже того, зоны кнопок перехватывали тап:
+// карточка под невидимой кнопкой не нажималась. В этих состояниях палец — это
+// обычный клик по карточке.
+inline bool touchOverlayVisible(int state) {
+    return state == STATE_PLAYING || state == STATE_PAUSED || state == STATE_BOSS_MUSIC_TEST;
+}
+
 inline bool touchGameplayState(int state) {
     return state == STATE_PLAYING || state == STATE_PAUSED || state == STATE_LEVELUP ||
            state == STATE_CHEST || state == STATE_BOSS_MUSIC_TEST;
@@ -299,21 +309,22 @@ inline void touchBegin(TouchPointer* pointers, GameT& g, const TouchLayout& layo
     slot->lastY = ly;
     slot->scrollAccum = 0.0f;
 
-    if (TouchLayout::inside(layout.pause, lx, ly)) {
+    const bool overlay = touchOverlayVisible(g.state);
+    if (overlay && TouchLayout::inside(layout.pause, lx, ly)) {
         slot->role = TOUCH_PAUSE;
         g.onKeyPress(27);                   // ESC — пауза и выход из подменю
-    } else if (TouchLayout::inside(layout.debug, lx, ly)) {
+    } else if (overlay && TouchLayout::inside(layout.debug, lx, ly)) {
         slot->role = TOUCH_DEBUG;
         g.debugOverlay = !g.debugOverlay;
-    } else if (TouchLayout::inside(layout.dash, lx, ly)) {
+    } else if (overlay && TouchLayout::inside(layout.dash, lx, ly)) {
         slot->role = TOUCH_DASH;
         g.onKeyPress(32);                   // пробел — рывок
         g.mouseClicked = true;
-    } else if (TouchLayout::inside(layout.ult, lx, ly)) {
+    } else if (overlay && TouchLayout::inside(layout.ult, lx, ly)) {
         slot->role = TOUCH_ULT;
         g.onKeyPress('q');                  // Q — супер
         g.mouseClicked = true;
-    } else if (layout.dpad() &&
+    } else if (overlay && layout.dpad() &&
                (TouchLayout::inside(layout.padUp, lx, ly) || TouchLayout::inside(layout.padDown, lx, ly) ||
                 TouchLayout::inside(layout.padLeft, lx, ly) || TouchLayout::inside(layout.padRight, lx, ly))) {
         // Крестовина: каждая кнопка — отдельный палец. Две соседние кнопки
@@ -322,7 +333,7 @@ inline void touchBegin(TouchPointer* pointers, GameT& g, const TouchLayout& layo
         else if (TouchLayout::inside(layout.padDown, lx, ly)) slot->role = TOUCH_PAD_DOWN;
         else if (TouchLayout::inside(layout.padLeft, lx, ly)) slot->role = TOUCH_PAD_LEFT;
         else slot->role = TOUCH_PAD_RIGHT;
-    } else if (touchGameplayState(g.state) && !layout.dpad() && layout.inMoveZone(lx, ly)) {
+    } else if (overlay && touchGameplayState(g.state) && !layout.dpad() && layout.inMoveZone(lx, ly)) {
         // Стик есть только в двух схемах; в крестовине движение — это кнопки, и
         // палец мимо них не должен превращаться в невидимый стик.
         slot->role = TOUCH_STICK;
@@ -473,10 +484,7 @@ inline void touchDrawButton(Renderer& r, const TouchRect& b, const char* label,
 template <typename GameT>
 inline void drawTouchOverlay(Renderer& r, GameT& g, const TouchPointer* pointers,
                              const TouchLayout& layout, const TouchSkin& skin) {
-    const bool playing = g.state == STATE_PLAYING || g.state == STATE_PAUSED ||
-                         g.state == STATE_LEVELUP || g.state == STATE_CHEST ||
-                         g.state == STATE_BOSS_MUSIC_TEST;
-    if (!playing) return;
+    if (!touchOverlayVisible(g.state)) return;
 
     const TouchPalette pal = touchPalette(skin.theme);
     // Подпись не должна вылезать за кнопку: при малом размере «РЫВОК» шире самой

@@ -883,6 +883,68 @@ static void testTouchUi() {
     check(l0.dash.x != l1.dash.x, "смена схемы двигает кнопки на другую сторону");
 }
 
+// ── Модалки: оверлей молчит, а тап доходит до карточки ─────────────────────
+// Прокачка и сундук закрывают экран карточками. При размере кнопок 160 % зоны
+// «СУПЕР» и «РЫВОК» лежали на описаниях предметов: кнопки рисовались поверх
+// текста, а тап по карточке под невидимой кнопкой уходил в рывок. Стенд
+// tools/ui_probe.cpp нашёл первое, этот — второе.
+static void testModalsBlockOverlay() {
+    printf("модалки: оверлей не мешает карточкам\n");
+    Game g;
+    freshGame(g, 720, 960);
+    g.touchControls = true;
+    g.options.touchButtonScale = TOUCH_SIZE_MAX;
+    TouchLayout layout;
+    layout.layout(720, 960, TOUCH_SCHEME_STICK_LEFT, TOUCH_SIZE_MAX);
+
+    // Ни одной строки оверлея: кадр модалки рисуется без него.
+    Renderer r;
+    r.resize(720, 960);
+    r.textJournalEnabled = true;
+    for (int state : {(int)STATE_LEVELUP, (int)STATE_CHEST}) {
+        g.state = (GameState)state;
+        r.clear(0xFF000000);
+        r.clearTextLayouts();
+        g.render(r);
+        const size_t before = r.textLayouts.size();
+        TouchPointer pointers[TOUCH_MAX_POINTERS] = {};
+        drawTouchOverlay(r, g, pointers, layout, g.touchSkin());
+        check(r.textLayouts.size() == before,
+              state == STATE_LEVELUP ? "под прокачкой оверлей не рисуется"
+                                     : "под сундуком оверлей не рисуется");
+
+        // Тап в центр кнопки рывка обязан стать кликом, а не рывком.
+        const float cx = layout.dash.x + layout.dash.w * 0.5f;
+        const float cy = layout.dash.y + layout.dash.h * 0.5f;
+        TouchPointer taps[TOUCH_MAX_POINTERS] = {};
+        for (int i = 0; i < TOUCH_MAX_POINTERS; ++i) taps[i].id = -1;
+        g.mouseClicked = false;
+        g.dashCooldown = 1.0f;              // рывок недоступен: сработай он, это видно
+        const float beforeDash = g.dashCooldown;
+        touchBegin(taps, g, layout, 1, cx, cy);
+        check(taps[0].role == TOUCH_AIM, "тап по месту кнопки в модалке — клик, а не кнопка");
+        check(g.mouseClicked, "и этот клик выставлен игре");
+        checkNear(g.dashCooldown, beforeDash, 0.001f, "рывок не сработал под модалкой");
+        touchEnd(taps, g, 1);
+    }
+
+    // В бою всё наоборот: оверлей виден и кнопка работает.
+    g.state = STATE_PLAYING;
+    r.clear(0xFF000000);
+    r.clearTextLayouts();
+    g.render(r);
+    const size_t inGame = r.textLayouts.size();
+    TouchPointer pointers[TOUCH_MAX_POINTERS] = {};
+    drawTouchOverlay(r, g, pointers, layout, g.touchSkin());
+    check(r.textLayouts.size() > inGame, "в бою оверлей рисуется");
+    TouchPointer press[TOUCH_MAX_POINTERS] = {};
+    for (int i = 0; i < TOUCH_MAX_POINTERS; ++i) press[i].id = -1;
+    touchBegin(press, g, layout, 2, layout.dash.x + layout.dash.w * 0.5f,
+               layout.dash.y + layout.dash.h * 0.5f);
+    check(press[0].role == TOUCH_DASH, "в бою тап по кнопке — рывок");
+    touchEnd(press, g, 2);
+}
+
 int main(int argc, char** argv) {
     g_verbose = argc > 1 && strcmp(argv[1], "-v") == 0;
     printf("стенд касаний: схема из src/touch_input.h против настоящей игры\n\n");
@@ -900,6 +962,7 @@ int main(int argc, char** argv) {
     testButtonLook();
     testSwipeScroll();
     testTouchUi();
+    testModalsBlockOverlay();
     printf("\nитого: %d проверок, провалов %d\n", g_passed + g_failed, g_failed);
     return g_failed == 0 ? 0 : 1;
 }
