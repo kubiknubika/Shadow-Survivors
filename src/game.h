@@ -225,7 +225,7 @@ static inline int holidayMonsterSlot(int type) {
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 160;
+static constexpr int PATCH_NOTES_COUNT = 161;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -2384,20 +2384,38 @@ struct Game {
         return tier >= 2 ? 4.0f : (tier == 1 ? 1.85f : 1.0f);
     }
     float getEvoMultiplier(int weaponId) const { return evolvedWeapons[weaponId] ? 1.65f : 1.0f; }
+    // Урон от уровня у всех семи оружий растёт по одной кривой: 1-й ранг — база,
+    // к 4-му — ×1.80, к 8-му — ×1.90. Раньше у каждого оружия был свой линейный
+    // наклон (+7.5, +14, +6.5 … урона за уровень), и к 8-му рангу урон утраивался:
+    // вместе с множителем ранга, частотой и снарядами выходил рост в 30–80 раз.
+    // Кривая спереди круче, чем сзади: середина забега (4-й ранг) остаётся
+    // рабочей, а к 8-му рангу усиление уже не сметает волну одним залпом.
+    float getWeaponLevelCurve(int level) const {
+        static const float curve[8] = {1.00f, 1.30f, 1.57f, 1.80f, 1.84f, 1.87f, 1.89f, 1.90f};
+        const int i = std::max(0, std::min(7, level - 1));
+        return curve[i];
+    }
+    // Рост от ранга. До 2.12.6 здесь стояло +8–14 % за ранг ПЛЮС разгон
+    // (+0.003 за каждый следующий ранг), и вместе с линейным уроном от уровня и
+    // числом снарядов одно оружие росло с 1-го до 8-го ранга в 30–80 раз по одной
+    // цели и в 200–1200 раз по толпе: к 8-му рангу любая волна сметалась залпом,
+    // и дальше играть было не во что. Теперь множитель ранга — 9, 8, 5 %, дальше
+    // по 2 % и без разгона: 1-й → 8-й ранг даёт ×1.33 по урону за ранг, остальное
+    // добирают уровень, частота и охват. Стенд: tools/weapon_probe.cpp.
     float getWeaponRankDamageMultiplier(int weaponId) const {
-        static const float rankGrowth[7] = {1.10f, 1.13f, 1.08f, 1.12f, 1.09f, 1.14f, 1.11f};
+        static const float rankGrowth[7] = {1.090f, 1.080f, 1.050f, 1.020f, 1.020f, 1.020f, 1.020f};
         if (weaponId < 0 || weaponId >= 7) return 1.0f;
         float multiplier = 1.0f;
         for (int rank = 0; rank < std::max(0, itemLevels[weaponId] - 1); ++rank)
-            multiplier *= rankGrowth[weaponId] + 0.003f * rank; // later ranks hit harder than early ranks
+            multiplier *= rankGrowth[weaponId];
         return multiplier;
     }
     float getWeaponRankCooldownMultiplier(int weaponId) const {
-        static const float rankCadence[7] = {0.970f, 0.985f, 0.960f, 0.975f, 0.950f, 0.985f, 0.955f};
+        static const float rankCadence[7] = {0.985f, 0.992f, 0.980f, 0.988f, 0.975f, 0.992f, 0.978f};
         if (weaponId < 0 || weaponId >= 7) return 1.0f;
         float multiplier = 1.0f;
         for (int rank = 0; rank < std::max(0, itemLevels[weaponId] - 1); ++rank)
-            multiplier *= std::max(0.88f, rankCadence[weaponId] - 0.0015f * rank);
+            multiplier *= std::max(0.94f, rankCadence[weaponId]);
         return multiplier;
     }
     float getWeaponRankAreaMultiplier(int weaponId) const {
@@ -2405,7 +2423,7 @@ struct Game {
         if (weaponId < 0 || weaponId >= 7) return 1.0f;
         float areaBonus = 0.0f;
         for (int rank = 0; rank < std::max(0, itemLevels[weaponId] - 1); ++rank)
-            areaBonus += rankArea[weaponId] + 0.004f * rank;
+            areaBonus += rankArea[weaponId];
         return 1.0f + areaBonus;
     }
     // Рунический вихрь: формулы сфер вынесены в одно место, чтобы отрисовка
@@ -2431,7 +2449,7 @@ struct Game {
             case 0: return 1 + level / 2 + evolvedBonus;
             case 1: return 1 + (level >= 4 ? 1 : 0) + (level >= 7 ? 1 : 0) + evolvedBonus;
             case 2: return 3 + level / 2 + evolvedBonus;
-            case 3: return 3 + level / 2 + evolvedBonus;
+            case 3: return 3 + level / 2 + (level >= 4 ? 1 : 0) + evolvedBonus;
             case 5: return 1 + level / 3 + (level >= 7 ? 1 : 0) + evolvedBonus;
             default: return 0;
         }
@@ -5382,7 +5400,7 @@ struct Game {
             weaponTimers[0] -= dt;
             if (weaponTimers[0] <= 0.0f) {
                 int lvl = itemLevels[0];
-                weaponTimers[0] = std::max(0.22f, (0.78f - lvl * 0.05f) * cdMult * getWeaponRankCooldownMultiplier(0));
+                weaponTimers[0] = std::max(0.30f, (0.78f - lvl * 0.05f) * cdMult * getWeaponRankCooldownMultiplier(0));
                 int count = 1 + lvl / 2 + (evolvedWeapons[0] ? 2 : 0);
                 int target = findNearestMonster(playerX, playerY, 550.0f);
                 float baseAngle = (playerFacing > 0) ? 0.0f : 3.14159f;
@@ -5398,7 +5416,7 @@ struct Game {
                     p.vx = cosf(a) * 520.0f;
                     p.vy = sinf(a) * 520.0f;
                     p.weaponId = 0;
-                    p.damage = (18.0f + lvl * 7.5f) * getEvoMultiplier(0) * getWeaponRankDamageMultiplier(0);
+                    p.damage = 25.5f * getWeaponLevelCurve(lvl) * getEvoMultiplier(0) * getWeaponRankDamageMultiplier(0);
                     p.radius = 9.0f * areaMult * getWeaponRankAreaMultiplier(0);
                     p.life = 1.35f;
                     p.pierce = 1 + (lvl >= 4 ? 1 : 0) + (lvl >= 7 ? 1 : 0);
@@ -5415,7 +5433,7 @@ struct Game {
             weaponTimers[1] -= dt;
             if (weaponTimers[1] <= 0.0f) {
                 int lvl = itemLevels[1];
-                weaponTimers[1] = std::max(0.55f, (1.65f - lvl * 0.10f) * cdMult * getWeaponRankCooldownMultiplier(1));
+                weaponTimers[1] = std::max(0.75f, (1.65f - lvl * 0.10f) * cdMult * getWeaponRankCooldownMultiplier(1));
                 int count = 1 + (lvl >= 4 ? 1 : 0) + (lvl >= 7 ? 1 : 0) + (evolvedWeapons[1] ? 1 : 0);
                 int target = findNearestMonster(playerX, playerY, 600.0f);
                 float baseAngle = (target >= 0)
@@ -5447,7 +5465,7 @@ struct Game {
                     p.vx = cosf(a) * 340.0f;
                     p.vy = sinf(a) * 340.0f;
                     p.weaponId = 1;
-                    p.damage = (34.0f + lvl * 14.0f) * getEvoMultiplier(1) * getWeaponRankDamageMultiplier(1);
+                    p.damage = 48.0f * getWeaponLevelCurve(lvl) * getEvoMultiplier(1) * getWeaponRankDamageMultiplier(1);
                     p.radius = 14.0f * areaMult * getWeaponRankAreaMultiplier(1);
                     p.life = 1.8f;
                     p.pierce = 1;
@@ -5476,7 +5494,7 @@ struct Game {
                 const float innerEdge = (78.0f + lvl * 3.0f) - (23.0f + lvl * 1.6f);
                 float hitRad = std::max((23.0f + lvl * 1.6f) * areaMult * getWeaponRankAreaMultiplier(2),
                                         orbitRad - innerEdge);
-                float dmg = (15.0f + lvl * 6.5f) * getEvoMultiplier(2) * getWeaponRankDamageMultiplier(2);
+                float dmg = 21.5f * getWeaponLevelCurve(lvl) * getEvoMultiplier(2) * getWeaponRankDamageMultiplier(2);
                 // Мёртвая середина. Сферы ходят по кольцу, и враг, стоящий вплотную
                 // к герою, оказывался ВНУТРИ кольца: вихрь не задевал его вообще.
                 // На стенде волны трое таких мобов стояли нетронутыми 90 с. Вихрь
@@ -5521,9 +5539,9 @@ struct Game {
             weaponTimers[3] -= dt;
             if (weaponTimers[3] <= 0.0f) {
                 int lvl = itemLevels[3];
-                weaponTimers[3] = std::max(0.65f, (2.1f - lvl * 0.14f) * cdMult * getWeaponRankCooldownMultiplier(3));
-                int strikes = 3 + lvl / 2 + (evolvedWeapons[3] ? 3 : 0);
-                float dmg = (30.0f + lvl * 12.0f) * getEvoMultiplier(3) * getWeaponRankDamageMultiplier(3);
+                weaponTimers[3] = std::max(0.95f, (2.1f - lvl * 0.14f) * cdMult * getWeaponRankCooldownMultiplier(3));
+                int strikes = 3 + lvl / 2 + (lvl >= 4 ? 1 : 0) + (evolvedWeapons[3] ? 3 : 0);
+                float dmg = 50.0f * getWeaponLevelCurve(lvl) * getEvoMultiplier(3) * getWeaponRankDamageMultiplier(3);
                 // Цепь идёт по РАЗНЫМ целям: раньше каждый следующий разряд искал
                 // ближайшего к предыдущей жертве, то есть снова её же (расстояние 0),
                 // и все удары складывались в одну цель — «цепная» молния не цеплялась.
@@ -5566,7 +5584,7 @@ struct Game {
                 int lvl = itemLevels[4];
                 weaponTimers[4] = 0.38f * cdMult * getWeaponRankCooldownMultiplier(4);
                 float auraRad = (88.0f + lvl * 11.0f) * areaMult * getWeaponRankAreaMultiplier(4);
-                float dmg = (10.0f + lvl * 4.8f) * getEvoMultiplier(4) * getWeaponRankDamageMultiplier(4);
+                float dmg = 14.8f * getWeaponLevelCurve(lvl) * getEvoMultiplier(4) * getWeaponRankDamageMultiplier(4);
                 for (size_t m = 0; m < monsters.size(); ++m) {
                     if (monsters[m].hp <= 0.0f) continue;
                     float dx = monsters[m].x - playerX;
@@ -5585,7 +5603,7 @@ struct Game {
             weaponTimers[5] -= dt;
             if (weaponTimers[5] <= 0.0f) {
                 int lvl = itemLevels[5];
-                weaponTimers[5] = std::max(0.55f, (1.45f - lvl * 0.09f) * cdMult * getWeaponRankCooldownMultiplier(5));
+                weaponTimers[5] = std::max(0.65f, (1.45f - lvl * 0.09f) * cdMult * getWeaponRankCooldownMultiplier(5));
                 int count = 1 + lvl / 3 + (lvl >= 7 ? 1 : 0) + (evolvedWeapons[5] ? 2 : 0);
                 // Топоры летели только вверх и на 110–200 px: на первом ранге один
                 // топор падал в 120 px от героя и не доставал никого дальше. Теперь
@@ -5621,7 +5639,7 @@ struct Game {
                         p.vy = vy;
                     }
                     p.weaponId = 5;
-                    p.damage = (36.0f + lvl * 15.0f) * getEvoMultiplier(5) * getWeaponRankDamageMultiplier(5);
+                    p.damage = 51.0f * getWeaponLevelCurve(lvl) * getEvoMultiplier(5) * getWeaponRankDamageMultiplier(5);
                     p.radius = 18.0f * areaMult * getWeaponRankAreaMultiplier(5);
                     p.life = 2.0f;
                     p.pierce = 999; // Pierces all enemies!
@@ -5638,9 +5656,9 @@ struct Game {
             weaponTimers[6] -= dt;
             if (weaponTimers[6] <= 0.0f) {
                 int lvl = itemLevels[6];
-                weaponTimers[6] = std::max(1.2f, (3.2f - lvl * 0.22f) * cdMult * getWeaponRankCooldownMultiplier(6));
+                weaponTimers[6] = std::max(1.30f, (3.2f - lvl * 0.22f) * cdMult * getWeaponRankCooldownMultiplier(6));
                 float maxRad = (155.0f + lvl * 18.0f) * areaMult * getWeaponRankAreaMultiplier(6);
-                float dmg = (24.0f + lvl * 10.0f) * getEvoMultiplier(6) * getWeaponRankDamageMultiplier(6);
+                float dmg = 40.0f * getWeaponLevelCurve(lvl) * getEvoMultiplier(6) * getWeaponRankDamageMultiplier(6);
                 FrostWave fw = {playerX, playerY, 20.0f, maxRad, 0.40f, 0.40f};
                 frostWaves.push_back(fw);
                 bool frozeAnyTarget = false;
@@ -8874,7 +8892,9 @@ struct Game {
 
         // 4. Top-right run ledger: fixed-width columns and compact large counters prevent collisions.
         const int ledgerW = 310, ledgerX = SCREEN_W - 324;
-        drawUIFrame(r, ledgerX, 33, ledgerW, 102, 0xFF66D5E8, true, 242);
+        // Три строки, а не четыре: рамка ужата под них (было 102 px на четыре
+        // строки с «ТЕМП: …»).
+        drawUIFrame(r, ledgerX, 33, ledgerW, 80, 0xFF66D5E8, true, 242);
         auto compactCounter = [](long long value) {
             char out[32];
             if (value >= 1000000000LL) snprintf(out, sizeof(out), "%.1fB", value / 1000000000.0);
@@ -8892,11 +8912,9 @@ struct Game {
         // Dedicated third row keeps long DPS values (e.g. 1111) from touching audio status.
         snprintf(buf, sizeof(buf), "SFX %s   /   MUSIC %s", sound.enabled ? "ON" : "OFF", sound.musicEnabled ? "ON" : "OFF");
         r.drawTextRight(FONT_SMALL, ledgerX + ledgerW - 12, 85, buf, (sound.enabled && sound.musicEnabled) ? 0xFF70FF98 : 0xFF9890A8);
-        static const char* tempoLabels[4]={"МЕДЛЕННО","СРЕДНЕ","БЫСТРО","ОЧЕНЬ БЫСТРО"};
-        static const uint32_t tempoColors[4]={0xFF8C91C7,0xFF65D9E8,0xFFFFB957,0xFFFF6374};
-        const int displayedTempo=std::max(0,std::min(3,musicCrowdTempoTier));
-        snprintf(buf,sizeof(buf),"ТЕМП: %s",tempoLabels[displayedTempo]);
-        r.drawTextRight(FONT_SMALL, ledgerX + ledgerW - 12, 108, buf, tempoColors[displayedTempo]);
+        // Темп музыки по толпе живёт в звуке (SoundEngine::nextMusicTempoTier) и
+        // слышен на слух: цветные волны по краю экрана. Отдельная строка
+        // «ТЕМП: МЕДЛЕННО» в журнале только занимала место — убрана в 2.12.6.
 
         // 5. Off-screen Boss Chest indicator arrow
         for (const auto& p : pickups) {
@@ -13060,6 +13078,7 @@ struct Game {
             "2.12.3 • WINDOWS-СБОРКА И АПДЕЙТЕР",
             "2.12.4 • АПДЕЙТЕР ПРОВЕРЯЕТ САМ СЕБЯ",
             "2.12.5 • КНОПКА «НАЗАД» В ПРАЗДНИКАХ",
+            "2.12.6 • РОСТ СПОСОБНОСТЕЙ ПОЛОЖЕ",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -13222,6 +13241,7 @@ struct Game {
             "Windows-сборка снова собирается, а апдейтер больше не врёт о причинах.\n• Настоящая причина: с 2.10.48 в WinMain третий параметр был безымянным (LPSTR), а ниже командная строка читалась как lpCmdLine. GCC и clang на этом останавливаются, но стенды собирают другой файл, поэтому ошибку никто не видел: версии 2.10.48-2.12.2 на Windows не собирались вообще. Теперь параметр назван, и exe линкуется.\n• Почему это не всплыло раньше: все стенды - отдельные единицы трансляции, они включают game.h и не трогают src/main_win32.cpp. Появился tools/check_win32.sh: он собирает ровно тот же TU кросс-компилятором (Zig/LLVM, x86_64-windows-gnu) с теми же ключами, что build_windows.bat. Проверка занимает секунды и ловит именно такие разрывы.\n• Апдейтер: показ лога шага шёл внешней утилитой type, и на одной машине она падала как «ype». Код возврата снимался уже после показа, поэтому успешный git pull считался неудачным. Теперь код возврата снимается сразу после git, а лог печатается средствами cmd (FOR по файлу). Тот же порядок исправлен и в переключении ветки: раньше там показывался не тот файл.\n• Если сборка всё-таки не прошла, апдейтер больше не прячет причину: печатает строки с error из build\build.log и кладёт копию рядом - build_error.log. Прошлый раз причина была именно в этом логе, а на экране было только «g++ compile failed».\n• Новый tools/check_bat_labels.py: сверяет все goto и call с метками в update.bat и build_windows.bat. Опечатка в метке в cmd означает не ошибку, а тихое «продолжить со следующей строки» - такую поломку глазами не поймать.\n• Честно: проверено компиляцией и линковкой под Windows-цель, запуска на Windows не было. Апдейтер проверен разбором сгенерированного bat и сверкой меток, а не прогоном в cmd.",
             "Сборка 2.12.3 прошла, а в консоли осталось чужое сообщение - и это был не код игры.\n• В логе обновления появилась строка «после.» не является командой, хотя сборка закончилась BUILD SUCCESS. Такое бывает, когда update.bat на диске не совпадает с версией в ветке: cmd читает чужие строки и выполняет их обрывки. В том запуске копия действительно расходилась с веткой - апдейтер сам отложил её перед git pull, поэтому обновление всё равно доехало.\n• Теперь апдейтер сверяет себя с веткой до начала работы: git hash-object update.bat против HEAD:update.bat. Если файл испорчен или старше того, что лежит в ветке, он ставит версию из ветки и просит запустить заново - вместо того чтобы выполнять обрывки чужих строк. Если на диске лежит более свежая копия (её скачали руками), она остаётся: версии сравниваются.\n• Из 2.12.3 сюда же: код возврата git снимается до показа лога, показ идёт средствами cmd, а при провале сборки на экран попадают error-строки из build\build.log.\n• Честно: воспроизвести именно строку «после.» не удалось - в файле из ветки такой команды нет. Поэтому лечится не симптом, а причина: расхождение файла с веткой теперь видно и исправляется само.",
             "Из календаря праздников нельзя было выйти мышью или пальцем.\n• Экран открывается из настроек и из паузы, но выйти из него можно было только клавишей ESC. Кнопки не было вовсе: три переключателя внизу — «ПРАЗДНИКИ», «ПРОВЕРКА», «СДВИГ ДАТЫ» — и всё. На телефоне клавиши нет, то есть с телефона календарь становился ловушкой.\n• Теперь в подвале есть «← НАЗАД [ESC]»: в альбоме — справа в ряду переключателей, в портрете — четвёртой строкой столбика. Та же кнопка, что в настройках: нажатие, подсветка под курсором, на телефоне подпись читается как «← НАЗАД».\n• Клавиши работают как раньше: ESC, ENTER и SPACE закрывают календарь и возвращают туда, откуда его открыли (в настройки или в паузу).\n• Попутно в альбоме подсказка клавиш стояла прямо на ряду кнопок (строка на SCREEN_H-22 при кнопках до SCREEN_H-20) — теперь она над рядом и ужимается по ширине. В портрете подвал вырос с 132 до 176 px: четыре кнопки в прежние 132 не вставали.\n• Подписи кнопок ужимаются по своей ширине: на 800×600 «ПРОВЕРКА: ПО КАЛЕНДАРЮ» была шире кнопки и заезжала на соседнюю.\n• Хеш экрана «праздники» сменился с 3f868c27 на 39049f60 — это тот самый ряд кнопок. Кадры боя не изменились: 2.12.5 рисует календарь, а не арену.",
+            "Две правки по одному отзыву: «ТЕМП: медленно» в журнале устарел, а способности растут слишком сильно.\n• Строка «ТЕМП: МЕДЛЕННО / СРЕДНЕ / БЫСТРО / ОЧЕНЬ БЫСТРО» убрана из журнала справа сверху: темп музыки по толпе и так слышен и виден цветными волнами по краю экрана, а подпись только занимала место. Рамка журнала стала ниже: 102 -> 80 px.\n• Рост способностей от ранга: урон за ранг умножался на +8-14 % и получал разгон на поздних рангах, у каждого оружия был свой наклон урона от уровня, сверху шли частота, снаряды и площадь. Одно оружие с 1-го до 8-го ранга усиливалось в 29-82 раза по одной цели и в 43-1200 раз по толпе.\n• Теперь урон от уровня у всех семи оружий идёт по одной кривой: 1-й ранг - база, 4-й - x1.8, 8-й - x1.9 (было до x3.6). Кривая спереди круче, поэтому середина забега не просела.\n• Множитель урона за ранг: 9 %, 8 %, 5 %, дальше по 2 % - без разгона. Пол паузы между срабатываниями поднят: клинки 0.30 вместо 0.22 с, молния 0.95 вместо 0.65, топор 0.65 вместо 0.55, кольцо 1.30 вместо 1.20.\n• Охват не трогал: снаряды и радиусы остались прежними - это роль оружия, а не темп роста. У молнии с 4-го ранга на один разряд больше: на стенде зачистки она стояла на самой границе.\n• Итог по стенду оружия (одна цель / толпа): клинки x35.5 / x101.7 вместо x72.8 / x209.9, шар x18.3 / x98.6 вместо x47.5 / x197.3, вихрь x11.5 / x383.7 вместо x29.3 / x1210, молния x9.9 / x11.4 вместо x38.1 / x42.8, топор x16.2 / x26.9 вместо x82.0 / x111.2, кольцо x3.5 / x18.2 вместо x11.7 / x56.2, аура x2.5 вместо x9.6.\n• То есть 1-4-й ранги почти как были (на 10-20 % слабее), а 5-8-й дают вдвое меньше. Ранг 8 у каждого оружия остаётся лучшим, но перестаёт быть кнопкой зачистки.\n• Стенд зачистки (40 мобов с здоровьем 5-й минуты): на 4-м ранге 12.6 с у клинков, 7.7 у шара, 9.8 у вихря, 18.9 у молнии, 14.0 у ауры, 9.7 у топора, 17.7 у кольца при лимите 20 с - провалов 0.\n• tools/weapon_probe.cpp: пассивки усредняются по семи зёрнам, артефакты «не про урон» помечаются как шум и не валят стенд. Строка сравнения с суперумением считается по замеру, а не вписана руками.\n• Честно: баланс проверен стендами, а не живым забегом; сколько волн выживает игрок после правки, никто не проходил.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
