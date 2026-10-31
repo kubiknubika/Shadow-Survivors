@@ -225,7 +225,7 @@ static inline int holidayMonsterSlot(int type) {
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 156;
+static constexpr int PATCH_NOTES_COUNT = 157;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -868,6 +868,10 @@ struct GameOptions {
     int holidaysEnabled = 1;   // 0 — праздников нет совсем
     int holidayOverride = -1;  // -1 — по календарю, 0..7 — выбранный праздник
     int holidayDateShift = 0;  // сдвиг даты в днях, для отладки календаря
+    // 2.12.2: как часто на полу появляются предметы. 0 — выключены, 1 — редко,
+    // 2 — обычно, 3 — часто. Частота встречи — вкус: кому-то «ноголомки» мешают
+    // в чистом бою, кому-то не хватает. Сама механика от настройки не меняется.
+    int floorDeviceRate = 2;
 };
 static_assert(HOLIDAY_COUNT == 8, "holiday table and options field must stay in sync");
 
@@ -934,7 +938,22 @@ struct LegacyGameOptions84 {
     int touchButtonStyle, touchButtonTheme, touchButtonOpacity;
 };
 static_assert(sizeof(LegacyGameOptions84) == 84, "2.10.55 options layout changed unexpectedly");
-static_assert(sizeof(GameOptions) == 96, "2.11.0 options layout changed unexpectedly");
+// Раскладка 2.11.0–2.12.1 (96 байт): без частоты предметов на полу.
+struct LegacyGameOptions96 {
+    uint32_t magic;
+    int sfxEnabled, musicEnabled, hitEffectsEnabled, screenShakeEnabled, advisorEnabled, hardModeEnabled;
+    uint32_t patchNotesHiddenVersion;
+    int projectileTrailsEnabled;
+    float sfxVolume, musicVolume;
+    int messageSpeechEnabled, skillIconStyle, campaignSnakeMap;
+    int graphicsLevel;
+    int touchScheme, touchSetupDone;
+    int touchButtonScale;
+    int touchButtonStyle, touchButtonTheme, touchButtonOpacity;
+    int holidaysEnabled, holidayOverride, holidayDateShift;
+};
+static_assert(sizeof(LegacyGameOptions96) == 96, "2.11.0 options layout changed unexpectedly");
+static_assert(sizeof(GameOptions) == 100, "2.12.2 options layout changed unexpectedly");
 
 struct SaveData {
     uint32_t magic = 0x53484457; // 'SHDW'
@@ -1466,6 +1485,34 @@ struct Game {
             } else if (n == (long)sizeof(GameOptions)) {
                 GameOptions saved{};
                 if (fread(&saved, sizeof(saved), 1, f) == 1 && saved.magic == 0x53484346) options = saved;
+            } else if (n == (long)sizeof(LegacyGameOptions96)) {
+                // Файл сборки 2.11.0–2.12.1: частоты пола в нём не было — она
+                // включается «обычной», как и была до настройки.
+                LegacyGameOptions96 old{};
+                if (fread(&old, sizeof(old), 1, f) == 1 && old.magic == 0x53484346) {
+                    options = GameOptions{};
+                    options.sfxEnabled = old.sfxEnabled; options.musicEnabled = old.musicEnabled;
+                    options.hitEffectsEnabled = old.hitEffectsEnabled;
+                    options.screenShakeEnabled = old.screenShakeEnabled;
+                    options.advisorEnabled = old.advisorEnabled; options.hardModeEnabled = old.hardModeEnabled;
+                    options.patchNotesHiddenVersion = old.patchNotesHiddenVersion;
+                    options.projectileTrailsEnabled = old.projectileTrailsEnabled;
+                    options.sfxVolume = old.sfxVolume; options.musicVolume = old.musicVolume;
+                    options.messageSpeechEnabled = old.messageSpeechEnabled;
+                    options.skillIconStyle = old.skillIconStyle;
+                    options.campaignSnakeMap = old.campaignSnakeMap;
+                    options.graphicsLevel = old.graphicsLevel;
+                    options.touchScheme = old.touchScheme;
+                    options.touchSetupDone = old.touchSetupDone;
+                    options.touchButtonScale = old.touchButtonScale;
+                    options.touchButtonStyle = old.touchButtonStyle;
+                    options.touchButtonTheme = old.touchButtonTheme;
+                    options.touchButtonOpacity = old.touchButtonOpacity;
+                    options.holidaysEnabled = old.holidaysEnabled;
+                    options.holidayOverride = old.holidayOverride;
+                    options.holidayDateShift = old.holidayDateShift;
+                    options.floorDeviceRate = 2;
+                }
             } else if (n == (long)sizeof(LegacyGameOptions84)) {
                 // Файл сборки 2.10.55–2.10.56: праздников в нём не было, поэтому
                 // они включаются по умолчанию, а календарь решает всё сам.
@@ -2999,6 +3046,43 @@ struct Game {
     float floorDeviceEnemyDamage() const { return 22.0f + (float)(currentArenaTheme() + 1) * 14.0f; }
     float floorDevicePlayerDamage() const { return 10.0f + (float)(currentArenaTheme() + 1) * 4.0f; }
 
+    // ── Частота встречи с предметами ────────────────────────────────────────
+    // Настройка меняет только то, как часто предмет появляется и сколько их
+    // держится на арене. Урон, радиусы и правила взаимодействия общие: «часто» не
+    // должно значить «сильнее», иначе настройка превращалась бы в сложность.
+    int floorDeviceRateIndex() const { return std::max(0, std::min(3, options.floorDeviceRate)); }
+    static const char* floorDeviceRateName(int rate) {
+        switch (std::max(0, std::min(3, rate))) {
+            case 0: return "ВЫКЛ";
+            case 1: return "РЕДКО";
+            case 2: return "ОБЫЧНО";
+            default: return "ЧАСТО";
+        }
+    }
+    const char* floorDeviceRateName() const { return floorDeviceRateName(options.floorDeviceRate); }
+    int floorDeviceCap() const {
+        switch (floorDeviceRateIndex()) {
+            case 0: return 0;
+            case 1: return 3;
+            case 2: return FLOOR_DEVICE_MAX;
+            default: return 8;
+        }
+    }
+    float floorDeviceInterval() const {
+        switch (floorDeviceRateIndex()) {
+            case 1: return 11.0f;
+            case 2: return FLOOR_DEVICE_SPAWN_INTERVAL;
+            default: return 4.0f;
+        }
+    }
+    float floorDeviceFirstDelay() const {
+        switch (floorDeviceRateIndex()) {
+            case 1: return 6.0f;
+            case 2: return FLOOR_DEVICE_FIRST_DELAY;
+            default: return 2.5f;
+        }
+    }
+
     // Громкость подсказки по расстоянию: предмет за полэкрана не должен звучать
     // так же, как предмет под ногами. Чистая функция координат — без rand().
     float cueGainAt(float x, float y) const {
@@ -3009,7 +3093,7 @@ struct Game {
 
     void clearFloorDevices() {
         floorDevices.clear();
-        floorDeviceSpawnTimer = FLOOR_DEVICE_FIRST_DELAY;
+        floorDeviceSpawnTimer = floorDeviceFirstDelay();
         floorDeviceSequence = 0;
         floorDevicesTriggered = 0;
         floorDevicesHealed = 0;
@@ -3030,7 +3114,7 @@ struct Game {
     // Позиция считается хешем от номера предмета — без rand(): лишний вызов
     // сдвинул бы общий поток случайности, а он задаёт и сцену боя, и декор.
     bool spawnFloorDevice() {
-        if ((int)floorDevices.size() >= FLOOR_DEVICE_MAX) return false;
+        if ((int)floorDevices.size() >= floorDeviceCap()) return false;
         const int sequence = floorDeviceSequence++;
         const int kind = pickFloorDeviceKind(sequence);
         for (int attempt = 0; attempt < 8; ++attempt) {
@@ -3130,10 +3214,14 @@ struct Game {
     void updateFloorDevices(float dt) {
         if (dt <= 0.0f) return;
         if (state != STATE_PLAYING) return;
-        floorDeviceSpawnTimer -= dt;
-        if (floorDeviceSpawnTimer <= 0.0f) {
-            floorDeviceSpawnTimer = FLOOR_DEVICE_SPAWN_INTERVAL;
-            spawnFloorDevice();
+        // «ВЫКЛ» — это ноль новых предметов: уже лежащие доживают свой срок, но
+        // под ногами ничего не исчезает в момент переключения настройки.
+        if (floorDeviceCap() > 0) {
+            floorDeviceSpawnTimer -= dt;
+            if (floorDeviceSpawnTimer <= 0.0f) {
+                floorDeviceSpawnTimer = floorDeviceInterval();
+                spawnFloorDevice();
+            }
         }
         for (FloorDevice& d : floorDevices) {
             d.life -= dt;
@@ -8296,9 +8384,9 @@ struct Game {
                 else if (d.kind == FLOOR_DEVICE_SPIKES) ++spikes;
                 else ++sigils;
             }
-            snprintf(line, sizeof(line), "%d/%d  П%d Ш%d З%d  СРАБ %d  ЗНАК %d",
-                     (int)floorDevices.size(), FLOOR_DEVICE_MAX, plates, spikes, sigils,
-                     floorDevicesTriggered, floorDevicesHealed);
+            snprintf(line, sizeof(line), "%d/%d %s  П%d Ш%d З%d  СРАБ %d  ЗНАК %d",
+                     (int)floorDevices.size(), floorDeviceCap(), floorDeviceRateName(),
+                     plates, spikes, sigils, floorDevicesTriggered, floorDevicesHealed);
             put(18, "ПОЛ", line, floorDevices.empty() ? 0xFFE6E0F4 : 0xFFFFC878);
         }
         if (hasBossRow) {
@@ -11642,6 +11730,13 @@ struct Game {
             // Размер кнопок касания: строка есть только на Android, где кнопки и есть.
             options.touchButtonScale = touchStepSize(options.touchButtonScale, 1);
         }
+        else if (optionId == 13) {
+            // Частота встречи с предметами на полу: ВЫКЛ → РЕДКО → ОБЫЧНО → ЧАСТО.
+            // Смена частоты пересобирает пол сразу: иначе игрок жал бы настройку и
+            // не видел эффекта до следующего предмета.
+            options.floorDeviceRate = (std::max(0, std::min(3, options.floorDeviceRate)) + 1) % 4;
+            clearFloorDevices();
+        }
         else if (optionId == 8) {
             options.messageSpeechEnabled = options.messageSpeechEnabled != 0 ? 0 : 1;
             sound.setVoiceEnabled(options.messageSpeechEnabled != 0);
@@ -11672,26 +11767,86 @@ struct Game {
     // после появления строки «Праздники» начал нажимать мимо.
     int settingsRowsTop() const { return (SCREEN_W < SCREEN_H) ? 146 : 88; }
     int settingsRowGap() const { return (SCREEN_W < SCREEN_H) ? 8 : 2; }
-    int settingsRowHeight(int rowCount) const {
-        const int gap = settingsRowGap();
+    // Раскладка настроек считается снизу вверх: кнопка «назад» стоит от низа
+    // окна, над ней две полосы громкости, над ними строки справки, и только
+    // остаток достаётся строкам настроек. Раньше резерв под низ угадывался
+    // числом, и с двенадцатой строкой справка наезжала на кнопку, а на 800×600
+    // сама кнопка уезжала за край: она была прибита координатой 651.
+    struct SettingsLayout {
+        int rowHeight;   // высота строки настроек
+        int gap;         // зазор между строками
+        int volumeY;     // верх первой полосы громкости
+        int volumeRowH;  // высота полосы громкости
+        int infoLines;   // сколько строк справки влезает под полосами
+        int startY;      // верх первой строки настроек
+    };
+    int settingsButtonTop() const { return (SCREEN_W < SCREEN_H) ? SCREEN_H - 76 : SCREEN_H - 62; }
+    SettingsLayout settingsLayout(int rowCount) const {
         const int top = settingsRowsTop();
-        if (SCREEN_W < SCREEN_H) {
-            // Резерв снизу: отступ, два ползунка громкости и три строки справки.
-            const int bottomLimit = SCREEN_H - 76 - 8;
-            const int reserve = 20 + 2 * (52 + 6) + 3 * FONT_SMALL.lineHeight + 12;
-            const int avail = std::max(0, bottomLimit - top - reserve - rowCount * gap);
-            return std::max(34, std::min(58, avail / rowCount));
+        const int buttonTop = settingsButtonTop();
+        const int portrait = SCREEN_W < SCREEN_H;
+        const int lineH = FONT_SMALL.lineHeight;
+        const int maxLines = portrait ? 3 : (touchControls ? 3 : 4);
+        const int cap = portrait ? 58 : (touchControls ? 32 : 34);
+        // Перебираем, что ужать первым: число строк справки, высоту полос
+        // громкости и зазор. Выбираем вариант, где строки настроек самые
+        // высокие; при равной высоте выигрывает тот, где больше справки.
+        SettingsLayout best{0, 0, 0, 0, 0, top};
+        int bestScore = -1;
+        for (int lines = maxLines; lines >= 1; --lines) {
+            for (int volH : {(portrait ? 52 : 38), (portrait ? 52 : 32), (portrait ? 52 : 30)}) {
+                for (int gap : {(portrait ? 8 : 2), 0}) {
+                    const int infoTop = buttonTop - 14 - lines * lineH;
+                    const int volY = infoTop - 8 - (2 * volH + 6);
+                    const int avail = volY - 10 - top - (rowCount - 1) * gap;
+                    const int raw = avail / rowCount;
+                    if (raw < 20) continue;
+                    const int score = std::min(raw, cap) * 100 + lines * 10 + volH / 10 + (gap > 0 ? 1 : 0);
+                    if (score > bestScore) {
+                        bestScore = score;
+                        best = {std::min(cap, raw), gap, volY, volH, lines, top};
+                    }
+                }
+            }
         }
-        // В альбоме строки тоже считаются от свободного места: после добавления
-        // строки «Праздники» на 800×600 ползунки и справка уезжали за нижний
-        // край. Резерв — два ползунка и две строки текста.
-        const int reserve = 20 + 2 * (38 + 6) + 2 * FONT_SMALL.lineHeight + 16;
-        const int avail = std::max(0, SCREEN_H - top - reserve - rowCount * gap);
-        return std::max(24, std::min(touchControls ? 32 : 34, avail / rowCount));
+        if (bestScore < 0) {
+            // Совсем низкое окно: держим минимум, ниже которого подпись уже
+            // не читается, и отдаём остаток строкам.
+            const int volH = portrait ? 52 : 30;
+            const int volY = buttonTop - 14 - lineH - 8 - (2 * volH + 6);
+            best = {20, 0, volY, volH, 1, top};
+        }
+        // Свободное место не оставляем дырой под строками: сначала растягиваем
+        // зазор (до 20 px), потом сдвигаем блок к середине остатка. Иначе на
+        // высоком портрете 720×1600 строки висели вверху, а ползунки — внизу.
+        const int areaTop = top, areaBottom = best.volumeY - 10;
+        int usedH = rowCount * best.rowHeight + (rowCount - 1) * best.gap;
+        int slack = areaBottom - areaTop - usedH;
+        if (slack > 0 && rowCount > 1) {
+            const int extra = std::min(20, slack / (rowCount - 1));
+            best.gap += extra;
+            usedH = rowCount * best.rowHeight + (rowCount - 1) * best.gap;
+            slack = areaBottom - areaTop - usedH;
+        }
+        if (slack > 0) best.startY = areaTop + std::min(48, slack / 2);
+        return best;
     }
+    int settingsRowHeight(int rowCount) const { return settingsLayout(rowCount).rowHeight; }
     // Индекс строки «Размер кнопок касания»: на телефоне она последняя, и
     // сдвигается, как только в настройки добавляется ещё одна строка.
-    int settingsTouchSizeRow() const { return touchControls ? 11 : -1; }
+    // Двенадцать строк в альбоме и тринадцать на телефоне: последняя — размер
+    // кнопок касания, она нужна только там.
+    int settingsRowCount() const { return touchControls ? 13 : 12; }
+    int settingsTouchSizeRow() const { return touchControls ? 12 : -1; }
+    // Номер настройки по номеру строки. Держать его одной функцией надо потому,
+    // что строка календаря не переключатель, а вход: арифметика «строка минус
+    // один» на ней и на последней строке ломается.
+    static int settingsOptionForRow(int row) {
+        if (row == 10) return 0;    // календарь праздников — отдельный экран
+        if (row == 11) return 13;   // частота предметов на полу
+        if (row == 12) return 11;   // размер кнопок касания
+        return row + 1;
+    }
 
     void renderSettingsMenu(Renderer& r) {
         static int lastRefreshSecond = -1;
@@ -11702,34 +11857,37 @@ struct Game {
         // на Windows кнопок касания нет, и настройка, которой нечего менять,
         // только сбивает с толку. Предпоследняя строка — календарь праздников:
         // это не переключатель, а вход в отдельный экран.
-        const int rowCount = touchControls ? 12 : 11;
-        const char* labels[12] = {
+        const int rowCount = settingsRowCount();
+        const char* labels[13] = {
             "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
             "Советник по сборке (ИИ)", "БЕЗДНА — давление выше; пауэрапы только с умных", "Следы снарядов",
             "Стиль иконок предметов", "Озвучка сообщений в бою",
             "Карта кампании: змейка снизу вверх или карта актами",
             "Графика: авто держит 60 fps и снижает эффекты само",
             "Праздники: календарь, окна и проверка любого праздника",
+            "Предметы на полу: частота появления",
             "Размер кнопок касания: крупный палец или маленький экран"
         };
         // Narrow portraits need shorter labels: the ВКЛ/ВЫКЛ value is right-aligned on the row.
-        static const char* labelsPortrait[12] = {
+        static const char* labelsPortrait[13] = {
             "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
             "Советник по сборке (ИИ)", "БЕЗДНА — сложнее", "Следы снарядов",
             "Стиль иконок предметов", "Озвучка сообщений в бою",
             "Карта кампании",
             "Графика",
             "Праздники",
+            "Предметы на полу",
             "Размер кнопок"
         };
-        const bool values[12] = {
+        const bool values[13] = {
             sound.enabled.load(std::memory_order_relaxed), options.hitEffectsEnabled != 0,
             options.screenShakeEnabled != 0, options.advisorEnabled != 0,
             options.hardModeEnabled != 0, options.projectileTrailsEnabled != 0, options.skillIconStyle != 0,
             options.messageSpeechEnabled != 0, options.campaignSnakeMap != 0,
             options.graphicsLevel != 0,
             options.holidaysEnabled != 0,
-            options.touchButtonScale != TOUCH_SIZE_DEFAULT   // зелёный только если не по умолчанию
+            floorDeviceCap() > 0,                             // зелёный, пока предметы есть
+            options.touchButtonScale != TOUCH_SIZE_DEFAULT    // зелёный только если не по умолчанию
         };
         const bool portraitLayout = SCREEN_W < SCREEN_H;
         const char* const* rowLabels = portraitLayout ? labelsPortrait : labels;
@@ -11743,12 +11901,13 @@ struct Game {
         // ползунки громкости уезжают под кнопку «назад». В портрете наоборот:
         // высоты экрана много, и шаг строк растягивается под неё, иначе
         // настройки жмутся к шапке, а под ними — пустое поле.
-        const int startY = settingsRowsTop();
-        const int gap = settingsRowGap();
-        // Высота строки — из общей функции: по ней же считает стенд Android,
+        // Вся геометрия — из одной функции: по ней же считает стенд Android,
         // иначе проверка нажимала «размер кнопок» мимо строки, как только
         // настройки прибавили ещё одну.
-        const int h = settingsRowHeight(rowCount);
+        const SettingsLayout lay = settingsLayout(rowCount);
+        const int startY = lay.startY;
+        const int gap = lay.gap;
+        const int h = lay.rowHeight;
         char stateText[28];
         for (int i = 0; i < rowCount; ++i) {
             int y = startY + i * (h + gap);
@@ -11763,7 +11922,8 @@ struct Game {
             else if (i == 8) snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ЗМЕЙКА" : "КАРТА");
             else if (i == 9) snprintf(stateText, sizeof(stateText), "%s", graphicsLevelName(options.graphicsLevel));
             else if (i == 10) snprintf(stateText, sizeof(stateText), "%s", options.holidaysEnabled ? "КАЛЕНДАРЬ" : "ВЫКЛ");
-            else if (i == 11) snprintf(stateText, sizeof(stateText), "%d%%", options.touchButtonScale);
+            else if (i == 11) snprintf(stateText, sizeof(stateText), "%s", floorDeviceRateName());
+            else if (i == 12) snprintf(stateText, sizeof(stateText), "%d%%", options.touchButtonScale);
             else snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ВКЛ" : "ВЫКЛ");
             // Подпись ужимается под правый столбец значений: на 960×720 (такой
             // кадр рисуется в окне 800×600 и на телефоне) длинная строка про
@@ -11780,13 +11940,13 @@ struct Game {
                 // Строка календаря открывает экран, а не переключает значение:
                 // сам переключатель живёт внутри, рядом со списком окон.
                 if (i == 10) openHolidays(STATE_SETTINGS);
-                else toggleOption(i == 11 ? 11 : i + 1);
+                else toggleOption(settingsOptionForRow(i));
             }
         }
 
-        const int volumeY = startY + rowCount * (h + gap) + 20;
+        const int volumeY = lay.volumeY;
         auto drawVolume = [&](int channel, int y, const char* label, float value) {
-            const int rowX = x, rowW = w, rowH = portraitLayout ? 52 : 38;
+            const int rowX = x, rowW = w, rowH = lay.volumeRowH;
             const int trackW = std::min(310, rowW * 38 / 100);
             const int trackX = rowX + rowW * 43 / 100, trackY = y + rowH / 2;
             const bool focused = settingsVolumeFocus == channel;
@@ -11806,21 +11966,20 @@ struct Game {
                 sound.play(SFX_CLICK, 0.015f);
             }
         };
-        const int volumeRowH = portraitLayout ? 52 : 38;
+        const int volumeRowH = lay.volumeRowH;
         drawVolume(0, volumeY, "УРОВЕНЬ ЭФФЕКТОВ", sound.sfxVolume.load(std::memory_order_relaxed));
         drawVolume(1, volumeY + volumeRowH + 6, "УРОВЕНЬ МУЗЫКИ", sound.musicVolume.load(std::memory_order_relaxed));
 
         // Music comes only from audio/ now, so the old ten-way theme picker is gone: this is a status line.
-        const int infoY = volumeY + 2 * (volumeRowH + 6) + 8;
         char musicLine[160];
         if (sound.externalMusicActive())
             snprintf(musicLine, sizeof(musicLine), "МУЗЫКА: %d ТРЕК(ОВ) ИЗ audio/  •  ВСТРОЕННАЯ ТЕМА В РЕЗЕРВЕ", sound.externalMusicTrackCount());
         else
             snprintf(musicLine, sizeof(musicLine), "МУЗЫКА: ПАПКА audio/ ПУСТА — ИГРАЕТ ВСТРОЕННАЯ ТЕМА");
-        // На телефоне ниже идут две строки вместо трёх: убираем строку про
-        // голос и подсказку про клавиши, иначе текст наезжает на кнопки.
-        const int infoShift = touchControls ? -8 : 0;
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + infoShift, musicLine, 0xFFAAA0C8);
+        // Строки справки идут под полосами громкости и рисуются только те,
+        // что влезают над кнопкой «назад» (сколько — знает settingsLayout()).
+        const int infoY = volumeY + 2 * (volumeRowH + 6) + 8;
+        const int infoMaxW = SCREEN_W - 40;
         char voiceLine[160];
         if (voiceClips == 0)
             snprintf(voiceLine, sizeof(voiceLine), "ОЗВУЧКА: ПАПКА audio/voice/ ПУСТА — ФРАЗЫ ЖДУТ ЗАПИСИ");
@@ -11828,24 +11987,24 @@ struct Game {
             snprintf(voiceLine, sizeof(voiceLine), "ОЗВУЧКА: %d ИЗ %d ФРАЗ В audio/voice/ (%d ЕЩЁ НЕ ЗАПИСАНО)", voiceClips, MessageRegistry::voicedDefs(), voiceMissing);
         else
             snprintf(voiceLine, sizeof(voiceLine), "ОЗВУЧКА: ВСЕ %d ФРАЗ НА МЕСТЕ — audio/voice/", voiceClips);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + infoShift + 20, voiceLine, voiceMissing > 0 ? 0xFFFFC98A : 0xFF8CD8B0);
+        auto infoLine = [&](int idx, const std::string& text, uint32_t color) {
+            if (idx >= lay.infoLines) return;
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + idx * FONT_SMALL.lineHeight,
+                               fitText(r, FONT_SMALL, text.c_str(), infoMaxW).c_str(), color);
+        };
+        infoLine(0, musicLine, 0xFFAAA0C8);
+        infoLine(1, voiceLine, voiceMissing > 0 ? 0xFFFFC98A : 0xFF8CD8B0);
         if (portraitLayout) {
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + infoShift + 40,
-                               keyHint(touchControls
-                                   ? (portraitLayout ? "КОСНИТЕСЬ СТРОКИ — ПЕРЕКЛЮЧАТЕЛЬ"
-                                                     : "КОСНИТЕСЬ СТРОКИ — ПЕРЕКЛЮЧАТЕЛЬ • «РАЗМЕР КНОПОК» — ПОД ПАЛЕЦ")
-                                   : "[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] И [0] ГРАФИКА — ПЕРЕКЛЮЧАТЕЛИ"),
-                               0xFFAAA0C8);
+            infoLine(2, keyHint("КОСНИТЕСЬ СТРОКИ — ПЕРЕКЛЮЧАТЕЛЬ"), 0xFFAAA0C8);
         } else {
-            // Подсказки ниже счётчиков считаются от infoY: с девятой строкой
-            // настроек фиксированный y=574 наезжал на строку про музыку.
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + infoShift + 40, keyHint("[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] ПЕРЕКЛЮЧАТЕЛИ • [0] ГРАФИКА • КЛИК МЫШЬЮ"), 0xFFAAA0C8);
+            infoLine(2, keyHint("[TAB] ФОКУС • [←/→] ГРОМКОСТЬ • [1–9] ПЕРЕКЛЮЧАТЕЛИ • [0] ГРАФИКА • [P] ПОЛ • КЛИК МЫШЬЮ"), 0xFFAAA0C8);
             // Строка про записанную озвучку — про F3 и клавиши: на телефоне её нет.
-            if (!touchControls)
-                r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, infoY + infoShift + 62, keyHint("ГОЛОС — ЗАПИСАННЫЕ ФРАЗЫ В audio/voice/; СПИСОК И СЧЁТЧИКИ В F3"), 0xFF8C82A8);
+            infoLine(3, keyHint("ГОЛОС — ЗАПИСАННЫЕ ФРАЗЫ В audio/voice/; СПИСОК И СЧЁТЧИКИ В F3"), 0xFF8C82A8);
         }
         int bw = std::min(340, SCREEN_W - 48), bh = 50;
-        int bx = (SCREEN_W - bw) / 2, by = portraitLayout ? SCREEN_H - 76 : 651;
+        // Кнопка считается от низа окна, а не от числа 651: на 800×600 она
+        // уезжала за экран целиком, и «назад» можно было нажать только клавишей.
+        int bx = (SCREEN_W - bw) / 2, by = settingsButtonTop();
         // На телефоне рядом с «назад» стоит вход в выбор схемы движения: клавиш
         // там нет, а менять схему хочется не только при первом запуске.
         int setupX = 0, setupW = 0;
@@ -12867,6 +13026,7 @@ struct Game {
             "2.11.3 • КАРТА: ПЯТЬ РИСУНКОВ ПОЛА",
             "2.12.0 • ПРЕДМЕТЫ НА ПОЛУ",
             "2.12.1 • ПОДСКАЗКИ ПОЛА НА СЛУХ",
+            "2.12.2 • ЧАСТОТА ПРЕДМЕТОВ НА ПОЛУ",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -13025,6 +13185,7 @@ struct Game {
             "Пол был один на место: пять кладок — по одной на каждый акт. Второй бой в том же акте выглядел как первый, потому что он и был первым.\n• Теперь рисунок пола — отдельная вещь от палитры места. Пять вариантов: ПЛИТЫ (кладка и печати, прежний вид), МОЗАИКА (шахматка 192 px с ромбами в светлых квадратах), РИТУАЛ (крупные круги-медальоны на сетке 512 px и печатей вдвое чаще), РАЗЛИВ (лужи с дрожащим бликом; в Руинах, Крипте и Соборе это вода, в Пепельном троне — расплав, в Сердце Архива — разлитые чернила), ОСЫПЬ (обломки колонн, кучи щебня и треснувшие плиты).\n• Вариант не зависит от места: пять мест на пять рисунков — двадцать пять разных арен. Роспись врагов при этом по-прежнему привязана к месту, поэтому знакомый бестиарий приходит на незнакомый пол, а не наоборот.\n• В кампании рисунок задаёт дело (соседние дела одного акта не повторяют пол), в бесконечном режиме он меняется каждые 90 с, а палитра — каждые 150 с: сочетания не повторяются подряд, и за десять минут забега игрок видит все пять.\n• Крупные фигуры стоят на своих сетках и не спорят с лендмарками и жаровнями: медальон уступает дорогу лендмарку, лужа и обломок — и лендмарку, и жаровне. Печати на полу теперь выбираются маской варианта, поэтому на «Ритуале» их ровно вдвое больше, а на «Мозаике» вдвое меньше.\n• Название карты видно словами: в паузе строка «КАРТА: КРИПТА • РИТУАЛ», в панели F3 — строка «КАРТА». По картинке вариант угадывается, но название не должно угадываться.\n• Цена кадра (стенд perf_bench, 160 мобов, 1280×720, один поток, ступень «высокое», максимум из трёх прогонов): ПЛИТЫ 5,9 мс против 5,7 до правки, РИТУАЛ 6,2, РАЗЛИВ 6,2, ОСЫПЬ 6,2, МОЗАИКА 6,5. Самый дорогой вариант — мозаика: её ромбы это линии через весь экран; запас до 16,7 мс остаётся.\n• Стенды: screen_check печатает теперь девятнадцать экранов — к «бою» добавились пять вариантов пола со своими хешами (бой плиты a10a052c — прежний бой, остальные четыре новые). screen_shot получил аргументы layoutN (прибить рисунок) и timeSEC (прибить время забега, то есть место), perf_bench — layoutN. Стенды больше не читают сейв и настройки с диска: файл, оставленный соседним прогоном, подменял золото в HUD, и один и тот же экран давал разные хеши — это выглядело как «кадр зависит от числа потоков», хотя потоков он не касался.\n• Честно: варианты проверены снимками в четырёх местах из пяти и на 1280×720; на телефоне в портрете смотрел только экран паузы, а в бою — нет.",
             "Пол-2: на полу теперь лежат предметы, и обе стороны с ними взаимодействуют.\n• Пять рисунков пола из 2.11.3 получили не только вид, но и поведение: на полу появляются три предмета — ПЛИТА, ШИПЫ и ЗНАК. Взаимодействие не кнопкой, а ногами: на плиту надо наступить, шипы обойти или навести на них врагов, в знаке постоять. Раскладка привязана к рисунку: «Плиты» и «Разлив» выставляют в основном плиты (по воде разряд идёт охотнее), «Мозаика» и «Ритуал» — знаки, «Осыпь» — шипы; при этом все три вида встречаются на любом полу, иначе пол диктовал бы билд.\n• Плита: шаг в 44 px — разряд по кругу 138 px, урон ×2,2 от обычного (79–202 по актам), отброс 52 px, надпись «ПЛИТА СРАБОТАЛА». Одноразовая: второй раз на неё не встать. Враги получают втрое больше, чем герой на шипах, — иначе искать плиту незачем.\n• Шипы: 1,1 с трещины с разгорающимся огнём (телеграф видно издалека), потом 0,7 с торчащих шипов. Первый выброс бьёт и героя (14–30 по актам), и врагов; рывок проносит над шипами без урона. Дальше шипы бьют врагов шагами по 0,22 с, поэтому врага можно на них навести.\n• Знак: постоять в круге 50 px ровно 1,4 с — +12 % здоровья, опыт 6+2×акт и +4 к суперу. Вышел из круга — заряд тает со скоростью 0,6, а не обнуляется: шаг назад и обратно не должен отнимать полторы секунды стояния. Стоять на месте в бою дорого — это и есть цена.\n• Спавн: не больше пяти предметов, первый через 4 с, дальше каждые 6,5 с, жизнь 19 с, дистанция 120–380 px от героя, зазор ≥110 px друг от друга. Позиция считается хешем от номера предмета, без rand(): лишний вызов rand() сдвигал общий поток случайности и менял сцену боя целиком — стенд проверяет это отдельной строкой.\n• Спрайты нарисованы, поправлены и запечены в атлас 96 px: плита (камень с янтарной рунной полосой), трещины-телеграф, стальные шипы и знак с письменами. Рисуются один к одному — дробное растяжение съедало прожилки на трещинах. У плиты появились обод, светящаяся кнопка по центру и ореол; когда рядом враг, ореол зовёт вдвое ярче и чаще, и не надо угадывать, стоит ли жать.\n• Это не пассивные бонусы: и плита, и шипы бьют обе стороны. Три привычки — «наведи и нажми», «замани на шипы», «найди окно, чтобы постоять» — и есть вся интеракция; кнопок для неё не понадобилось.\n• Пайплайн текстур: design/floor/<имя>_src.png → python3 tools/bake_floor_art.py → src/floor_art.h (четыре спрайта 96×96, палитра 48 цветов) и design/floor_preview.png; --check сверяет запечённое с исходниками.\n• Стенд tools/floor_probe.cpp — 38 проверок: спавн (предел, дистанция, зазор на пустом и на занятом кольце, детерминизм, «не тратит rand()», пауза), плита (не срабатывает в шаге, бьёт рядом, не бьёт далеко, одноразовость), шипы (замах не бьёт, выброс бьёт героя и врага, рывок и отход спасают, уходят в пол), знак (не лечит раньше срока, лечит ровно раз, заряд копится и тает), срок жизни и чистый пол на новый забег, раскладка по пяти рисункам. Мутации (замах 0,05 с, спавн через rand(), без зазора) стенд ловит.\n• F3 получил строку «ПОЛ»: сколько предметов лежит, по видам, сколько сработало и сколько знаков собрано. Без неё «плита не работает» и «плита не появилась» выглядят одинаково.\n• Хеши экранов (screen_check, 1280×720): добавился двадцатый экран «бой пол» (46f24a53) — плита, замах шипов и знак вокруг героя. Поменялось только меню (a96b2e6f) — в подвале номер версии; патчноуты в список не входят, их картинка меняется от самой заметки. Остальные не сдвинулись ни на пиксель: бой a52f9f57, бой плиты a10a052c, бой мозаика 1a7883a8, бой ритуал a52f9f57, бой разлив 46bb1f01, бой осыпь d91b0595.\n• Цена кадра (perf_bench, 400 кадров, 1280×720, один поток, ступень «высокое», максимум из трёх прогонов): ПЛИТЫ 5,8 мс, ОСЫПЬ 6,0, РАЗЛИВ 6,1, РИТУАЛ 6,1, МОЗАИКА 6,8 — при пределе 16,7 мс.\n• Честно: предметы смотрел стендом и снимками на 1280×720; на телефоне в портрете и вживую «успел или не успел» не проверял — стенд мерит правила, а не ощущение.",
             "Пол зазвучал: у каждого предмета на полу есть свой сигнал, и он говорит, что с предметом делать.\n• Раньше пол был молчаливым: плита била чужим звуком стража, шипы вылетали общим «ударом», а знак лечил звуком нового уровня. На слух нельзя было понять, что предмет появился за спиной, что шипы уже заряжаются и что заряд знака идёт.\n• Семь новых сигналов: появление предмета (низкий скрип камня и звон сверху), «зов», когда предмет впервые оказался в 150 px (мягкий колокольчик, у знака на полтона выше), нажатие плиты (тяжёлый металлический клац), треск шипов на замахе, выброс шипов (шумовой удар и сталь), тик заряда знака (колокольчик, высота растёт вместе с зарядом 0,90× → 1,35×) и сбор знака (тёплый аккорд).\n• Плюс стеклянный треск резонатора: цель, которую игрок ломает, теперь слышно сломанной, а не просто исчезнувшей с экрана.\n• Громкость подсказки зависит от расстояния до героя (1,0 под ногами → 0,22 за полэкрана): сигнал за спиной не должен звучать так же, как сигнал вплотную.\n• Все подсказки играются новым playCue(): он не трогает rand(). Обычный play() добавляет джиттер высоты и громкости через rand(), и любая новая подсказка сдвигала бы общий поток случайности — то есть меняла сцену боя целиком. Это же правило проверяет стенд пола: спавн предмета даёт тот же поток, что и до спавна.\n• Кулдауны и полифония: треск, тик и зов — по одному голосу, плита и появление — до двух. Два спавна в один кадр не копят голоса. Резонатор — до двух.\n• Уровни выставлены по замеру через микшер: подсказки 0,070–0,247 полной шкалы при подложке музыки 0,112 — слышно поверх боя и тише сигналов (новый уровень 0,326). Самый громкий эффект по-прежнему «смерть босса» 0,34.\n• Стенд tools/sfx_probe.cpp вырос до 791 проверки: банк, уровни, новая группа «подсказки пола» (не тише 0,45 и не громче 2,6 подложки) и четыре проверки самого playCue — не тратит rand(), громкость масштабируется расстоянием, кулдаун держит повтор, высота доходит до голоса. Стенд пола вырос до 48 проверок: появление, «зов» один раз на предмет, треск до выброса, удар после, рост высоты тика.\n• Демо-дорожка design/sfx_demo.wav пересобрана: 21,6 с, в конце блок подсказок, тик знака трижды — слышно, как растёт высота.\n• Попутно: стенд оружия больше не подмешивает урон пола в замер. Из-за него два артефакта показывали «−3,5 % к базе»; теперь weapon_probe снова совпадает с прежним — «ПРОВАЛОВ: 1», наследие «Клятва Последнего Рассвета −3,0 %».\n• Кадры не сдвинулись: звук ничего не рисует. Бой пол 46f24a53, бой a52f9f57, настройки 809a8317, праздники 3f868c27; меню d3550597 — в нём номер версии.\n• Честно: ушами не слушал. Всё измерено микшером (пик, RMS, клиппинг, NaN) и проверено стендом; насколько это приятно и не раздражает ли за 20 минут боя — может сказать только человек.",
+            "Частота встречи с предметами на полу теперь настройка, а не судьба.\n• В настройках появилась строка «Предметы на полу: частота появления» с четырьмя ступенями: ВЫКЛ, РЕДКО, ОБЫЧНО, ЧАСТО. Она меняет только две вещи — сколько предметов держится на арене и как часто приходит следующий. Урон, радиусы, время жизни и правила «наступить / обойти / постоять» общие: «часто» не должно значить «сильнее», иначе вместо частоты получилась бы ещё одна сложность.\n• Числа: ВЫКЛ — ноль предметов, таймер спавна не тикает вовсе; РЕДКО — 3 на поле, интервал 11 с, первый через 6 с; ОБЫЧНО — прежние 5 на поле, 6,5 с и 4 с, это умолчание; ЧАСТО — 8 на поле, 4 с и 2,5 с.\n• Переключение пересобирает пол сразу: иначе игрок жал бы на строку и не видел эффекта до следующего предмета, а при ВЫКЛ старые предметы оставались бы лежать до конца своей жизни.\n• Ступень видна и без захода в настройки: строка «ПОЛ» в F3 печатает «лежит/предел» и название ступени, поэтому «предметов нет» и «частота выключена» больше не выглядят одинаково.\n• На клавиатуре ступень листается клавишей P в настройках — рядом с [1–9] и [0], отдельного экрана не понадобилось.\n• Старые конфиги (96 байт) читаются как ОБЫЧНО: новая версия не должна включать игроку то, чего он не выбирал.\n• Попутно починена раскладка настроек: с двенадцатой строкой справка наезжала на кнопку «НАЗАД», а на 800×600 сама кнопка уезжала за нижний край — она была прибита координатой 651. Теперь settingsLayout() считает всё снизу вверх: кнопка от низа окна, над ней две полосы громкости, над ними строки справки, остаток — строкам настроек; если места мало, сначала теряется последняя строка справки, потом зазор, и только потом высота строки. Свободное место не оставляем дырой: зазор растягивается, блок подтягивается к середине. На телефоне строк тринадцать (добавляется «Размер кнопок»), в альбоме двенадцать, и обе цифры берутся из settingsRowCount(), а не из зашитых чисел.\n• Замер частоты отдельным стендом за 60 с на пустой арене (пик предметов / всего спавнов): ВЫКЛ 0/0, РЕДКО 2/5, ОБЫЧНО 3/9, ЧАСТО 5/15. Пик ниже предела, потому что предмет живёт 19 с и уходит раньше, чем пол успевает заполниться, — поэтому стенд мерит пик по кадрам, а не остаток в конце минуты.\n• Стенды: floor_probe вырос до 56 проверок (пик по каждой ступени, независимость урона от частоты, пересборка пола переключателем), touch_probe — 175 (чтение 96-байтного конфига), android_smoke считает строки через settingsRowCount(). screen_check: настройки 6bf6a2bf (новая строка и новая раскладка), меню 233dd6e0 — в нём номер версии; бой a52f9f57, бой пол 46f24a53 и остальные экраны не сдвинулись ни на пиксель.\n• Честно: частоту проверял стендом и снимками настроек на 1280×720, 960×720, 800×600 и в портрете 720×1600; насколько «ОБЫЧНО» приятнее «ЧАСТО» в живом забеге, решает человек.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
@@ -14492,6 +14653,8 @@ struct Game {
                 sound.play(SFX_CLICK, 0.02f);
             }
             else if (key == 'H' || key == 'h') { openHolidays(STATE_SETTINGS); }
+            // Частота предметов на полу: одна клавиша на всю настройку.
+            else if (key == 'P' || key == 'p') toggleOption(13);
             else if (key == 9) settingsVolumeFocus = (settingsVolumeFocus + 1) % 2;
             else if (key == 37 || key == 39) adjustSoundVolume(key == 37 ? -1 : 1);
             else if (key == 27) state = settingsReturnState;

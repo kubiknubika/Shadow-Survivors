@@ -301,11 +301,13 @@ int main(int argc, char** argv) {
         g->state = STATE_SETTINGS;
         // Строка «Размер кнопок»: её номер и высоту берём у самой игры, а не
         // угадываем — после строки «Праздники» она сдвинулась на одну вниз.
-        const int rows = g->touchControls ? 12 : 11;
-        const int rowH = g->settingsRowHeight(rows);
-        const int rowGap = g->settingsRowGap();
+        // Геометрия — из той же раскладки, что рисует экран: высота строки, зазор
+        // и верх блока теперь зависят от свободного места, и считать их здесь
+        // заново значит однажды снова промахнуться мимо строки.
+        const int rows = g->settingsRowCount();
+        const Game::SettingsLayout lay = g->settingsLayout(rows);
         const int rowIndex = g->settingsTouchSizeRow();
-        const int rowY = g->settingsRowsTop() + rowIndex * (rowH + rowGap) + rowH / 2;
+        const int rowY = lay.startY + rowIndex * (lay.rowHeight + lay.gap) + lay.rowHeight / 2;
         tapAt((float)(uiW / 2), (float)rowY);
         snprintf(detail, sizeof(detail), "было %d%%, стало %d%%", before, g->options.touchButtonScale);
         check(g->options.touchButtonScale > before, "строка «размер кнопок» увеличивает кнопки", detail);

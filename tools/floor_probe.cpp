@@ -318,6 +318,52 @@ int main() {
               "новый забег начинается с чистого пола");
     }
 
+    // ── частота встречи с предметами ─────────────────────────────────────────
+    {
+        // Считаем пик за окно, а не остаток в конце: предмет живёт 19 с, поэтому
+        // при редком появлении к концу окна на полу успевает стать пусто.
+        auto countAfter = [](int rate, float seconds) {
+            Probe p;
+            p.quietArena();
+            p.g.options.floorDeviceRate = rate;
+            p.g.clearFloorDevices();
+            p.g.floorDeviceSpawnTimer = p.g.floorDeviceFirstDelay();
+            int peak = 0;
+            const int frames = (int)(seconds * 60.0f);
+            for (int f = 0; f < frames; ++f) {
+                p.tick(1.0f / 60.0f);
+                peak = std::max(peak, (int)p.g.floorDevices.size());
+            }
+            return peak;
+        };
+        check(countAfter(0, 40.0f) == 0, "«выкл»: новых предметов нет вовсе");
+        const int rare = countAfter(1, 40.0f);
+        const int normal = countAfter(2, 40.0f);
+        const int often = countAfter(3, 40.0f);
+        // Пик за минуту: предмет живёт 19 с, поэтому даже при пределе 5 на полу
+        // одновременно держится меньше. Это и есть «частота встречи».
+        check(rare >= 1 && rare <= 2, "«редко»: на полу один-два предмета");
+        check(normal >= 3 && normal <= 4, "«обычно»: три-четыре, как раньше");
+        check(often >= 4 && often <= 6, "«часто»: четыре-шесть одновременно");
+        check(rare < normal && normal < often, "частота растёт по ступеням");
+
+        // Частота — это только частота: урон от неё зависеть не должен, иначе
+        // настройка превращалась бы в скрытую сложность.
+        Probe p;
+        p.quietArena();
+        const float damageNormal = p.g.floorDeviceEnemyDamage();
+        p.g.options.floorDeviceRate = 3;
+        check(fabsf(p.g.floorDeviceEnemyDamage() - damageNormal) < 0.01f,
+              "частота встречи не меняет урон пола");
+
+        // Смена настройки пересобирает пол сразу: иначе игрок жмёт переключатель
+        // и не видит разницы до следующего предмета.
+        p.g.spawnFloorDeviceAt(FLOOR_DEVICE_PLATE, 200.0f, 0.0f);
+        p.g.toggleOption(13);
+        check(p.g.floorDevices.empty(), "смена частоты пересобирает пол");
+        check(p.g.options.floorDeviceRate == 0, "ВЫКЛ идёт сразу после ЧАСТО");
+    }
+
     // ── звук: пол слышно, а не только видно ──────────────────────────────────
     {
         Probe p;

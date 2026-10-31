@@ -521,8 +521,10 @@ static void testOptionsFile() {
               "хвост старых настроек на месте");
         check(g.options.touchScheme == TOUCH_SCHEME_STICK_LEFT && g.options.touchSetupDone == 0,
               "новых полей в старом файле нет — схема по умолчанию и вопрос при запуске");
-        // 2.11.0 добавила три поля праздников: 84 -> 96 байт.
-        check(sizeof(GameOptions) == 96, "новые настройки занимают 96 байт");
+        // 2.11.0 добавила три поля праздников (84 -> 96), 2.12.2 — частоту
+        // предметов на полу (96 -> 100).
+        check(sizeof(GameOptions) == 100, "новые настройки занимают 100 байт");
+        check(sizeof(LegacyGameOptions96) == 96, "раскладка 2.11.0 осталась 96 байт");
         check(sizeof(LegacyGameOptions84) == 84, "раскладка 2.10.55 осталась 84 байта");
         check(g.options.holidaysEnabled == 1 && g.options.holidayOverride == -1 && g.options.holidayDateShift == 0,
               "в старом файле нет праздников — они включены по календарю");
@@ -530,6 +532,43 @@ static void testOptionsFile() {
         check(sizeof(LegacyGameOptions72) == 72, "раскладка 2.10.54 осталась 72 байта");
         check(g.options.touchButtonScale == TOUCH_SIZE_DEFAULT,
               "в старом файле нет размера кнопок — он по умолчанию");
+
+        // Файл 2.12.1 (96 байт): в нём уже были праздники, но не было частоты
+        // предметов на полу. Хвост обязан прочитаться, а частота — стать «обычной».
+        {
+            LegacyGameOptions96 prev{};
+            prev.magic = 0x53484346;
+            prev.sfxEnabled = 1; prev.musicEnabled = 1; prev.hitEffectsEnabled = 1;
+            prev.screenShakeEnabled = 1; prev.advisorEnabled = 1; prev.hardModeEnabled = 0;
+            prev.patchNotesHiddenVersion = 3201;
+            prev.projectileTrailsEnabled = 1;
+            prev.sfxVolume = 0.5f; prev.musicVolume = 0.25f;
+            prev.messageSpeechEnabled = 1; prev.skillIconStyle = 1; prev.campaignSnakeMap = 0;
+            prev.graphicsLevel = 2;
+            prev.touchScheme = TOUCH_SCHEME_STICK_RIGHT; prev.touchSetupDone = 1;
+            prev.touchButtonScale = 120;
+            prev.touchButtonStyle = TOUCH_STYLE_SOLID;
+            prev.touchButtonTheme = TOUCH_THEME_NEON;
+            prev.touchButtonOpacity = 80;
+            prev.holidaysEnabled = 0; prev.holidayOverride = 3; prev.holidayDateShift = 5;
+            FILE* pf = fopen("shadow_survivors.cfg", "wb");
+            const bool wrote96 = pf && fwrite(&prev, sizeof(prev), 1, pf) == 1;
+            if (pf) fclose(pf);
+            check(wrote96 && sizeof(prev) == 96, "стенд записал настройки 2.12.1 (96 байт)");
+            Game g96;
+            g96.simulationMode = true;   // ignoreSavedState НЕ ставим: читаем именно файл
+            srand(4242);
+            g96.init();
+            check(g96.options.holidaysEnabled == 0 && g96.options.holidayOverride == 3 &&
+                  g96.options.holidayDateShift == 5,
+                  "96-байтный файл: праздники прочитаны");
+            check(g96.options.touchButtonScale == 120 && g96.options.graphicsLevel == 2 &&
+                  g96.options.touchButtonTheme == TOUCH_THEME_NEON,
+                  "96-байтный файл: хвост настроек на месте");
+            check(g96.options.floorDeviceRate == 2,
+                  "96-байтный файл: частота предметов — «обычно»");
+            remove("shadow_survivors.cfg");
+        }
 
         // Запись и чтение нового файла: выбор схемы переживает перезапуск.
         g.options.touchScheme = TOUCH_SCHEME_DPAD_LEFT;
@@ -727,7 +766,8 @@ static void testButtonLook() {
     check(same, "превью с явным внешним видом совпадает с превью по настройкам");
 
     // Настройки: файл 96 байт (праздники), прежние 84 и 72 читаются.
-    check(sizeof(GameOptions) == 96, "настройки с праздниками занимают 96 байт");
+    check(sizeof(GameOptions) == 100, "настройки с частотой пола занимают 100 байт");
+    check(sizeof(LegacyGameOptions96) == 96, "раскладка 2.11.0 осталась 96 байт");
     check(sizeof(LegacyGameOptions84) == 84, "раскладка 2.10.55 осталась 84 байта");
     check(sizeof(LegacyGameOptions72) == 72, "раскладка 2.10.54 осталась 72 байта");
 }
