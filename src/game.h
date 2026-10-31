@@ -15,6 +15,8 @@
 #include "advisor_weights.h"
 #include "version.h"
 #include "messages.h"
+#include "holidays.h"
+#include "holiday_art.h"
 
 enum GameState {
     STATE_MENU = 0,
@@ -37,7 +39,8 @@ enum GameState {
     STATE_MISSION_COMPLETE,
     STATE_HERO_SELECT,
     STATE_CONTROLS_SETUP,  // 2.10.53: выбор схемы движения на Android
-    STATE_BUTTON_LOOK      // 2.10.55: внешний вид кнопок касания
+    STATE_BUTTON_LOOK,     // 2.10.55: внешний вид кнопок касания
+    STATE_HOLIDAY          // 2.11.0: календарь праздников и их проверка
 };
 
 enum RunMode { MODE_STORY = 0, MODE_ENDLESS = 1 };
@@ -197,10 +200,28 @@ static constexpr int MATRYOSHKA_ENEMY_TYPE = 10;
 // obstacle and a moving reward, not another pursuer — that is the point of it.
 static constexpr int RAT_ENEMY_TYPE = 11;
 static constexpr int MONSTER_TYPE_COUNT = 12;
+// Задача 27: к двенадцати обычным типам добавляются праздничные — по два
+// персонажа на каждый из восьми праздников. Тип 12+2*h+s — персонаж s
+// праздника h. Праздничные типы не входят в ростер арен: они появляются только
+// в своё окно календаря (см. holidayMonsterType ниже), поэтому
+// MONSTER_TYPE_COUNT по-прежнему означает «обычные», а массивы базовых
+// характеристик не пришлось растягивать.
+static constexpr int HOLIDAY_MONSTER_BASE = MONSTER_TYPE_COUNT;
+static constexpr int HOLIDAY_MONSTER_COUNT = HOLIDAY_COUNT * 2;
+static constexpr int MONSTER_TYPE_TOTAL = HOLIDAY_MONSTER_BASE + HOLIDAY_MONSTER_COUNT;
+static inline int holidayMonsterType(int holiday, int slot) {
+    return HOLIDAY_MONSTER_BASE + (holiday % HOLIDAY_COUNT) * 2 + (slot & 1);
+}
+static inline int holidayMonsterHoliday(int type) {
+    return (type - HOLIDAY_MONSTER_BASE) / 2;
+}
+static inline int holidayMonsterSlot(int type) {
+    return (type - HOLIDAY_MONSTER_BASE) % 2;
+}
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 150;
+static constexpr int PATCH_NOTES_COUNT = 151;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -281,6 +302,14 @@ static DeathBurst monsterDeathBurst(int type, bool elite) {
         {0xFFFFC65E, 0xFF6B4A1C, 11}, // 10 — matryoshka
         {0xFFB8A48C, 0xFF573F32, 7},  // 11 — rat: dust and a thin tail of fur
     };
+    // Праздничные персонажи рассыпаются в цветах своего праздника: конфетти
+    // вместо костей, и по цвету видно, чей это моб.
+    if (type >= HOLIDAY_MONSTER_BASE) {
+        const HolidayDef& def = HOLIDAY_DEFS[holidayMonsterHoliday(type) % HOLIDAY_COUNT];
+        DeathBurst h{def.glow, def.c1, 12};
+        if (elite) { h.count += 6; h.accent = 0xFFFFC64A; }
+        return h;
+    }
     DeathBurst b = bursts[std::max(0, std::min(MONSTER_TYPE_COUNT - 1, type))];
     if (elite) { b.count += 6; b.accent = 0xFFFFC64A; }
     return b;
@@ -743,7 +772,14 @@ struct GameOptions {
     int touchButtonStyle = TOUCH_STYLE_GLASS;     // стекло / плотные / контур / круг
     int touchButtonTheme = TOUCH_THEME_AMBER;     // янтарь / неон / моно / угли
     int touchButtonOpacity = 100;                 // 40…100 %, насколько залита кнопка
+    // 2.11.0: праздники. Игра смотрит на календарь сама, но игрок может их
+    // выключить (кому мешает атмосфера) и включить любой вручную — иначе
+    // проверить рождественский скрипт можно было бы только в декабре.
+    int holidaysEnabled = 1;   // 0 — праздников нет совсем
+    int holidayOverride = -1;  // -1 — по календарю, 0..7 — выбранный праздник
+    int holidayDateShift = 0;  // сдвиг даты в днях, для отладки календаря
 };
+static_assert(HOLIDAY_COUNT == 8, "holiday table and options field must stay in sync");
 
 // Предыдущая раскладка настроек (без строки «Графика»): файл на 56 байт должен
 // читаться, иначе обновление игры сбрасывало бы все переключатели игрока.
@@ -794,7 +830,21 @@ struct LegacyGameOptions72 {
     int touchButtonScale;
 };
 static_assert(sizeof(LegacyGameOptions72) == 72, "2.10.54 options layout changed unexpectedly");
-static_assert(sizeof(GameOptions) == 84, "2.10.55 options layout changed unexpectedly");
+// Раскладка 2.10.55 (84 байта): без праздников.
+struct LegacyGameOptions84 {
+    uint32_t magic;
+    int sfxEnabled, musicEnabled, hitEffectsEnabled, screenShakeEnabled, advisorEnabled, hardModeEnabled;
+    uint32_t patchNotesHiddenVersion;
+    int projectileTrailsEnabled;
+    float sfxVolume, musicVolume;
+    int messageSpeechEnabled, skillIconStyle, campaignSnakeMap;
+    int graphicsLevel;
+    int touchScheme, touchSetupDone;
+    int touchButtonScale;
+    int touchButtonStyle, touchButtonTheme, touchButtonOpacity;
+};
+static_assert(sizeof(LegacyGameOptions84) == 84, "2.10.55 options layout changed unexpectedly");
+static_assert(sizeof(GameOptions) == 96, "2.11.0 options layout changed unexpectedly");
 
 struct SaveData {
     uint32_t magic = 0x53484457; // 'SHDW'
@@ -1135,6 +1185,18 @@ struct Game {
     float eventCooldown = 35.0f;
     float squadTimer = 16.0f;      // next themed squad push
     float ratTimer = 34.0f;        // next rat swarm crossing
+    // Задача 27: праздничный скрипт. activeHoliday фиксируется на старте забега:
+    // если окно закроется в полночь посреди боя, мобы не должны исчезнуть.
+    int holidayCursor = 0;                 // выбранная строка календаря
+    GameState holidayReturnState = STATE_SETTINGS; // куда вернуться по ESC
+    HolidayId activeHoliday = HOLIDAY_NONE;
+    float holidayWaveTimer = 32.0f;   // до праздничного набега
+    bool holidayBannerShown = false;
+    // Закреплённая дата для стендов: если год задан, игра считает «сегодня»
+    // этим днём. Иначе хеш календаря менялся бы каждые сутки, и проверка
+    // «картинка та же» перестала бы что-либо значить. В игре поле не
+    // выставляется и остаётся нулевым.
+    int holidayPinYear = 0, holidayPinMonth = 1, holidayPinDay = 1;
     // Quiet hunt ("тихая охота") is an *opportunity*, not a wall: a finite pack walks the
     // trail, drops coins as it dies, and pays a bounty if the whole pack is cleared.
     // The breakthrough is the wall: timed, unavoidable and it blocks progression.
@@ -1301,6 +1363,30 @@ struct Game {
             } else if (n == (long)sizeof(GameOptions)) {
                 GameOptions saved{};
                 if (fread(&saved, sizeof(saved), 1, f) == 1 && saved.magic == 0x53484346) options = saved;
+            } else if (n == (long)sizeof(LegacyGameOptions84)) {
+                // Файл сборки 2.10.55–2.10.56: праздников в нём не было, поэтому
+                // они включаются по умолчанию, а календарь решает всё сам.
+                LegacyGameOptions84 old{};
+                if (fread(&old, sizeof(old), 1, f) == 1 && old.magic == 0x53484346) {
+                    options = GameOptions{};
+                    options.sfxEnabled = old.sfxEnabled; options.musicEnabled = old.musicEnabled;
+                    options.hitEffectsEnabled = old.hitEffectsEnabled;
+                    options.screenShakeEnabled = old.screenShakeEnabled;
+                    options.advisorEnabled = old.advisorEnabled; options.hardModeEnabled = old.hardModeEnabled;
+                    options.patchNotesHiddenVersion = old.patchNotesHiddenVersion;
+                    options.projectileTrailsEnabled = old.projectileTrailsEnabled;
+                    options.sfxVolume = old.sfxVolume; options.musicVolume = old.musicVolume;
+                    options.messageSpeechEnabled = old.messageSpeechEnabled;
+                    options.skillIconStyle = old.skillIconStyle;
+                    options.campaignSnakeMap = old.campaignSnakeMap;
+                    options.graphicsLevel = old.graphicsLevel;
+                    options.touchScheme = old.touchScheme;
+                    options.touchSetupDone = old.touchSetupDone;
+                    options.touchButtonScale = old.touchButtonScale;
+                    options.touchButtonStyle = old.touchButtonStyle;
+                    options.touchButtonTheme = old.touchButtonTheme;
+                    options.touchButtonOpacity = old.touchButtonOpacity;
+                }
             } else if (n == (long)sizeof(LegacyGameOptions72)) {
                 LegacyGameOptions72 old{};
                 if (fread(&old, sizeof(old), 1, f) == 1 && old.magic == 0x53484346) {
@@ -1432,6 +1518,12 @@ struct Game {
         options.touchButtonStyle = touchClampStyle(options.touchButtonStyle);
         options.touchButtonTheme = touchClampTheme(options.touchButtonTheme);
         options.touchButtonOpacity = touchClampOpacity(options.touchButtonOpacity);
+        options.holidaysEnabled = options.holidaysEnabled != 0 ? 1 : 0;
+        // -1 — «по календарю»; всё, что вне таблицы, тоже означает «по календарю»,
+        // иначе битый файл мог бы заблокировать праздники навсегда.
+        if (options.holidayOverride < -1 || options.holidayOverride >= HOLIDAY_COUNT)
+            options.holidayOverride = -1;
+        options.holidayDateShift = std::max(-366, std::min(366, options.holidayDateShift));
         sound.musicVariant.store(0, std::memory_order_relaxed);
         sound.enabled.store(options.sfxEnabled != 0, std::memory_order_relaxed);
         sound.musicEnabled.store(options.musicEnabled != 0, std::memory_order_relaxed);
@@ -2921,6 +3013,12 @@ struct Game {
         pendingResonatorBurst = 0; pendingMatryoshkaSplits.clear(); eventCooldown = 35.0f;
         squadTimer = 14.0f;
         ratTimer = 30.0f;
+        activeHoliday = resolveActiveHoliday();
+        // Первый набег — ровно через полминуты и без rand(): лишний вызов
+        // сдвинул бы общий поток случайности, а он задаёт и сцену забега, и
+        // декор под меню. Дальше таймер набега разбрасывается как обычно.
+        holidayWaveTimer = 30.0f;
+        holidayBannerShown = false;
         huntActive = false; huntPackTotal = huntPackRemaining = 0; huntTimer = 0.0f; huntCoinsDropped = 0;
         measuredKillsPerSecond = 0.0f; lowActionTimer = 0.0f; killWindowTimer = 0.0f;
         particles.clear();
@@ -3252,7 +3350,9 @@ struct Game {
     // а в портрете 720×1280 — уже нет.
     static void monsterSilhouette(int type, bool isElite, float& halfW, float& halfH) {
         if (type == RAT_ENEMY_TYPE) { halfW = 22.0f; halfH = 14.0f; return; }
-        halfW = halfH = 20.0f;                       // MONSTER_SPRITES: 40×40
+        // Праздничные персонажи рисуются тем же размером 40x40, но фигура в
+        // единичных координатах выходит за круг: у ведьмы метла, у дракона хвост.
+        halfW = halfH = (type >= HOLIDAY_MONSTER_BASE) ? 23.0f : 20.0f;
         if (isElite) { halfW = halfH = 34.0f; }      // ореол элиты больше спрайта
     }
     // Запас на тряску экрана (screenShake ≤ 1.05 → ±8·1.05·2.5 ≈ 21 px): моб,
@@ -3457,6 +3557,41 @@ struct Game {
         }
     }
 
+    // Какой праздник идёт в этом забеге. Три источника по старшинству:
+    // настройка «праздники выключены» → ручной выбор в настройках → календарь.
+    // Ручной выбор существует ровно для проверки: иначе рождественский скрипт
+    // можно увидеть только в декабре, а это не отладка, а ожидание.
+    // Сегодняшняя дата с учётом сдвига и закреплённого дня стенда.
+    HolidayToday holidayTodayDate() const {
+        if (holidayPinYear > 0 && holidayPinMonth >= 1 && holidayPinMonth <= 12 && holidayPinDay >= 1)
+            return HolidayToday{holidayPinDay, holidayPinMonth, holidayPinYear};
+        return holidayShiftedToday(options.holidayDateShift);
+    }
+
+    HolidayId resolveActiveHoliday(HolidayToday* todayOut = nullptr) const {
+        const HolidayToday today = holidayTodayDate();
+        if (todayOut) *todayOut = today;
+        if (!options.holidaysEnabled) return HOLIDAY_NONE;
+        if (options.holidayOverride >= 0) return (HolidayId)options.holidayOverride;
+        return holidayForDate(today.month, today.day, today.year);
+    }
+
+    // Праздничный набег: стая персонажей одного праздника. Это и есть «скрипт»,
+    // который включает проверка календаря, — не одиночный моб, а заметное
+    // событие, которое игрок узнаёт по персонажу и цвету искр.
+    void spawnHolidayRaid(int holiday, int count) {
+        if (holiday < 0 || holiday >= HOLIDAY_COUNT) return;
+        for (int i = 0; i < count; ++i)
+            spawnMonster(holidayMonsterType(holiday, i % 2), i % 5 == 4, false);
+        char msg[160];
+        snprintf(msg, sizeof(msg), "ПРАЗДНИЧНЫЙ НАБЕГ: %s", HOLIDAY_DEFS[holiday].name);
+        difficultyBanner = msg;
+        difficultyBannerTimer = 4.0f;
+        speakOnly(GMSG_HOSTILE_HORDE, msg);
+        spawnParticles(playerX, playerY, 26, HOLIDAY_DEFS[holiday].glow, 210.0f, 3, true);
+        if (options.screenShakeEnabled) screenShake = std::max(screenShake, 0.10f);
+    }
+
     void spawnMonster(int type, bool isElite, bool isBoss, int bossType = 0, int squadSide = -1, float squadAlong = 0.0f) {
         // Keep the hard world cap inclusive of bosses and summoned units. A boss may
         // displace one regular enemy at the ceiling rather than pushing beyond 520.
@@ -3540,6 +3675,24 @@ struct Game {
             static const float baseSpds[MONSTER_TYPE_COUNT]  = {102.0f, 72.0f, 94.0f, 66.0f, 62.0f, 86.0f, 88.0f, 58.0f, 70.0f, 76.0f, 82.0f, 215.0f};
             static const float baseDmgs[MONSTER_TYPE_COUNT]  = {9.0f,  12.0f, 12.0f, 14.0f, 19.0f, 16.0f, 16.0f, 21.0f, 15.0f, 24.0f, 11.0f, 5.0f};
             static const float baseRads[MONSTER_TYPE_COUNT]  = {13.0f, 15.0f, 16.0f, 15.0f, 20.0f, 18.0f, 17.0f, 21.0f, 16.0f, 23.0f, 18.0f, 7.0f};
+            if (type >= HOLIDAY_MONSTER_BASE) {
+                // Праздничные персонажи: первый в паре — обычный, второй — плотнее
+                // и бьёт сильнее. Значения выводятся из номера праздника, а не из
+                // таблицы на 16 строк: так их не забыть обновить при правке баланса.
+                const int hh = holidayMonsterHoliday(type) % HOLIDAY_COUNT;
+                const int hs = holidayMonsterSlot(type);
+                m.maxHp = (46.0f + hh * 8.0f) * (hs ? 1.55f : 1.0f) * timeScale
+                          * balance.enemyHpMultiplier * phaseHpScale * (isElite ? 3.2f : 1.0f);
+                m.maxHp *= getEnemyOathHpMultiplier();
+                m.hp = m.maxHp;
+                m.speed = (88.0f + (float)(hh % 3) * 7.0f) * (hs ? 0.84f : 1.0f) * (isElite ? 1.12f : 1.0f);
+                m.speed *= getEnemyOathSpeedMultiplier();
+                m.damage = (11.0f + (float)hh) * (hs ? 1.3f : 1.0f) * balance.enemyDamageMultiplier
+                           * (isElite ? 1.4f : 1.0f);
+                m.damage *= getEnemyOathDamageMultiplier();
+                m.radius = (17.0f + (hs ? 3.0f : 0.0f)) * (isElite ? 1.25f : 1.0f);
+                m.isShieldBearer = false;
+            } else {
             const int safeType = std::max(0, std::min(MONSTER_TYPE_COUNT - 1, type));
             m.maxHp = baseHps[safeType] * timeScale * balance.enemyHpMultiplier * phaseHpScale * (isElite ? 3.2f : 1.0f);
             m.maxHp *= getEnemyOathHpMultiplier();
@@ -3551,6 +3704,7 @@ struct Game {
             m.radius = baseRads[safeType] * (isElite ? 1.25f : 1.0f);
             int shieldChance = options.hardModeEnabled ? 105 : 48;
             m.isShieldBearer = !isElite && !m.isMatryoshka && !m.isRat && (rand() % 1000) < shieldChance;
+            }
             if (m.isShieldBearer) { m.shieldHits = 3; m.maxHp *= 1.18f; m.hp = m.maxHp; }
         }
         if (m.isSmart) {
@@ -5316,6 +5470,10 @@ struct Game {
             int t = pickActMonsterType(currentArenaTheme(), maxType);
             const bool matryoshkaSpawn = runTime >= 150.0f && (rand() % 10000) < 250;
             if (matryoshkaSpawn) t = MATRYOSHKA_ENEMY_TYPE;
+            // Праздник не подменяет арену: в обычном потоке каждый седьмой моб
+            // становится праздничным, а раз в полминуты приходит отдельный набег.
+            if (!matryoshkaSpawn && activeHoliday != HOLIDAY_NONE && (rand() % 100) < 15)
+                t = holidayMonsterType(activeHoliday, rand() % 2);
             const float eliteChance = (runTime < 90.0f ? 6.0f : (runTime < 240.0f ? 12.0f : 18.0f)) + getEnemyOathEliteChancePercent();
             bool elite = !matryoshkaSpawn && (runTime > 25.0f) && ((rand() % 10000) < (int)roundf(eliteChance * 100.0f));
             spawnMonster(t, elite, false);
@@ -5329,6 +5487,21 @@ struct Game {
             pendingObjectiveVoiceTimer -= dt;
             if (pendingObjectiveVoiceTimer <= 0.0f && !difficultyBanner.empty())
                 speakOnly(GMSG_MISSION_OBJECTIVE, difficultyBanner);
+        }
+        if (activeHoliday != HOLIDAY_NONE && state == STATE_PLAYING) {
+            if (!holidayBannerShown && runTime > 6.0f) {
+                holidayBannerShown = true;
+                char msg[160];
+                snprintf(msg, sizeof(msg), "СЕГОДНЯ: %s. %s", HOLIDAY_DEFS[activeHoliday].name,
+                         HOLIDAY_DEFS[activeHoliday].tagline);
+                difficultyBanner = msg;
+                difficultyBannerTimer = 5.5f;
+            }
+            holidayWaveTimer -= dt;
+            if (holidayWaveTimer <= 0.0f) {
+                holidayWaveTimer = 38.0f + (float)(rand() % 120) / 10.0f;
+                spawnHolidayRaid(activeHoliday, 5 + (int)(runTime / 90.0f));
+            }
         }
         ratTimer -= dt;
         if (ratTimer <= 0.0f && state == STATE_PLAYING) {
@@ -7039,6 +7212,23 @@ struct Game {
                     r.drawRoundedRect(sx - tw / 2 - 6, labelY, tw + 12, 17, 4, markColor, 1, 190);
                     r.drawTextCentered(FONT_SMALL, sx, labelY + 2, info, markColor, false);
                 }
+            } else if (m.type >= HOLIDAY_MONSTER_BASE) {
+                // Праздничный персонаж рисуется теми же примитивами, что и на
+                // листе design/holidays_sheet.png: спрайтов на 16 фигур нет, а
+                // масштаб 40 px совпадает с обычным мобом.
+                const int hh = holidayMonsterHoliday(m.type) % HOLIDAY_COUNT;
+                const int hs = holidayMonsterSlot(m.type);
+                if (m.isElite) {
+                    const float pulse = 0.5f + 0.5f * sinf(globalTime * 4.2f);
+                    r.addGlow(sx, sy, 28 + (int)(6.0f * pulse), HOLIDAY_DEFS[hh].glow, 96);
+                    r.drawCircleRing(sx, sy + 14, 18, 2, HOLIDAY_DEFS[hh].glow, 190, true);
+                }
+                r.drawShadow(sx, sy + 16, 14, 5);
+                const float bob = sinf((globalTime + m.animOffset) * 3.0f) * 0.05f;
+                HolidayArt art(r, sx, sy, 40, globalTime + m.animOffset, m.hitFlashTimer > 0.0f);
+                art.character((HolidayId)hh, hs, bob);
+                if (m.freezeTimer > 0.0f)
+                    r.drawCircleRing(sx, sy, 20, 2, 0xFFA8E8FF, 200, true);
             } else {
                 r.drawMonsterSprite(sx, sy, m.type, globalTime + m.animOffset, m.hitFlashTimer > 0.0f, m.isElite, m.freezeTimer > 0.0f, m.facing < 0,
                                     m.isRat ? m.ratHeading : 0.0f);
@@ -10363,7 +10553,7 @@ struct Game {
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, headerY + 70, buf, 0xFFFFD88A);
     }
 
-    static constexpr int MAIN_MENU_ITEM_COUNT = 7;
+    static constexpr int MAIN_MENU_ITEM_COUNT = 8;
     static constexpr float MENU_PI = 3.14159265358979323846f;
     static constexpr float MENU_TAU = 6.28318530717958647692f;
     static int menuCenterX() { return SCREEN_W / 2; }
@@ -10493,6 +10683,7 @@ struct Game {
             case 4: hallPage = 0; state = STATE_HALL; break;
             case 5: settingsReturnState = STATE_MENU; state = STATE_SETTINGS; break;
             case 6: exitConfirmationOpen = true; exitDialogFocus = 1; break;
+            case 7: holidayReturnState = STATE_MENU; state = STATE_HOLIDAY; break;
         }
     }
 
@@ -10541,10 +10732,10 @@ struct Game {
         mainMenuFocus = std::clamp(mainMenuFocus, 0, MAIN_MENU_ITEM_COUNT - 1);
 
         static const char* labels[MAIN_MENU_ITEM_COUNT] = {
-            "СЮЖЕТ", "ENDLESS", "КУЗНИЦА", "АРСЕНАЛ", "ЗАЛ СЛАВЫ", "НАСТРОЙКИ", "ВЫХОД"
+            "СЮЖЕТ", "ENDLESS", "КУЗНИЦА", "АРСЕНАЛ", "ЗАЛ СЛАВЫ", "НАСТРОЙКИ", "ВЫХОД", "ПРАЗДНИКИ"
         };
         static const char* subtitles[MAIN_MENU_ITEM_COUNT] = {
-            "ДЕЛА", "ВОЛНЫ", "МАГАЗИН", "СПРАВКА", "РЕЕСТР", "ПАРАМЕТРЫ", "ИЗ ИГРЫ"
+            "ДЕЛА", "ВОЛНЫ", "МАГАЗИН", "СПРАВКА", "РЕЕСТР", "ПАРАМЕТРЫ", "ИЗ ИГРЫ", "КАЛЕНДАРЬ"
         };
         // «28 ДЕЛ» было числом из старого линейного дерева. Теперь на каждой
         // развилке играется одна голова, поэтому за ночь проходится 19 дел, и
@@ -10553,11 +10744,11 @@ struct Game {
         snprintf(storySubtitle, sizeof(storySubtitle), "%d ДЕЛ", campaignRunMissionCount());
         static const uint32_t accents[MAIN_MENU_ITEM_COUNT] = {
             0xFFFFC85A, 0xFF62D8F0, 0xFFFF9C56, 0xFFB58EFF,
-            0xFF76E5B8, 0xFFA6C4FF, 0xFFFF7A83
+            0xFF76E5B8, 0xFFA6C4FF, 0xFFFF7A83, 0xFFFFA23A
         };
         static const uint32_t edgeDim[MAIN_MENU_ITEM_COUNT] = {
             0xFF917142, 0xFF507A89, 0xFF94644A, 0xFF756A91,
-            0xFF4D8170, 0xFF66718A, 0xFF8F5660
+            0xFF4D8170, 0xFF66718A, 0xFF8F5660, 0xFF8F6A3A
         };
 
         fillRadialMenu(r);
@@ -10655,6 +10846,7 @@ struct Game {
             case STATE_HERO_SELECT: return "HERO_SELECT";
             case STATE_CONTROLS_SETUP: return "CONTROLS_SETUP";
             case STATE_BUTTON_LOOK: return "BUTTON_LOOK";
+            case STATE_HOLIDAY: return "HOLIDAY";
         }
         return "?";
     }
@@ -10812,38 +11004,69 @@ struct Game {
         sound.play(SFX_CLICK, 0.015f);
     }
 
+    // ── Геометрия строк настроек ──────────────────────────────────────────────
+    // Одна формула на отрисовку и на стенды. Раньше высота строки считалась
+    // только в renderSettingsMenu, а android_smoke угадывал её числом 32/40 и
+    // после появления строки «Праздники» начал нажимать мимо.
+    int settingsRowsTop() const { return (SCREEN_W < SCREEN_H) ? 146 : 88; }
+    int settingsRowGap() const { return (SCREEN_W < SCREEN_H) ? 8 : 2; }
+    int settingsRowHeight(int rowCount) const {
+        const int gap = settingsRowGap();
+        const int top = settingsRowsTop();
+        if (SCREEN_W < SCREEN_H) {
+            // Резерв снизу: отступ, два ползунка громкости и три строки справки.
+            const int bottomLimit = SCREEN_H - 76 - 8;
+            const int reserve = 20 + 2 * (52 + 6) + 3 * FONT_SMALL.lineHeight + 12;
+            const int avail = std::max(0, bottomLimit - top - reserve - rowCount * gap);
+            return std::max(34, std::min(58, avail / rowCount));
+        }
+        // В альбоме строки тоже считаются от свободного места: после добавления
+        // строки «Праздники» на 800×600 ползунки и справка уезжали за нижний
+        // край. Резерв — два ползунка и две строки текста.
+        const int reserve = 20 + 2 * (38 + 6) + 2 * FONT_SMALL.lineHeight + 16;
+        const int avail = std::max(0, SCREEN_H - top - reserve - rowCount * gap);
+        return std::max(24, std::min(touchControls ? 32 : 34, avail / rowCount));
+    }
+    // Индекс строки «Размер кнопок касания»: на телефоне она последняя, и
+    // сдвигается, как только в настройки добавляется ещё одна строка.
+    int settingsTouchSizeRow() const { return touchControls ? 11 : -1; }
+
     void renderSettingsMenu(Renderer& r) {
         static int lastRefreshSecond = -1;
         if ((int)globalTime != lastRefreshSecond) { lastRefreshSecond = (int)globalTime; refreshVoiceStats(); }
         renderSubmenuFrame(r, "НАСТРОЙКИ", "shadow_survivors.cfg • звук • эффекты • графика • стиль иконок • карта кампании");
 
-        // Одиннадцатая строка — размер кнопок касания. На Windows кнопок касания
-        // нет, поэтому там строк десять и раскладка прежняя: настройка, которой
-        // нечего менять, только сбивает с толку.
-        const int rowCount = touchControls ? 11 : 10;
-        const char* labels[11] = {
+        // Одиннадцатая строка — размер кнопок касания и она только на Android:
+        // на Windows кнопок касания нет, и настройка, которой нечего менять,
+        // только сбивает с толку. Предпоследняя строка — календарь праздников:
+        // это не переключатель, а вход в отдельный экран.
+        const int rowCount = touchControls ? 12 : 11;
+        const char* labels[12] = {
             "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
             "Советник по сборке (ИИ)", "БЕЗДНА — давление выше; пауэрапы только с умных", "Следы снарядов",
             "Стиль иконок предметов", "Озвучка сообщений в бою",
             "Карта кампании: змейка снизу вверх или карта актами",
             "Графика: авто держит 60 fps и снижает эффекты само",
+            "Праздники: календарь, окна и проверка любого праздника",
             "Размер кнопок касания: крупный палец или маленький экран"
         };
         // Narrow portraits need shorter labels: the ВКЛ/ВЫКЛ value is right-aligned on the row.
-        static const char* labelsPortrait[11] = {
+        static const char* labelsPortrait[12] = {
             "Звуковые эффекты", "Эффекты попаданий", "Тряска камеры",
             "Советник по сборке (ИИ)", "БЕЗДНА — сложнее", "Следы снарядов",
             "Стиль иконок предметов", "Озвучка сообщений в бою",
             "Карта кампании",
             "Графика",
+            "Праздники",
             "Размер кнопок"
         };
-        const bool values[11] = {
+        const bool values[12] = {
             sound.enabled.load(std::memory_order_relaxed), options.hitEffectsEnabled != 0,
             options.screenShakeEnabled != 0, options.advisorEnabled != 0,
             options.hardModeEnabled != 0, options.projectileTrailsEnabled != 0, options.skillIconStyle != 0,
             options.messageSpeechEnabled != 0, options.campaignSnakeMap != 0,
             options.graphicsLevel != 0,
+            options.holidaysEnabled != 0,
             options.touchButtonScale != TOUCH_SIZE_DEFAULT   // зелёный только если не по умолчанию
         };
         const bool portraitLayout = SCREEN_W < SCREEN_H;
@@ -10858,16 +11081,12 @@ struct Game {
         // ползунки громкости уезжают под кнопку «назад». В портрете наоборот:
         // высоты экрана много, и шаг строк растягивается под неё, иначе
         // настройки жмутся к шапке, а под ними — пустое поле.
-        const int startY = portraitLayout ? 146 : 88;
-        const int gap = portraitLayout ? 8 : 2;
-        int h = touchControls ? 32 : 34;
-        if (portraitLayout) {
-            // Резерв снизу: отступ, два ползунка громкости и три строки справки.
-            const int bottomLimit = SCREEN_H - 76 - 8;
-            const int reserve = 20 + 2 * (52 + 6) + 3 * FONT_SMALL.lineHeight + 12;
-            const int avail = std::max(0, bottomLimit - startY - reserve - rowCount * gap);
-            h = std::max(34, std::min(58, avail / rowCount));
-        }
+        const int startY = settingsRowsTop();
+        const int gap = settingsRowGap();
+        // Высота строки — из общей функции: по ней же считает стенд Android,
+        // иначе проверка нажимала «размер кнопок» мимо строки, как только
+        // настройки прибавили ещё одну.
+        const int h = settingsRowHeight(rowCount);
         char stateText[28];
         for (int i = 0; i < rowCount; ++i) {
             int y = startY + i * (h + gap);
@@ -10881,16 +11100,26 @@ struct Game {
             }
             else if (i == 8) snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ЗМЕЙКА" : "КАРТА");
             else if (i == 9) snprintf(stateText, sizeof(stateText), "%s", graphicsLevelName(options.graphicsLevel));
-            else if (i == 10) snprintf(stateText, sizeof(stateText), "%d%%", options.touchButtonScale);
+            else if (i == 10) snprintf(stateText, sizeof(stateText), "%s", options.holidaysEnabled ? "КАЛЕНДАРЬ" : "ВЫКЛ");
+            else if (i == 11) snprintf(stateText, sizeof(stateText), "%d%%", options.touchButtonScale);
             else snprintf(stateText, sizeof(stateText), "%s", values[i] ? "ВКЛ" : "ВЫКЛ");
             // Подпись ужимается под правый столбец значений: на 960×720 (такой
             // кадр рисуется в окне 800×600 и на телефоне) длинная строка про
             // графику иначе наезжала на «ВЫСОКОЕ».
             const int stateW = r.textWidth(FONT_MED, stateText);
             const std::string rowLabel = fitText(r, FONT_MED, rowLabels[i], w - 48 - stateW - 16);
-            r.drawText(FONT_MED, x + 24, y + 12, rowLabel.c_str(), 0xFFEAE4F8);
+            // По центру строки, а не на фиксированные 12 px: при сжатых строках
+            // (800×600) подпись прижималась к нижней рамке.
+            r.drawText(FONT_MED, x + 24, y + std::max(2, (h - 17) / 2), rowLabel.c_str(), 0xFFEAE4F8);
             r.drawTextRight(FONT_MED, x + w - 24, y + (h - 18) / 2, stateText, values[i] ? 0xFF68F0A0 : 0xFFFF8B98);
-            if (mouseClicked && hov) toggleOption(i + 1);
+            // Строка календаря открывает экран, а не переключает значение: сам
+            // переключатель живёт внутри, рядом со списком окон.
+            if (mouseClicked && hov) {
+                // Строка календаря открывает экран, а не переключает значение:
+                // сам переключатель живёт внутри, рядом со списком окон.
+                if (i == 10) { holidayReturnState = STATE_SETTINGS; state = STATE_HOLIDAY; }
+                else toggleOption(i == 11 ? 11 : i + 1);
+            }
         }
 
         const int volumeY = startY + rowCount * (h + gap) + 20;
@@ -11099,6 +11328,336 @@ struct Game {
         options.touchButtonOpacity = touchStepOpacity(options.touchButtonOpacity, direction);
         saveOptions();
         sound.play(SFX_CLICK, 0.02f);
+    }
+
+    // ── Календарь праздников ───────────────────────────────────────────────────
+    // Экран отвечает на три вопроса сразу, потому что иначе их пришлось бы
+    // выяснять по коду: когда окно, что в нём появляется и что сейчас.
+    //   • список восьми праздников с датами и статусом («идёт», «через N дней»);
+    //   • лента года: по дню на пиксель, цветные дни — окно выбранного праздника;
+    //   • четыре символа и два персонажа, которые этот праздник приводит в игру.
+    // Внизу — три переключателя: праздники вкл/выкл, проверка (ручной выбор
+    // праздника) и сдвиг даты. Это и есть отладка без секретных кодов.
+    int holidayDaysUntil(HolidayId id, int month, int day, int year) const {
+        if (holidayIsActive(id, month, day, year)) return 0;
+        int m = month, d = day;
+        for (int i = 1; i <= 366; ++i) {
+            if (++d > holidayDaysInMonth(m, year)) { d = 1; if (++m > 12) m = 1; }
+            if (holidayIsActive(id, m, d, year)) return i;
+        }
+        return -1;
+    }
+
+    void renderHolidays(Renderer& r) {
+        const bool portrait = SCREEN_W < SCREEN_H;
+        r.fillRect(0, 0, SCREEN_W, SCREEN_H, 0xFF0C0913, 255);
+        const HolidayToday today = holidayTodayDate();
+        const HolidayId live = resolveActiveHoliday();
+
+        // Шапка: какой год и что сегодня. Активный праздник красится в свой цвет,
+        // чтобы экран отвечал «что сейчас идёт» с одного взгляда.
+        r.fillRect(0, 0, SCREEN_W, 52, 0xFF151021, 255);
+        r.drawText(FONT_MED, 16, 12, "ПРАЗДНИКИ", 0xFFFFE6C4);
+        char head[160];
+        if (live != HOLIDAY_NONE) {
+            const int left = holidayDaysLeft(live, today.month, today.day, today.year);
+            snprintf(head, sizeof(head), "%d ГОД • СЕГОДНЯ %d %s • %s (ещё %d дн.)", today.year,
+                     today.day, holidayMonthName(today.month), holidayName(live), left);
+        } else {
+            snprintf(head, sizeof(head), "%d ГОД • СЕГОДНЯ %d %s • ПРАЗДНИКА НЕТ", today.year,
+                     today.day, holidayMonthName(today.month));
+        }
+        const uint32_t liveColor = live != HOLIDAY_NONE ? HOLIDAY_DEFS[live].glow : 0xFF9C93B8;
+        r.drawText(FONT_SMALL, 16, 32, fitText(r, FONT_SMALL, head, SCREEN_W - 32).c_str(), liveColor);
+        r.drawRect(0, 51, SCREEN_W, 1, 0xFF3A3050, 255);
+
+        const int footerH = portrait ? 132 : 62;
+        const int bodyTop = 58, bodyBottom = SCREEN_H - footerH;
+        const int listH = portrait ? std::min(236, (bodyBottom - bodyTop) * 40 / 100) : bodyBottom - bodyTop;
+        const int listW = portrait ? SCREEN_W - 32 : std::min(360, SCREEN_W * 36 / 100);
+        const int listX = 16, listY = bodyTop;
+
+        // ── Список праздников ─────────────────────────────────────────────────
+        const int rowH = std::max(24, std::min(72, listH / HOLIDAY_COUNT));
+        for (int i = 0; i < HOLIDAY_COUNT; ++i) {
+            const HolidayDef& def = HOLIDAY_DEFS[i];
+            const int y = listY + i * rowH;
+            const bool sel = i == holidayCursor;
+            const bool on = holidayIsActive((HolidayId)i, today.month, today.day, today.year);
+            r.fillRect(listX, y, listW, rowH - 2, sel ? 0xFF241C38 : 0xFF171222, 255);
+            r.fillRect(listX, y, 5, rowH - 2, def.c1, 255);
+            if (sel) r.drawRect(listX, y, listW, rowH - 2, def.glow, 2);
+            char win[64], status[48];
+            holidayWindowText((HolidayId)i, today.year, win, sizeof(win));
+            const int until = holidayDaysUntil((HolidayId)i, today.month, today.day, today.year);
+            // Короткий статус: «ЧЕРЕЗ 132 ДН.» не помещался рядом с длинным
+            // названием и вытеснял его в многоточие.
+            if (!options.holidaysEnabled) snprintf(status, sizeof(status), "ВЫКЛ");
+            else if (on) snprintf(status, sizeof(status), "ИДЁТ • %d", holidayDaysLeft((HolidayId)i, today.month, today.day, today.year));
+            else if (until < 0) snprintf(status, sizeof(status), "—");
+            else snprintf(status, sizeof(status), "%d ДН.", until);
+            const uint32_t statusColor = !options.holidaysEnabled ? 0xFF8A82A8 : (on ? def.glow : 0xFF9C93B8);
+            const int statusW = r.textWidth(FONT_SMALL, status);
+            // В узком списке (800×600) «ДЕНЬ ВЛЮБЛЁННЫХ» шрифтом MED не влезал
+            // и обрезался; мелкий шрифт влезает целиком, а читается так же.
+            const BakedFont& nameFont = listW < 330 ? FONT_SMALL : FONT_MED;
+            const std::string name = fitText(r, nameFont, def.name, listW - 24 - statusW - 14);
+            r.drawText(nameFont, listX + 14, y + (rowH - (listW < 330 ? 14 : 20)) / 2, name.c_str(),
+                       sel ? 0xFFFFF0D8 : 0xFFDDD5EC);
+            r.drawTextRight(FONT_SMALL, listX + listW - 10, y + (rowH - 14) / 2, status, statusColor);
+            if (rowH >= 44) {
+                // На 800×600 строка окна ложилась на нижнюю границу карточки и
+                // читалась как обрезанная: отступаем от края на две строки.
+                r.drawText(FONT_SMALL, listX + 14, y + rowH - 20, win, 0xFF7E769A);
+            }
+            if (mouseClicked && mouseX >= listX && mouseX <= listX + listW && mouseY >= y && mouseY <= y + rowH - 2) {
+                holidayCursor = i;
+                sound.play(SFX_CLICK, 0.02f);
+            }
+        }
+
+        // ── Правая (или нижняя) часть: выбранный праздник ─────────────────────
+        const int detX = portrait ? 16 : listX + listW + 14;
+        const int detY = portrait ? listY + listH + 6 : bodyTop;
+        const int detW = portrait ? SCREEN_W - 32 : SCREEN_W - detX - 16;
+        const int detH = bodyBottom - detY;
+        const HolidayDef& sel = HOLIDAY_DEFS[holidayCursor % HOLIDAY_COUNT];
+        r.fillRect(detX, detY, detW, detH, 0xFF131020, 255);
+        r.drawRect(detX, detY, detW, detH, sel.glow, 1);
+        r.fillRect(detX, detY, detW, 3, sel.c1, 255);
+        r.drawText(FONT_MED, detX + 12, detY + 8, sel.name, sel.glow);
+        r.drawText(FONT_SMALL, detX + 12, detY + 32,
+                   fitText(r, FONT_SMALL, sel.tagline, detW - 24).c_str(), 0xFFD8D0E8);
+        char window[64];
+        holidayWindowText((HolidayId)holidayCursor, today.year, window, sizeof(window));
+        char windowLine[128];
+        snprintf(windowLine, sizeof(windowLine), "ОКНО: %s", window);
+        r.drawText(FONT_SMALL, detX + 12, detY + 48, windowLine, 0xFF8A82A8);
+
+        // Лента года: по одному дню на 2 px. По ней видно длину окна и его
+        // положение среди месяцев — то, ради чего вообще нужен календарь.
+        const int stripX = detX + 12, stripY = detY + 70;
+        const int stripW = detW - 24, stripH = 22;
+        const int daysInYear = holidayDaysInMonth(2, today.year) == 29 ? 366 : 365;
+        const float pxPerDay = (float)stripW / (float)daysInYear;
+        r.fillRect(stripX, stripY, stripW, stripH, 0xFF0A0813, 255);
+        const int todayDoy = holidayDayOfYear(today.month, today.day, today.year);
+        // Окно красится цельным куском от первого дня до последнего: если
+        // рисовать по дню, округление оставляет волосяные щели и полоса
+        // выглядит полосатой.
+        {
+            int runStart = -1;
+            for (int d = 0; d <= daysInYear; ++d) {
+                int m = 1, dd = d + 1;
+                while (dd > holidayDaysInMonth(m, today.year)) { dd -= holidayDaysInMonth(m, today.year); ++m; }
+                const bool onDay = d < daysInYear && holidayIsActive((HolidayId)holidayCursor, m, dd, today.year);
+                if (onDay && runStart < 0) runStart = d;
+                if (!onDay && runStart >= 0) {
+                    const int xa = stripX + (int)(runStart * pxPerDay);
+                    const int xb = stripX + (int)(d * pxPerDay);
+                    r.fillRect(xa, stripY + 2, std::max(2, xb - xa), stripH - 4, sel.c1, 255);
+                    runStart = -1;
+                }
+            }
+            const int todayX = stripX + (int)(todayDoy * pxPerDay);
+            r.fillRect(todayX, stripY - 3, std::max(2, (int)pxPerDay + 1), stripH + 6, 0xFFFFFFFF, 235);
+        }
+        for (int m = 1; m <= 12; ++m) {
+            const float fx = (float)holidayDayOfYear(m, 1, today.year) / (float)daysInYear;
+            const int x = stripX + (int)(fx * stripW);
+            r.fillRect(x, stripY + stripH, 1, 4, 0xFF4A4060, 255);
+        }
+        r.drawText(FONT_SMALL, stripX, stripY + stripH + 6, "ЯНВАРЬ → ДЕКАБРЬ, БЕЛАЯ ЧЕРТА — СЕГОДНЯ", 0xFF7E769A);
+
+        // Символы и персонажи: ровно те фигуры, что появятся в бою.
+        const int artTop = stripY + stripH + 28;
+        // В широкой панели шесть клеток стоят в строку: четыре символа по
+        // восьмой ширины и два персонажа по четверти. В узкой (800×600) так
+        // получалось 45 px на клетку, и подписи сжимались в «П…» — там
+        // символы идут своим рядом, персонажи своим.
+        const int artRoom = detW - 28;
+        const bool stackedArt = artRoom / 8 < 74;
+        const int symW = stackedArt ? artRoom / 4 : std::max(44, std::min(120, artRoom / 8));
+        const int charCellW = stackedArt ? artRoom / 2 : std::max(84, std::min(210, artRoom / 4));
+        int artSize, charSize;
+        if (portrait) {
+            // В портрете под рисунками полэкрана пустого места: символы и
+            // персонажи рисуются крупнее, чтобы календарь не выглядел пустым.
+            artSize = std::max(56, std::min(96, symW - 10));
+            charSize = std::min(std::min(artSize + 24, charCellW - 12), 128);
+        } else if (stackedArt) {
+            // На 800×600 каждый пиксель по счёту: рисунки мельче, зато внизу
+            // помещается «год целиком» — ради него календарь и сделан.
+            artSize = std::max(28, std::min(34, std::min(symW - 44, detH / 14)));
+            charSize = std::max(36, std::min(44, std::min(charCellW - 76, detH / 12)));
+        } else {
+            artSize = std::max(30, std::min(78, std::min(detH / 6, symW - 8)));
+            charSize = std::min(std::min(artSize + 16, charCellW - 12), 96);
+        }
+        const int charRowY = stackedArt ? artTop + artSize + 36 : artTop;
+        const int artBottom = stackedArt ? charRowY + charSize + 20 : artTop + charSize + 20;
+        // Подпись с переносом по словам: «Фонарь Джека» и «Крашенка-каталка» в
+        // клетку не влезают и превращались в «Фонарь Д…». Если и одно слово
+        // шире клетки, оно рисуется как есть: обрезать имя хуже, чем показать.
+        auto caption = [&](const char* text, int cx, int y, int width, uint32_t color) {
+            const std::string full = text;
+            const size_t split = full.rfind(' ');
+            if (r.textWidth(FONT_SMALL, full.c_str()) <= width) {
+                r.drawTextCentered(FONT_SMALL, cx, y, full.c_str(), color);
+                return;
+            }
+            if (split == std::string::npos) {
+                // Одно слово шире клетки («Призрак» на 800×600): ужимаем его, а
+                // не вылезаем на соседнюю подпись.
+                r.drawTextCentered(FONT_SMALL, cx, y, fitText(r, FONT_SMALL, full.c_str(), width).c_str(), color);
+                return;
+            }
+            r.drawTextCentered(FONT_SMALL, cx, y, full.substr(0, split).c_str(), color);
+            r.drawTextCentered(FONT_SMALL, cx, y + 14, full.substr(split + 1).c_str(), color);
+        };
+        int ax = detX + 14;
+        for (int i = 0; i < 4; ++i) {
+            HolidayArt a(r, ax + symW / 2, artTop + artSize / 2, artSize, globalTime * 0.8f);
+            a.symbol((HolidayId)holidayCursor, i);
+            caption(sel.symbols[i], ax + symW / 2, artTop + artSize + 4, symW - 10, 0xFF8A82A8);
+            ax += symW;
+        }
+        // Персонажи крупнее и на своей подложке: их видно в бою 40 px, и на
+        // экране надо показать, кого именно игрок узнает в толпе.
+        // В узкой панели персонажи идут своим рядом, в широкой — продолжают
+        // строку символов; сбрасывать ax в обоих случаях нельзя, иначе они
+        // наезжают на символы.
+        if (stackedArt) ax = detX + 14;
+        for (int i = 0; i < 2; ++i) {
+            const int cx = ax + charCellW / 2;
+            r.fillRect(cx - charCellW / 2 + 4, charRowY - 4, charCellW - 8, charSize + 26, 0xFF1E1730, 255);
+            HolidayArt a(r, cx, charRowY + charSize / 2 - 2, charSize, globalTime);
+            a.character((HolidayId)holidayCursor, i, sinf(globalTime * 2.0f + i) * 0.04f);
+            caption(sel.characters[i], cx, charRowY + charSize + 4, charCellW - 12, sel.glow);
+            ax += charCellW;
+        }
+
+        // Что праздник делает в бою: без этих строк экран отвечал бы «когда»,
+        // но не «что будет», и праздничный набег выглядел бы случайностью.
+        {
+            const int infoLines = stackedArt ? 2 : 3;
+            const int infoY = artBottom + 24;
+            if (infoY + infoLines * 18 < detY + detH) {
+                r.fillRect(detX + 12, infoY - 8, detW - 24, 1, 0xFF3A3050, 255);
+                char line[160];
+                snprintf(line, sizeof(line), "В БОЮ: 15%% МОБОВ — ПЕРСОНАЖИ ПРАЗДНИКА, ИСКРЫ ЦВЕТА #%06X",
+                         (unsigned)(sel.glow & 0xFFFFFF));
+                r.drawText(FONT_SMALL, detX + 12, infoY, fitText(r, FONT_SMALL, line, detW - 24).c_str(), 0xFFC8BCE0);
+                snprintf(line, sizeof(line), "РАЗ В 38–50 СЕК — НАБЕГ: %s И %s", sel.characters[0], sel.characters[1]);
+                r.drawText(FONT_SMALL, detX + 12, infoY + 18, fitText(r, FONT_SMALL, line, detW - 24).c_str(), 0xFFC8BCE0);
+                if (infoLines >= 3) {
+                    // В узкой панели третья строка съедала место у «года
+                    // целиком»; там про календарь говорит кнопка «ПРОВЕРКА».
+                    const char* note = options.holidayOverride >= 0
+                                           ? "ПРОВЕРКА ВКЛЮЧЕНА: ПРАЗДНИК ИДЁТ ВНЕ СВОЕГО ОКНА"
+                                           : "ПРАЗДНИК ВКЛЮЧАЕТСЯ САМ, ПО ДАТЕ ПО КАЛЕНДАРЮ";
+                    r.drawText(FONT_SMALL, detX + 12, infoY + 36,
+                               fitText(r, FONT_SMALL, note, detW - 24).c_str(),
+                               options.holidayOverride >= 0 ? 0xFFFFC85A : 0xFF8A82A8);
+                }
+            }
+        }
+
+        // Год целиком: по полосе на праздник. Так видно не только выбранное
+        // окно, но и как они стоят относительно друг друга и где пересекаются.
+        {
+            // Строки разнесены на 17 px и подписаны: без подписей восемь
+            // цветных полос ничего не сообщают — не понятно, чья полоса где.
+            // Полосы растягиваются по свободной высоте панели: в портрете под
+            // ними оставалась половина экрана пустой, и восемь окон терялись
+            // в углу вместо того, чтобы занять его.
+            const int infoBottom = artBottom + 24 + (stackedArt ? 2 : 3) * 18 + 14;
+            const int labelW = std::min(150, detW / 4);
+            // Короткие подписи: полное «ДЕНЬ СВЯТОГО ПАТРИКА» в строку ленты не
+            // влезает и превращалось в «ДЕНЬ СВ…».
+            static const char* shortNames[HOLIDAY_COUNT] = {
+                "ХЭЛЛОУИН", "НОВЫЙ ГОД", "ВАЛЕНТИН", "ПАТРИК",
+                "ПАСХА", "МАСЛЕНИЦА", "ЛУННЫЙ", "КУПАЛА"};
+            const int roomRows = (detY + detH - 14 - (infoBottom + 22)) / HOLIDAY_COUNT;
+            const int rowStep = std::max(15, std::min(portrait ? 72 : 44, roomRows));
+            const int gyBottom = detY + detH - 14 - rowStep * HOLIDAY_COUNT;
+            // Полосы жмутся к тексту, но не за край панели: в портрете блок
+            // уезжал вниз, оставляя посреди экрана пустую дыру.
+            const int gy = std::max(infoBottom + 22, gyBottom);
+            if (gy + rowStep * HOLIDAY_COUNT <= detY + detH - 8 && gy >= infoBottom + 8) {
+                r.drawText(FONT_SMALL, stripX, gy - 20, "ГОД ЦЕЛИКОМ: ВОСЕМЬ ОКОН И ИХ ПЕРЕСЕЧЕНИЯ", 0xFF7E769A);
+                for (int i = 0; i < HOLIDAY_COUNT; ++i) {
+                    const int rowY = gy + i * rowStep;
+                    r.drawText(FONT_SMALL, stripX, rowY + 1,
+                               shortNames[i % HOLIDAY_COUNT],
+                               i == holidayCursor ? HOLIDAY_DEFS[i].glow : 0xFF9C93B8);
+                    const int barH = std::max(8, rowStep - 6);
+                    r.fillRect(stripX + labelW, rowY, stripW - labelW, barH, 0xFF0F0C18, 255);
+                    const uint32_t col = (i == holidayCursor) ? HOLIDAY_DEFS[i].glow : HOLIDAY_DEFS[i].c1;
+                    {
+                        const float scale = (float)(stripW - labelW) / (float)daysInYear;
+                        int runStart = -1;
+                        for (int d = 0; d <= daysInYear; ++d) {
+                            int m2 = 1, dd2 = d + 1;
+                            while (dd2 > holidayDaysInMonth(m2, today.year)) { dd2 -= holidayDaysInMonth(m2, today.year); ++m2; }
+                            const bool onDay = d < daysInYear && holidayIsActive((HolidayId)i, m2, dd2, today.year);
+                            if (onDay && runStart < 0) runStart = d;
+                            if (!onDay && runStart >= 0) {
+                                const int xa = stripX + labelW + (int)(runStart * scale);
+                                const int xb = stripX + labelW + (int)(d * scale);
+                                r.fillRect(xa, rowY, std::max(2, xb - xa), barH, col, 255);
+                                runStart = -1;
+                            }
+                        }
+                    }
+                    if (holidayIsActive((HolidayId)i, today.month, today.day, today.year)) {
+                        const int x = stripX + labelW + (int)((float)todayDoy * (float)(stripW - labelW) / (float)daysInYear);
+                        r.fillRect(x, rowY - 1, 2, barH + 2, 0xFFFFFFFF, 255);
+                    }
+                }
+            }
+        }
+
+        // ── Переключатели ────────────────────────────────────────────────────
+        const int barY = bodyBottom + 6, barH = portrait ? 32 : footerH - 26;
+        const int barW = portrait ? (SCREEN_W - 32) : std::min(360, (SCREEN_W - 48) / 3);
+        // В портрете три кнопки стоят столбиком: в строку они не влезают, и
+        // раньше две из трёх уезжали за правый край экрана.
+        auto button = [&](int index, const char* text, uint32_t color) {
+            const int bx = portrait ? 16 : 16 + index * (barW + 8);
+            const int by = portrait ? barY + index * (barH + 4) : barY;
+            if (bx + barW > SCREEN_W - 8) return false;
+            const int h = barH;
+            const bool hov = mouseX >= bx && mouseX <= bx + barW && mouseY >= by && mouseY <= by + h;
+            r.fillRoundedRect(bx, by, barW, h, 6, hov ? 0xFF2A2040 : 0xFF1A1428);
+            r.drawRoundedRect(bx, by, barW, h, 6, hov ? 0xFFFFD858 : color, hov ? 2 : 1);
+            r.drawTextCentered(FONT_SMALL, bx + barW / 2, by + (h - 14) / 2, text, color);
+            return mouseClicked && hov;
+        };
+        char b1[64], b2[64], b3[48];
+        snprintf(b1, sizeof(b1), "ПРАЗДНИКИ: %s", options.holidaysEnabled ? "ВКЛ" : "ВЫКЛ");
+        if (options.holidayOverride < 0) snprintf(b2, sizeof(b2), "ПРОВЕРКА: ПО КАЛЕНДАРЮ");
+        else snprintf(b2, sizeof(b2), "ПРОВЕРКА: %s", holidayName((HolidayId)options.holidayOverride));
+        snprintf(b3, sizeof(b3), "СДВИГ ДАТЫ: %+d ДН.", options.holidayDateShift);
+        if (button(0, b1, options.holidaysEnabled ? 0xFF68DDA0 : 0xFFFF8B98)) {
+            options.holidaysEnabled = options.holidaysEnabled ? 0 : 1;
+            saveOptions(); sound.play(SFX_CLICK, 0.02f);
+        }
+        if (button(1, b2, options.holidayOverride < 0 ? 0xFFA6C4FF : 0xFFFFD858)) {
+            options.holidayOverride = options.holidayOverride >= HOLIDAY_COUNT - 1 ? -1 : options.holidayOverride + 1;
+            saveOptions(); sound.play(SFX_CLICK, 0.02f);
+        }
+        if (button(2, b3, options.holidayDateShift == 0 ? 0xFF8A82A8 : 0xFFFFC85A)) {
+            options.holidayDateShift = options.holidayDateShift >= 42 ? 0 : options.holidayDateShift + 7;
+            saveOptions(); sound.play(SFX_CLICK, 0.02f);
+        }
+        if (!portrait) {
+            // Подсказка ужимается под ширину: на 800×600 полный список клавиш
+            // не влезал и обрезался на «• БЕЛ…».
+            const std::string hint = keyHint("↑↓ — ПРАЗДНИК • ←→ — ПРОВЕРКА • [ ] — СДВИГ ДАТЫ • H — ВКЛ/ВЫКЛ • ESC — НАЗАД");
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 16,
+                               fitText(r, FONT_SMALL, hint.c_str(), SCREEN_W - 24).c_str(), 0xFFAAA0C8);
+        }
     }
 
     void renderButtonLook(Renderer& r) {
@@ -11567,6 +12126,7 @@ struct Game {
             "2.10.54 • РАЗМЕР КНОПОК КАСАНИЯ В НАСТРОЙКАХ",
             "2.10.55 • ВНЕШНИЙ ВИД КНОПОК: СТИЛЬ, ЦВЕТ, ПРОЗРАЧНОСТЬ",
             "2.10.56 • ТЛЕЮЩАЯ ТРОПА: СОРОК ПЕРВЫЙ ПРЕДМЕТ",
+            "2.11.0 • ПРАЗДНИКИ: ВОСЕМЬ ОКОН В КАЛЕНДАРЕ",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -11719,6 +12279,7 @@ struct Game {
             "Размер кнопок на телефоне теперь настройка, а не удача экрана.\n• В настройках появилась строка «Размер кнопок касания»: 80, 90, 100, 110, 125, 140 и 160 %. Касание листает ступени по кругу, на клавиатуре с Android работают + и −.\n• Меняется всё сразу и одной пропорцией: кнопки СУПЕР и РЫВОК, крестовина, стик, его шайба и служебные кнопки паузы и отладки. На 160 % кнопка рывка 147 px, на 80 % — 74 px.\n• Размер можно выбрать не только в настройках: на экране «УПРАВЛЕНИЕ» под карточками схем есть ползунок «РАЗМЕР КНОПОК» с «−» и «+», и превью схем сверху сразу рисуется выбранным размером.\n• Превью в карточках схем тоже масштабируется: видно, каким станет управление, а не «как-нибудь».\n• Кнопка не может вырасти во вред: если кадр узкий (окно в сплите), размер ужимается по экрану, и оверлей рисует ровно ту же кнопку, которая нажимается, — цифра в настройках остаётся вашей, а фактический процент виден в раскладке.\n• Подписи не вылезают за кнопку: если «РЫВОК» шире кнопки, обе кнопки действия переходят на короткую форму («СУП», «РЫВ»), а не обрезаются по одной.\n• Файл настроек вырос с 68 до 72 байт; прежний читается как есть, размер в нём считается обычным (100 %).\n• Стенды: touch_probe — 151 проверка (ступени по кругу, кнопки в кадре на любом проценте, стик растёт вместе с кнопками, узкий кадр ужимает размер, подпись всегда влезает), android_smoke — 41 (строка настроек меняет размер, раскладка боя следует за настройкой, новое значение ложится в файл). Мутации: раскладка игнорирует настройку, нет страховки узкого экрана, строка ничего не делает — пойманы все три.\n• На Windows строки про размер кнопок нет: там нет кнопок касания, и настройка, которой нечего менять, только путает. Экран настроек десктопа совпал с 2.10.53 до пикселя.\n• Честно: APK не собирался, на телефоне не запускался. Размер под большой палец окончательно подбирается только на устройстве.",
             "Кнопки касания теперь можно одеть под себя, а не только увеличить.\n• Четыре стиля: СТЕКЛО (как было), ПЛОТНЫЕ (заливка цветом темы — кнопку видно на светлом полу), КОНТУР (без заливки, видно бой сквозь кнопку) и КРУГ (круглые кнопки, не спутать с интерфейсом).\n• Четыре цвета: ЯНТАРЬ (прежние янтарь и лёд), НЕОН (розовый и мятный), МОНО (серый по чёрному) и УГЛИ (оранжевый со стальным). Цвет меняет кнопки, крестовину и стик, интерфейс игры остаётся своим.\n• Прозрачность: 40, 55, 70, 85, 100 % — насколько залита кнопка; рамка и подпись читаются на любом значении.\n• Всё это на одном экране «ВНЕШНИЙ ВИД КНОПОК»: четыре строки, большое превью текущей схемы в пропорциях экрана и легенда «ОБЫЧНО / НАЖАТО». Превью рисует та же функция, что бой, поэтому карточка не может разойтись с игрой.\n• Открыть можно с экрана «УПРАВЛЕНИЕ» (строка «ВНЕШНИЙ ВИД: …») или клавишей L. Сброс — одна кнопка «СБРОСИТЬ ВНЕШНИЙ ВИД»; размер кнопок сброс не трогает.\n• Файл настроек вырос с 72 до 84 байт: прежний читается как есть, внешний вид в нём — стекло, янтарь, 100 %.\n• Стенды: touch_probe — 166 проверок (границы и ступени стилей, цветов и прозрачности, разные настройки дают разные кадры, превью совпадает с настройками), android_smoke — 48 (вход в экран, листание трёх строк, все стили и цвета рисуются, вид ложится в файл, сброс не трогает размер). Мутации: стиль игнорируется, тема игнорируется, строка ничего не делает — пойманы все три.\n• Листы: design/touch_styles.png (четыре стиля), design/touch_themes.png (четыре цвета), design/touch_look.png и design/touch_look_portrait.png (сам экран).\n• Честно: APK не собирался, на телефоне не проверялось. Как читается цвет на солнце и в темноте, видно только на устройстве.",
             "Сорок первый предмет — «Тлеющая Тропа», тир IV, три ранга. Это не ещё одно срабатывание по событию: предмет работает от шага и оставляет след на полу.\n• Пока герой идёт, каждые 0,16 с под ним остаётся метка; метка живёт 2,6 с, хвост не длиннее 14 меток. Стоя на месте след не появляется вовсе — стенд проверяет это отдельно.\n• Враги на метке получают 6/9/12 урона раз в 0,55/0,50/0,45 с, радиус следа 24/28/32 px. Ожог не критует, и несколько меток подряд не складывают урон: тик общий на всю тропу, а не на каждую метку.\n• Резонатор тропой не горит (это постройка, как и у других площадных пассивок), страж горит — боссов предмет не обходит.\n• Открытие: в кампании — тир сборки IV, в эндлесе — 630-я секунда. Как только предмет открыт, он сразу попадает в пул выбора и листается в арсенале.\n• Иконки — три, по одной на каждый стиль, потому что стили устроены по-разному: «ВЕКТОР» рисуется кодом в renderer.h, «ИИ-АРТ» и «ЦВЕТ» — запечённые картинки 64x64. Вектор — три отпечатка вдоль выжженной дуги (раньше у 41-го предмета в этом стиле не было рисунка вовсе: пустой кружок); ИИ-АРТ — три крупных горящих отпечатка на камне; ЦВЕТ — один отпечаток с пламенем в одном оттенке угля, без чужих цветов. Общая проверка: tools/style_preview.cpp → design/icon_40_styles.png.\n• Новый инструмент tools/bake_ai_icon.py. Полный генератор атласа собирает все иконки из concept-файлов, которых в репозитории нет: он либо падает, либо перерисовывает выпущенное. Инструмент вшивает ровно один предмет и не трогает соседние байты.\n• Стенд tools/trail_probe.cpp — 43 проверки: паспорт, открытие и пул, «стоя не горит», шаг и длина хвоста, время жизни метки, кратность урона такту (значит, крита нет), сравнение трёх рангов, резонатор и страж, добивающий тик не запускает «Осколки последнего удара», свой угольный цвет попадания, уборка следа вне боя, отрисовка. Шесть мутаций (урон без ранга, спавн без проверки скорости, метка не гаснет, ожог каждый кадр, тик запускает сверхурон, тик красится цветом обычного удара) пойманы все. Урон за 2 с по стоящей мишени: ранг 1 — 30, ранг 2 — 54, ранг 3 — 72.\n• Стенд оружия печатает для предмета 40 «след от шага, стенд стоячий»: в стоячем стенде с бессмертными мишенями тропе нечего делать, и это сказано прямо, а не выдано за нулевой вклад.\n• Девять экранов из двенадцати совпали с 2.10.55 до пикселя. Меню и патчноуты изменились из-за номера версии и этой заметки, а справка — из-за 41-го предмета в арсенале: счётчик и полоса прокрутки другие (91e21f05 → 651a9753).\n• Цена кадра измерена, а не обещана: полный хвост из 14 меток стоит 0,003 мс логики и 0,059 мс отрисовки при 173 врагах — 0,8 % кадра. У perf_bench появилась сцена trail (герой бежит по кругу), у базовой сцены хеш тот же, что у 2.10.55: fd4cb23a.\n• Лист design/icon_sheet_41.png собран из того же атласа, что идёт в exe (tools/make_icon_sheet.py); снимок боя — design/ash_trail.png, разбор — design/item_41_trail.md.",
+                    "Праздники: игра сама смотрит на календарь и на две недели включает свой набор — не скачивая ничего.\n• Восемь праздников и их окна: ХЭЛЛОУИН 20 октября — 5 ноября, НОВЫЙ ГОД 20 декабря — 14 января (окно через год), ДЕНЬ ВЛЮБЛЁННЫХ 7—17 февраля, ДЕНЬ СВЯТОГО ПАТРИКА 12—20 марта, ПАСХА от −3 до +7 дней от православной Пасхи, МАСЛЕНИЦА от −55 до −49 дней от неё же, ЛУННЫЙ НОВЫЙ ГОД от −5 до +8 дней от лунного нового года, ИВАН КУПАЛА 1—8 июля. День мёртвых, Октоберфест, День благодарения и 1 апреля отброшены: у них нет своего механизма, и они повторяли бы Хэллоуин и осень.\n• Пасха считается александрийской пасхалией с поправкой +13 дней: 2024 — 5 мая, 2025 — 20 апреля, 2026 — 12 апреля, 2027 — 2 мая; стенд проверяет эти даты. Плавающие окна считаются по календарю конкретного года, а не «примерно»: в високосном феврале Масленица съезжает на день, и это видно в окне.\n• У каждого праздника четыре символа и два персонажа — всего 48 рисунков, и нарисованы все. Символы: фонарь Джека, призрак, летучая мышь, конфета; ёлка, снежинка, звезда, подарок; сердце, стрела Купидона, роза, конфета-сердце; клевер, горшок золота, радуга, кружка; крашенка, кролик, корзина, цыплёнок; блин, солнце, чучело, самовар; хунбао, фонарь, мандарин, хлопушка; кострище, папоротник, венок, вода. Персонажи: ведьма на метле и тыквоголовый; снеговик и олень; Купидон и сердцеед; лепрекон и зелёный гоблин; пасхальный кролик и крашенка-каталка; чучело Зимы и блин-катун; лунный дракон и лев-страж; русалка и огнецвет.\n• Дракон остался персонажем, а символом Лунного года стал красный конверт: голову дракона в 86 px сколько ни рисуй, она читалась как кот, рыба или ёжик, а хунбао узнаётся сразу.\n• В бою всё это работает, а не лежит на картинке: пятнадцатая часть обычных мобов подменяется персонажами праздника, а каждые 38–50 секунд приходит праздничный набег из пяти и более фигур. В начале забега показывается строка «СЕГОДНЯ: …», искры смерти красятся цветом праздника.\n• Экран «ПРАЗДНИКИ» — календарь, а не список: слева восемь окон со статусом («идёт, ещё N дней» / «через N дней»), сверху лента года (белая черта — сегодня), ниже «год целиком» — восемь полос, по которым видно и длину каждого окна, и их пересечения. Внизу — четыре символа и два персонажа выбранного праздника и три переключателя.\n• Вход в календарь двумя путями: восьмой сектор колеса меню («ПРАЗДНИКИ / КАЛЕНДАРЬ») и строка «Праздники» в настройках. Клавиша H открывает календарь из меню и настроек, стрелки листают праздники, ←/→ прогоняют проверку праздника, [ и ] сдвигают дату на день — так любой праздник виден в любой день без перевода часов системы.\n• Настройки праздников: включить/выключить все, включить выбранный вручную (по календарю / Хэллоуин / … / Купала) и сдвиг даты. Ручной выбор идёт вне окна и подписан на экране прямо.\n• Файл настроек вырос с 84 до 96 байт. Прежний читается как есть: праздники включаются по умолчанию, проверка стоит на «по календарю», сдвиг нулевой.\n• Стенд tools/holiday_preview.cpp рисует лист всех 48 рисунков в двух масштабах (86 и 26 px) и проверяет каждый: пустой, совпавший пиксель в пиксель с другим, обрезанный краем листа или нечитаемый на 26 px — провал. Сейчас 48 из 48 годных; лист лежит в design/holidays_sheet.png.\n• Календарь проверен на 1280×720, 800×600 и 720×1280: на узком экране три переключателя встают столбиком, «год целиком» растягивается по свободной высоте, длинные имена переносятся по словам.\n• Честно: APK не собирался и на телефоне игра не запускалась — здесь нет Windows, JDK, SDK и NDK. Окна дат проверены стендом, но поведение в полночь на живом устройстве и то, как читается цвет на солнце, проверить можно только на телефоне.\n• Хеши экранов (стенд screen_check, 1280×720): меню 3884608a, настройки 96cab203, праздники 149fea0d. В остальных девяти не сдвинулось ни пикселя — справка 651a9753, зал славы ed4a13f3, выбор героя c2922f77, бой a10a052c, пауза 963d73f0, сундук e67a9b20, прокачка 10e11738, управление cc94248a, вид кнопок ade8ff7d — ровно как в 2.10.56. Патчноуты в этот список не входят: их картинка меняется от самой этой заметки, и сверять там нечего.\n• Стенд сам решает, какой сегодня праздник: в нём праздники выключены либо выбраны вручную, а календарь рисуется на закреплённой дате 31 октября 2026. Иначе хеши менялись бы 20 октября и 31 декабря, и проверка «картинка та же» ничего бы не значила. По той же причине первый праздничный набег отсчитывается без rand(): лишний вызов сдвигал общий поток случайности и менял сцену боя целиком.\n• Снимки экранов больше не тащат за собой курсор: стенд уводит его за край кадра, аргумент cursor возвращает обратно.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
@@ -13069,7 +13630,8 @@ struct Game {
                 mouseMovedSinceLaunch = false;
                 mainMenuFocus = (mainMenuFocus + 1) % MAIN_MENU_ITEM_COUNT;
                 sound.play(SFX_CLICK, 0.02f);
-            } else if (key == 'S' || key == 's') { mainMenuFocus = 0; activateMainMenuItem(0); }
+            } else if (key == 'H' || key == 'h') { holidayReturnState = STATE_MENU; state = STATE_HOLIDAY; }
+            else if (key == 'S' || key == 's') { mainMenuFocus = 0; activateMainMenuItem(0); }
             else if (key == 'E' || key == 'e') { mainMenuFocus = 1; activateMainMenuItem(1); }
             else if (key == 13 || key == 32) activateMainMenuItem(mainMenuFocus);
         } else if (state == STATE_CONTROLS_SETUP) {
@@ -13184,9 +13746,38 @@ struct Game {
                 saveOptions();
                 sound.play(SFX_CLICK, 0.02f);
             }
+            else if (key == 'H' || key == 'h') { holidayReturnState = STATE_SETTINGS; state = STATE_HOLIDAY; }
             else if (key == 9) settingsVolumeFocus = (settingsVolumeFocus + 1) % 2;
             else if (key == 37 || key == 39) adjustSoundVolume(key == 37 ? -1 : 1);
             else if (key == 27) state = settingsReturnState;
+        } else if (state == STATE_HOLIDAY) {
+            // Календарь листается стрелками, внизу — переключатели. «H» глушит
+            // праздники, ←/→ прогоняют проверку, [ и ] сдвигают дату: этого
+            // хватает, чтобы увидеть любой праздник в любой день.
+            if (key == 38 || key == 'W' || key == 'w') {
+                holidayCursor = (holidayCursor + HOLIDAY_COUNT - 1) % HOLIDAY_COUNT;
+                sound.play(SFX_CLICK, 0.02f);
+            } else if (key == 40 || key == 'S' || key == 's') {
+                holidayCursor = (holidayCursor + 1) % HOLIDAY_COUNT;
+                sound.play(SFX_CLICK, 0.02f);
+            } else if (key == 39 || key == 'D' || key == 'd') {
+                options.holidayOverride = options.holidayOverride >= HOLIDAY_COUNT - 1 ? -1 : options.holidayOverride + 1;
+                saveOptions(); sound.play(SFX_CLICK, 0.02f);
+            } else if (key == 37 || key == 'A' || key == 'a') {
+                options.holidayOverride = options.holidayOverride <= -1 ? HOLIDAY_COUNT - 1 : options.holidayOverride - 1;
+                saveOptions(); sound.play(SFX_CLICK, 0.02f);
+            } else if (key == 'H' || key == 'h') {
+                options.holidaysEnabled = options.holidaysEnabled ? 0 : 1;
+                saveOptions(); sound.play(SFX_CLICK, 0.02f);
+            } else if (key == '[') {
+                options.holidayDateShift = std::max(-42, options.holidayDateShift - 1);
+                saveOptions();
+            } else if (key == ']') {
+                options.holidayDateShift = std::min(42, options.holidayDateShift + 1);
+                saveOptions();
+            } else if (key == 27 || key == 13 || key == 32) {
+                state = holidayReturnState;
+            }
         } else if (state == STATE_HALL) {
             if (key == 9) hallPage = 1 - hallPage;
             else if (key == 27) state = STATE_MENU;
@@ -13501,6 +14092,8 @@ struct Game {
             renderControlsSetup(r);
         } else if (state == STATE_BUTTON_LOOK) {
             renderButtonLook(r);
+        } else if (state == STATE_HOLIDAY) {
+            renderHolidays(r);
         } else {
             float shakeX = 0.0f, shakeY = 0.0f;
             if (options.screenShakeEnabled && screenShake > 0.0f) {

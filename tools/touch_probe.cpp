@@ -521,7 +521,11 @@ static void testOptionsFile() {
               "хвост старых настроек на месте");
         check(g.options.touchScheme == TOUCH_SCHEME_STICK_LEFT && g.options.touchSetupDone == 0,
               "новых полей в старом файле нет — схема по умолчанию и вопрос при запуске");
-        check(sizeof(GameOptions) == 84, "новые настройки занимают 84 байта");
+        // 2.11.0 добавила три поля праздников: 84 -> 96 байт.
+        check(sizeof(GameOptions) == 96, "новые настройки занимают 96 байт");
+        check(sizeof(LegacyGameOptions84) == 84, "раскладка 2.10.55 осталась 84 байта");
+        check(g.options.holidaysEnabled == 1 && g.options.holidayOverride == -1 && g.options.holidayDateShift == 0,
+              "в старом файле нет праздников — они включены по календарю");
         check(sizeof(LegacyGameOptions68) == 68, "раскладка 2.10.53 осталась 68 байт");
         check(sizeof(LegacyGameOptions72) == 72, "раскладка 2.10.54 осталась 72 байта");
         check(g.options.touchButtonScale == TOUCH_SIZE_DEFAULT,
@@ -722,8 +726,9 @@ static void testButtonLook() {
     for (int i = 0; i < 1600 * 720; ++i) if (p1.pixels[i] != p2.pixels[i]) same = false;
     check(same, "превью с явным внешним видом совпадает с превью по настройкам");
 
-    // Настройки: файл 84 байта, прежний 72-байтный читается, внешний вид по умолчанию.
-    check(sizeof(GameOptions) == 84, "настройки с внешним видом занимают 84 байта");
+    // Настройки: файл 96 байт (праздники), прежние 84 и 72 читаются.
+    check(sizeof(GameOptions) == 96, "настройки с праздниками занимают 96 байт");
+    check(sizeof(LegacyGameOptions84) == 84, "раскладка 2.10.55 осталась 84 байта");
     check(sizeof(LegacyGameOptions72) == 72, "раскладка 2.10.54 осталась 72 байта");
 }
 

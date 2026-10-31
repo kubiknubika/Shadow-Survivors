@@ -299,10 +299,13 @@ int main(int argc, char** argv) {
     {
         const int before = g->options.touchButtonScale;
         g->state = STATE_SETTINGS;
-        // Строка «Размер кнопок» — одиннадцатая: та же арифметика, что в отрисовке.
-        const int rowH = uiH > uiW ? 40 : 32;
-        const int rowGap = uiH > uiW ? 8 : 2;
-        const int rowY = 88 + 10 * (rowH + rowGap) + rowH / 2;
+        // Строка «Размер кнопок»: её номер и высоту берём у самой игры, а не
+        // угадываем — после строки «Праздники» она сдвинулась на одну вниз.
+        const int rows = g->touchControls ? 12 : 11;
+        const int rowH = g->settingsRowHeight(rows);
+        const int rowGap = g->settingsRowGap();
+        const int rowIndex = g->settingsTouchSizeRow();
+        const int rowY = g->settingsRowsTop() + rowIndex * (rowH + rowGap) + rowH / 2;
         tapAt((float)(uiW / 2), (float)rowY);
         snprintf(detail, sizeof(detail), "было %d%%, стало %d%%", before, g->options.touchButtonScale);
         check(g->options.touchButtonScale > before, "строка «размер кнопок» увеличивает кнопки", detail);

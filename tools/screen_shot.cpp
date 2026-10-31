@@ -11,6 +11,10 @@
 //     build/shot settings 720x1280 settings_portrait.bmp 2
 //     build/shot play 960x720 play.bmp 1 3
 //
+// Мыши в стенде нет: игра рисует курсор-«◎» в точке указателя, и по умолчанию
+// он приходился ровно на середину кадра — поверх текста. Стенд уводит курсор за
+// край; аргумент «cursor» возвращает его в центр, если снимок нужен с курсором.
+//
 // Аргументы: экран, размер, файл, [потоков], [ступень графики 1..4].
 // Экраны: menu, settings, help, patchnotes, hall, hero, play, pause, chest,
 // levelup, trail (бой с тлеющей тропой — предмет 40), debug (бой с панелью F3).
@@ -80,7 +84,7 @@ int main(int argc, char** argv) {
         {"patchnotes", STATE_PATCH_NOTES}, {"hall", STATE_HALL}, {"hero", STATE_HERO_SELECT},
         {"play", STATE_PLAYING}, {"pause", STATE_PAUSED}, {"chest", STATE_CHEST},
         {"levelup", STATE_LEVELUP}, {"controls", STATE_CONTROLS_SETUP},
-        {"look", STATE_BUTTON_LOOK}, {"trail", STATE_PLAYING},
+        {"look", STATE_BUTTON_LOOK}, {"holidays", STATE_HOLIDAY}, {"trail", STATE_PLAYING},
     };
     int state = strcmp(screen, "debug") == 0 ? STATE_PLAYING : STATE_SETTINGS;
     for (const Case& c : cases) if (strcmp(c.name, screen) == 0) state = c.state;
@@ -131,6 +135,13 @@ int main(int argc, char** argv) {
         }
         g.keyW = g.keyS = g.keyD = false;
     }
+    // Курсор-«◎» игра рисует в точке мыши, а у стенда мыши нет: по умолчанию
+    // она стоит в центре кадра и попадала ровно на текст. Снимок — про экран,
+    // а не про указатель, поэтому уводим его за край; аргумент «cursor»
+    // возвращает курсор в центр, если снимок нужен с ним.
+    bool showCursor = false;
+    for (int i = 1; i < argc; ++i) if (strcmp(argv[i], "cursor") == 0) showCursor = true;
+    if (!showCursor) { g.mouseX = -200; g.mouseY = -200; }
     r.clear(0xFF000000);
     g.render(r);
     writeBmp(out, r.pixels, w, h);

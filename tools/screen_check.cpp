@@ -43,20 +43,26 @@ int main(int argc, char** argv) {
     // названий клавиш и кнопка «УПРАВЛЕНИЕ» в настройках. Тот же стенд с теми же
     // экранами, только глазами телефона.
     const bool touchUi = argc > 3 && strcmp(argv[3], "touch") == 0;
-    struct Case { const char* name; int state; };
+    // Праздники задаются явно, а не берутся из системной даты: иначе хеши боя
+    // и меню менялись бы 20 октября, 31 декабря и в любой другой день, когда
+    // календарь включает окно. -1 — праздников нет, 0..7 — принудительный
+    // праздник, -2 — календарь на закреплённой дате 31 октября 2026.
+    struct Case { const char* name; int state; int holiday; };
     const Case cases[] = {
-        {"меню", STATE_MENU},
-        {"настройки", STATE_SETTINGS},
-        {"справка", STATE_HELP},
-        {"патчноуты", STATE_PATCH_NOTES},
-        {"зал славы", STATE_HALL},
-        {"выбор героя", STATE_HERO_SELECT},
-        {"бой", STATE_PLAYING},
-        {"пауза", STATE_PAUSED},
-        {"сундук", STATE_CHEST},
-        {"прокачка", STATE_LEVELUP},
-        {"управление", STATE_CONTROLS_SETUP},
-        {"вид кнопок", STATE_BUTTON_LOOK},
+        {"меню", STATE_MENU, -1},
+        {"настройки", STATE_SETTINGS, -1},
+        {"справка", STATE_HELP, -1},
+        {"патчноуты", STATE_PATCH_NOTES, -1},
+        {"зал славы", STATE_HALL, -1},
+        {"выбор героя", STATE_HERO_SELECT, -1},
+        {"бой", STATE_PLAYING, -1},
+        {"пауза", STATE_PAUSED, -1},
+        {"сундук", STATE_CHEST, -1},
+        {"прокачка", STATE_LEVELUP, -1},
+        {"управление", STATE_CONTROLS_SETUP, -1},
+        {"вид кнопок", STATE_BUTTON_LOOK, -1},
+        {"праздники", STATE_HOLIDAY, -2},
+        {"бой праздник", STATE_PLAYING, 0},
     };
     SCREEN_W = 1280; SCREEN_H = 720;
     for (const Case& c : cases) {
@@ -64,6 +70,17 @@ int main(int argc, char** argv) {
         Game g; g.simulationMode = true;
         g.touchControls = touchUi;      // до init(): от него зависит первый экран
         srand(4242); g.init();
+        // Праздничная часть прибита гвоздями: выключена или выбрана вручную.
+        g.options.holidayDateShift = 0;
+        g.options.holidaysEnabled = c.holiday >= 0 ? 1 : 0;
+        g.options.holidayOverride = c.holiday >= 0 ? c.holiday : -1;
+        if (c.holiday == -2) {
+            g.options.holidaysEnabled = 1;
+            g.holidayPinYear = 2026; g.holidayPinMonth = 10; g.holidayPinDay = 31;
+        }
+        g.activeHoliday = g.resolveActiveHoliday();
+        g.holidayBannerShown = false;
+        g.holidayWaveTimer = 40.0f;
         g.gameMode = MODE_ENDLESS;
         g.runTime = 240.0f;
         for (int i = 0; i < 5; ++i) g.itemLevels[i] = 3;
