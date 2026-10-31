@@ -63,16 +63,16 @@ inline uint32_t lerpColor(uint32_t c1, uint32_t c2, float t) {
 }
 
 struct ItemTone { uint32_t bg, edge, glow; };
-// Тон сорока предметов: подложка, рамка, свечение. Смысл важнее красоты:
+// Тон сорока одного предмета: подложка, рамка, свечение. Смысл важнее красоты:
 // игрок должен узнавать предмет по цвету и не путать соседние.
 //
-// Сорок предметов — сорок разных цветов, а не десять по кругу. Цвет задаётся
+// Сорок один предмет — разные цвета, а не десять по кругу. Цвет задаётся
 // семейством (смысл: огонь — оранжевый, кровь — красный, лёд — бирюза, ветер —
 // зелёный, руны — фиолет, магнит — пурпур, пергамент — янтарь, бездна — тёмный
 // фиолет) и весом предмета (тёмный вариант для тяжёлых печатей, светлый для
 // лёгких). Таблица в tools/generate_icon_color_atlas.py — источник тех же цветов
 // для атласа иконок, поэтому рамка слота и сама иконка всегда одного тона.
-static const ItemTone ITEM_TONE[40] = {
+static const ItemTone ITEM_TONE[41] = {
     {0xFF0A1329, 0xFF7EA4FC, 0xFFC8D7F9},  // 00 blue/bright
     {0xFF29140A, 0xFFF66C28, 0xFFF2B292},  // 01 orange/pure
     {0xFF180A29, 0xFFB97EFC, 0xFFDFC8F9},  // 02 violet/bright
@@ -113,6 +113,9 @@ static const ItemTone ITEM_TONE[40] = {
     {0xFF280B22, 0xFFC610A2, 0xFFE458C8},  // 37 magenta/deep
     {0xFF25160E, 0xFF8B3F18, 0xFFCD6C3C},  // 38 orange/dark
     {0xFF180A29, 0xFF8828F6, 0xFFBF92F2},  // 39 violet/pure
+    // 40 тлеющая тропа — тлеющий уголь: теплее и ярче «угольного фитиля» (38),
+    // чтобы два огненных предмета не читались одним пятном в списке.
+    {0xFF2A1106, 0xFFE4611C, 0xFFF6A55C},  // 40 ember/orange
 };
 
 struct Renderer {
@@ -2601,14 +2604,14 @@ struct Renderer {
     // ── Тон предмета ───────────────────────────────────────────────────────────
     // Один предмет — один смысловой цвет. Раньше палитра шла по кругу из десяти
     // оттенков (предметы 00, 10, 20, 30 были одного цвета) и половина цветов не
-    // имела отношения к предмету. Здесь сорок разных оттенков, и каждый выбран по
+    // имела отношения к предмету. Здесь сорок один оттенок, и каждый выбран по
     // смыслу: огонь оранжевый, лёд бирюзовый, молния золотая, кровь алая, магнетизм
     // пурпурный, бумага пергаментная, ветер зелёный.
     //   bg   — подложка, edge — рамка, glow — свечение
     static bool isPassiveItem(int id) { return !((id >= 0 && id <= 6) || (id >= 24 && id <= 27)); }
 
     void drawWeaponIcon(int cx, int cy, int weaponId, int size = 22, bool evolved = false) {
-        static const uint32_t glowColors[40] = {
+        static const uint32_t glowColors[41] = {
             0xFF40D0FF,0xFFFF6818,0xFF43D9F4,0xFF40B8FF,0xFFFF2850,
             0xFFFFA030,0xFF30E8FF,0xFF40B8FF,0xFF40FF90,0xFFFFD030,
             0xFFFF3058,0xFFFF7820,0xFFC068FF,0xFFFFA818,0xFFFF5028,
@@ -2616,10 +2619,11 @@ struct Renderer {
             0xFFFFC56A,0xFF77EAD7,0xFFFF758E,0xFFA895FF,
             0xFF70DEFF,0xFF62D9E8,0xFFBC8AFF,0xFFFF9A42,0xFF63E9E8,0xFFBD83FF,
             0xFFFFD878,0xFFFF9B58,0xFF67E7D4,0xFF68E6D8,0xFFFF9347,0xFF72DFFF,
-            0xFF8BEAFF,0xFFFF705E,0xFFFF9A72,0xFFD6A0FF
+            0xFF8BEAFF,0xFFFF705E,0xFFFF9A72,0xFFD6A0FF,
+            0xFFFF8A36
         };
-        const int id = std::max(0, std::min(39, weaponId));
-        // Арт-наборы для любого предмета 00–39: ИИ-АРТ или набор «ЦВЕТ», где первые
+        const int id = std::max(0, std::min(40, weaponId));
+        // Арт-наборы для любого предмета 00–40: ИИ-АРТ или набор «ЦВЕТ», где первые
         // десять предметов различаются цветом и силуэтом, а не общей рамкой.
         const ItemTone& tone = ITEM_TONE[id];
         // Активные и пассивные предметы носят разные подложки: у оружия — угловатая

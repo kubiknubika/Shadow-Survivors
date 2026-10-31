@@ -13,7 +13,7 @@
 //
 // Аргументы: экран, размер, файл, [потоков], [ступень графики 1..4].
 // Экраны: menu, settings, help, patchnotes, hall, hero, play, pause, chest,
-// levelup, debug (бой с открытой панелью F3).
+// levelup, trail (бой с тлеющей тропой — предмет 40), debug (бой с панелью F3).
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
         {"patchnotes", STATE_PATCH_NOTES}, {"hall", STATE_HALL}, {"hero", STATE_HERO_SELECT},
         {"play", STATE_PLAYING}, {"pause", STATE_PAUSED}, {"chest", STATE_CHEST},
         {"levelup", STATE_LEVELUP}, {"controls", STATE_CONTROLS_SETUP},
-        {"look", STATE_BUTTON_LOOK},
+        {"look", STATE_BUTTON_LOOK}, {"trail", STATE_PLAYING},
     };
     int state = strcmp(screen, "debug") == 0 ? STATE_PLAYING : STATE_SETTINGS;
     for (const Case& c : cases) if (strcmp(c.name, screen) == 0) state = c.state;
@@ -103,6 +103,23 @@ int main(int argc, char** argv) {
     // «debug» — та же сцена боя с открытой панелью F3: там видна строка
     // «ГРАФИКА» (уровень, ступень, цена кадра, потоки).
     if (strcmp(screen, "debug") == 0) g.debugOverlay = true;
+    // «trail» — бой с тлеющей тропой (предмет 40). Сцена двигает героя по дуге,
+    // а не ставит метки вручную: на снимке должен быть след, который игра
+    // оставила сама, иначе картинка врёт про механику.
+    if (strcmp(screen, "trail") == 0) {
+        g.itemLevels[40] = 3;
+        g.state = STATE_PLAYING;
+        g.playerX = 0.0f; g.playerY = 0.0f;
+        const float dt = 1.0f / 60.0f;
+        for (int f = 0; f < 150; ++f) {
+            const float t = (float)f / 150.0f * 6.2831853f;
+            g.keyD = cosf(t) > -0.2f;
+            g.keyW = sinf(t) < -0.1f;
+            g.keyS = sinf(t) > 0.1f;
+            g.update(dt);
+        }
+        g.keyW = g.keyS = g.keyD = false;
+    }
     r.clear(0xFF000000);
     g.render(r);
     writeBmp(out, r.pixels, w, h);

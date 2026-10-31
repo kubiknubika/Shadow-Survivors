@@ -281,6 +281,7 @@ static const char* passiveReason(int id) {
         case 37: return "добивание, мишени бессмертны";
         case 38: return "нужно потерять HP";
         case 39: return "заряд супера";
+        case 40: return "след от шага, стенд стоячий";
         default: return "";
     }
 }

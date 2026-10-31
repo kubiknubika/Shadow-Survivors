@@ -172,12 +172,21 @@ static const HeroDef HERO_DEFS[5] = {
     {"НИКС", "Тень Бездны", "ТЕНЬ", 0xFF9A7BFF, 5, "Оружие: Рунический вихрь", "+15% крит, сбор самоцветов, хрупкий", 2, 95.0f, 198.0f, 1.08f, 0.95f, 1.05f, 0}
 };
 
-static constexpr int ITEM_COUNT = 40;
+static constexpr int ITEM_COUNT = 41;
 static constexpr int OVERKILL_SHARD_ATTACK_ID = 31;
 static constexpr int CROSSFIRE_ATTACK_ID = 32;
 static constexpr int EMBER_TICK_ATTACK_ID = 34;
 static constexpr int FROST_SHATTER_ATTACK_ID = 35;
 static constexpr int REFLECTED_PROJECTILE_ATTACK_ID = 36;
+static constexpr int ASH_TRAIL_ATTACK_ID = 37;
+// Тлеющая тропа (предмет 40). След — это не аура и не снаряд: он остаётся на
+// полу за спиной и живёт своей жизнью. Числа вынесены сюда, потому что их
+// проверяет стенд tools/trail_probe.cpp, а не только игра.
+static constexpr float ASH_TRAIL_SPAWN_INTERVAL = 0.16f;   // как часто падает метка
+static constexpr float ASH_TRAIL_MARK_LIFE = 2.6f;         // сколько метка тлеет
+static constexpr int ASH_TRAIL_MAX_MARKS = 14;             // длиннее хвоста не бывает
+static constexpr float ASH_TRAIL_MIN_SPEED = 30.0f;        // стоя на месте след не идёт
+static constexpr float ASH_TRAIL_SPACING = 12.0f;          // метка ближе этого — дубль
 static constexpr int MAX_BUILD_ITEMS = 20;
 static constexpr float RESONATOR_SPAWN_RATE_PER_SECOND = 0.07f; // +4.2 enemies/min per intact resonator; capped at eight live structures.
 static constexpr int MAX_ACTIVE_RESONATORS = 8;
@@ -191,7 +200,7 @@ static constexpr int MONSTER_TYPE_COUNT = 12;
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 149;
+static constexpr int PATCH_NOTES_COUNT = 150;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -326,7 +335,12 @@ static const ItemDef ITEM_DEFS[ITEM_COUNT] = {
     {36,false,"Печать Обратного Тока", "Тир IV • перехватывает обычный снаряд и направляет 8/12/16 урона во врага."},
     {37,false,"Знак Палача", "Тир IV • активное оружие казнит цель при 8/12/16% здоровья; боссы неуязвимы."},
     {38,false,"Печать Возмездия", "Потеря HP заряжает следующий активный удар: +35/50/65%."},
-    {39,false,"Руна Свидетеля", "Тир IV • разрушение резонатора даёт +8/12/16% заряда суперумения."}
+    {39,false,"Руна Свидетеля", "Тир IV • разрушение резонатора даёт +8/12/16% заряда суперумения."},
+    // 40: сорок первый предмет — не ещё одно срабатывание по событию, а место на полу.
+    // Тропа живёт там, где герой уже прошёл, поэтому её видно, её можно обойти,
+    // и она ничего не делает, если стоять. Единственный предмет, который целиком
+    // зависит от движения, а не от удара, крита, лечения или разрушения.
+    {40,false,"Тлеющая Тропа", "Тир IV • движение оставляет тлеющий след: 6/9/12 урона каждые 0,55/0,50/0,45 с врагам на нём."}
 };
 
 struct MetaUpgradeDef {
@@ -562,6 +576,7 @@ struct Monster {
     float emberPulseTimer = 0.0f;
     float emberDamagePerTick = 0.0f;
     int emberTicksRemaining = 0;
+    float trailBurnTimer = 0.0f; // пауза между ожогами от тлеющей тропы
     bool isShieldBearer = false;
     int shieldHits = 0;
     float shieldFacingX = 0.0f, shieldFacingY = 1.0f;
@@ -658,6 +673,14 @@ struct Shockwave {
     float radius, maxRadius;
     float life, maxLife;
     uint32_t color;
+};
+
+// Метка тлеющей тропы: точка на полу, а не снаряд и не аура. seed держит рисунок
+// угольков постоянным для этой метки, иначе искры прыгали бы между кадрами.
+struct AshTrailMark {
+    float x, y;
+    float life, maxLife;
+    float seed;
 };
 
 struct SkillImpactMark {
@@ -1070,6 +1093,9 @@ struct Game {
     float projectileParryCooldown = 0.0f;
     int ashRhythmSparkCount = 0;
     float ashRhythmFlashTimer = 0.0f;
+    float ashTrailSpawnTimer = 0.0f;   // когда упадёт следующая метка тропы
+    float ashTrailFlashTimer = 0.0f;   // вспышка строки «ТРОПА» в HUD после попадания
+    int ashTrailFires = 0;             // сколько меток уже легло за забег (для F3)
     float playerHurtTimer = 0.0f;
     float playerSlowTimer = 0.0f;
     float dashTimer = 0.0f;
@@ -1151,6 +1177,7 @@ struct Game {
     std::vector<FrostWave> frostWaves;
     std::vector<Shockwave> shockwaves;
     std::vector<SkillImpactMark> skillImpactMarks;
+    std::vector<AshTrailMark> ashTrailMarks;
     std::vector<BossHazard> bossHazards;
 
     float spawnAccumulator = 0.0f;
@@ -2243,6 +2270,23 @@ struct Game {
 
     std::string getPassiveUpgradePreviewText(int itemId) const {
         if (itemId == 28) return "+1 эхо за рывок сквозь угрозу; накапливай 4/3/2 заряда для контрудара по кругу";
+        if (itemId == 40) {
+            // Тропа — единственный предмет, который целиком зависит от шага, поэтому
+            // на карте описано не «+урон», а как именно раскладывается след.
+            const int rank = std::max(0, std::min(3, itemLevels[40]));
+            char text[208];
+            if (rank == 0) {
+                snprintf(text, sizeof(text), "Движение оставляет тлеющий след: 6/9/12 урона раз в 0,55/0,50/0,45 с.\nСтоя на месте след не горит.");
+            } else if (rank < 3) {
+                snprintf(text, sizeof(text), "Сейчас: %d урона раз в %.2f с • след %.0f px, живёт %.1f с.\nДальше: %d урона раз в %.2f с, шире на 4 px.",
+                         (int)getAshTrailDamage(rank), getAshTrailTickInterval(rank), getAshTrailRadius(rank), ASH_TRAIL_MARK_LIFE,
+                         (int)getAshTrailDamage(rank + 1), getAshTrailTickInterval(rank + 1));
+            } else {
+                snprintf(text, sizeof(text), "Максимум: %d урона раз в %.2f с по всем, кто стоит на следе %.0f px.\nСлед живёт %.1f с; ожог не складывается от нескольких меток.",
+                         (int)getAshTrailDamage(rank), getAshTrailTickInterval(rank), getAshTrailRadius(rank), ASH_TRAIL_MARK_LIFE);
+            }
+            return std::string(text);
+        }
         if (itemId == 39) {
             const int rank = std::max(0, std::min(3, itemLevels[39]));
             char text[176];
@@ -2384,8 +2428,11 @@ struct Game {
         // Story progression is mission-based: the current mission opens its tier from the first draft.
         // Defeating its boss advances the in-run tier by one; Endless retains the original time gates.
         if (gameMode == MODE_STORY) return getItemTier(id) <= getBuildTier();
-        static const float unlockTimes[24] = {180.0f, 300.0f, 420.0f, 540.0f, 360.0f, 420.0f, 480.0f, 600.0f,
-                                               420.0f, 540.0f, 660.0f, 780.0f, 300.0f, 600.0f, 480.0f, 540.0f, 510.0f, 450.0f, 480.0f, 570.0f, 525.0f, 585.0f, 600.0f, 615.0f};
+        // 24 значения на предметы 16–39 и 25-е — тлеющая тропа (40). Позднее окно
+        // не случайно: тропа усиливает уже собранный билд, а не открывает первый.
+        static const float unlockTimes[25] = {180.0f, 300.0f, 420.0f, 540.0f, 360.0f, 420.0f, 480.0f, 600.0f,
+                                               420.0f, 540.0f, 660.0f, 780.0f, 300.0f, 600.0f, 480.0f, 540.0f, 510.0f, 450.0f, 480.0f, 570.0f, 525.0f, 585.0f, 600.0f, 615.0f,
+                                               630.0f};
         return runTime >= unlockTimes[id - 16];
     }
 
@@ -2396,7 +2443,7 @@ struct Game {
         if (id == 17 || id == 21 || id == 25) return 3;
         if (id == 18 || id == 22 || id == 26) return 4;
         if (id == 28) return 3;
-        if (id == 29 || id == 30 || id == 31 || id == 32 || id == 33 || id == 34 || id == 35 || id == 36 || id == 37 || id == 38 || id == 39) return 4;
+        if (id >= 29 && id <= 40) return 4; // 29–40: тир IV, включая тлеющую тропу
         return 5; // 19, 23, and 27
     }
 
@@ -2883,6 +2930,8 @@ struct Game {
         shockwaves.clear();
         skillImpactMarks.clear();
         bossHazards.clear();
+        clearAshTrail();
+        ashTrailFires = 0;
 
         spawnAccumulator = 0.0f;
         pendingSummons = 0;
@@ -3082,6 +3131,47 @@ struct Game {
                     break;
             }
             if (mark.critical) r.drawCircleRing(sx, sy, radius + 6, 1, 0xFFFFE8A0, alpha / 2, true);
+        }
+    }
+
+    // Тропа рисуется на полу — до существ, но после пола и знаков. Метка не
+    // вспыхивает, а тлеет: приплюснутое пятно гари (камера смотрит сверху-сбоку,
+    // поэтому круг на полу — эллипс), тлеющая середина и пара угольков. seed
+    // держит рисунок постоянным, иначе угольки прыгали бы между кадрами.
+    void renderAshTrail(Renderer& r, float camX, float camY) const {
+        if (ashTrailMarks.empty()) return;
+        const int rank = getAshTrailRank();
+        if (rank <= 0) return;
+        const int radius = std::max(6, (int)getAshTrailRadius(rank));
+        for (const AshTrailMark& mark : ashTrailMarks) {
+            const int sx = (int)(mark.x - camX), sy = (int)(mark.y - camY);
+            if (sx < -radius - 16 || sx > SCREEN_W + radius + 16 ||
+                sy < -radius - 16 || sy > SCREEN_H + radius + 16) continue;
+            const float lifeRatio = std::max(0.0f, std::min(1.0f, mark.life / std::max(0.001f, mark.maxLife)));
+            // Гарь гаснет вместе с меткой: тропа показывает свой возраст без цифр.
+            auto ellipse = [&](int rx, int ry, uint32_t col, int alpha) {
+                if (alpha <= 0 || rx <= 0 || ry <= 0) return;
+                for (int dy = -ry; dy <= ry; ++dy) {
+                    const float t = 1.0f - (float)(dy * dy) / (float)(ry * ry);
+                    if (t <= 0.0f) continue;
+                    const int w = (int)(rx * sqrtf(t));
+                    r.drawLine(sx - w, sy + dy, sx + w, sy + dy, col, 1, alpha);
+                }
+            };
+            ellipse(radius + 2, (radius + 2) * 3 / 5, 0xFF120A06, (int)(70.0f + 50.0f * lifeRatio));
+            ellipse(radius, radius * 3 / 5, 0xFF3C1608, (int)(26.0f + 40.0f * lifeRatio));
+            ellipse(radius * 2 / 3, radius * 2 / 5, 0xFF8A2C0A, (int)(34.0f + 70.0f * lifeRatio));
+            ellipse(radius / 3, radius / 5, 0xFFE05A1A, (int)(60.0f + 110.0f * lifeRatio));
+            // Угольки: три точки по кромке, каждая со своей фазой.
+            for (int i = 0; i < 3; ++i) {
+                const float phase = mark.seed * 0.37f + (float)i * 2.0943951f;
+                const float a = phase + globalTime * (0.8f + 0.2f * (float)i);
+                const float wobble = 0.55f + 0.45f * sinf(globalTime * 4.5f + phase);
+                const int ex = sx + (int)(cosf(a) * radius * 0.72f);
+                const int ey = sy + (int)(sinf(a) * radius * 0.40f);
+                r.fillCircle(ex, ey, 1 + (int)(wobble * 2.0f), 0xFFFFC069,
+                             (int)(90.0f * lifeRatio) + 40);
+            }
         }
     }
 
@@ -3800,6 +3890,98 @@ struct Game {
         static const float cooldown[4] = {0.0f, 0.32f, 0.26f, 0.20f};
         return cooldown[std::max(0, std::min(3, rank))];
     }
+
+    // ── Тлеющая тропа (40) ───────────────────────────────────────────────────
+    // Ранг меняет не только урон, но и ширину следа и частоту ожогов: на первом
+    // ранге тропа узкая и «прощеная», на третьем по ней нельзя идти без потерь.
+    // Всё, что зависит от ранга, живёт здесь, чтобы стенд считал те же числа,
+    // что игра, а не копию таблицы.
+    int getAshTrailRank() const { return std::max(0, std::min(3, itemLevels[40])); }
+    float getAshTrailDamage(int rank) const {
+        static const float damage[4] = {0.0f, 6.0f, 9.0f, 12.0f};
+        return damage[std::max(0, std::min(3, rank))];
+    }
+    float getAshTrailRadius(int rank) const {
+        static const float radius[4] = {0.0f, 24.0f, 28.0f, 32.0f};
+        return radius[std::max(0, std::min(3, rank))];
+    }
+    float getAshTrailTickInterval(int rank) const {
+        static const float interval[4] = {0.0f, 0.55f, 0.50f, 0.45f};
+        return interval[std::max(0, std::min(3, rank))];
+    }
+
+    void clearAshTrail() {
+        ashTrailMarks.clear();
+        ashTrailSpawnTimer = 0.0f;
+        ashTrailFlashTimer = 0.0f;
+    }
+
+    // Метка не появляется чаще, чем раз в ASH_TRAIL_SPAWN_INTERVAL, и не ложится
+    // поверх предыдущей: иначе стоящий на месте герой с микро-дрожанием пальца
+    // собрал бы весь хвост в одну точку, а тропа должна быть дорожкой.
+    void spawnAshTrailMark(float x, float y) {
+        if (!ashTrailMarks.empty()) {
+            const AshTrailMark& last = ashTrailMarks.back();
+            const float dx = x - last.x, dy = y - last.y;
+            if (dx * dx + dy * dy < ASH_TRAIL_SPACING * ASH_TRAIL_SPACING) return;
+        }
+        if ((int)ashTrailMarks.size() >= ASH_TRAIL_MAX_MARKS) ashTrailMarks.erase(ashTrailMarks.begin());
+        ashTrailMarks.push_back({x, y, ASH_TRAIL_MARK_LIFE, ASH_TRAIL_MARK_LIFE, (float)(rand() % 1000) / 100.0f});
+        ++ashTrailFires;
+    }
+
+    bool isOnAshTrail(float x, float y, float extraRadius) const {
+        if (ashTrailMarks.empty()) return false;
+        const int rank = getAshTrailRank();
+        if (rank <= 0) return false;
+        const float reach = getAshTrailRadius(rank) + extraRadius;
+        const float reach2 = reach * reach;
+        for (const AshTrailMark& mark : ashTrailMarks) {
+            const float dx = x - mark.x, dy = y - mark.y;
+            if (dx * dx + dy * dy <= reach2) return true;
+        }
+        return false;
+    }
+
+    // Тик ожога — общий на всю тропу, а не на метку: стоящий в двух метках враг
+    // должен получать один ожог за такт, иначе третья метка бьёт втрое.
+    void updateAshTrail(float dt) {
+        const float elapsed = std::max(0.0f, dt);
+        ashTrailFlashTimer = std::max(0.0f, ashTrailFlashTimer - elapsed);
+        ashTrailSpawnTimer = std::max(0.0f, ashTrailSpawnTimer - elapsed);
+        for (AshTrailMark& mark : ashTrailMarks) mark.life -= elapsed;
+        ashTrailMarks.erase(std::remove_if(ashTrailMarks.begin(), ashTrailMarks.end(),
+            [](const AshTrailMark& m) { return m.life <= 0.0f; }), ashTrailMarks.end());
+        const int rank = getAshTrailRank();
+        if (rank <= 0) {
+            // Предмета нет — следов нет. Иначе тропа осталась бы от прошлого забега.
+            if (!ashTrailMarks.empty()) ashTrailMarks.clear();
+            ashTrailSpawnTimer = 0.0f;
+            return;
+        }
+        const float speed = sqrtf(playerVelocityX * playerVelocityX + playerVelocityY * playerVelocityY);
+        if (speed >= ASH_TRAIL_MIN_SPEED && ashTrailSpawnTimer <= 0.0f) {
+            ashTrailSpawnTimer = ASH_TRAIL_SPAWN_INTERVAL;
+            spawnAshTrailMark(playerX, playerY);
+        }
+        if (ashTrailMarks.empty()) return;
+        const float interval = getAshTrailTickInterval(rank);
+        const float tickDamage = getAshTrailDamage(rank);
+        for (size_t i = 0; i < monsters.size(); ++i) {
+            Monster& m = monsters[i];
+            m.trailBurnTimer = std::max(0.0f, m.trailBurnTimer - elapsed);
+            if (m.hp <= 0.0f || m.trailBurnTimer > 0.0f) continue;
+            // Резонатор — постройка, а не тело: по нему тропа не работает, как и
+            // остальные площадные пассивки (откол, перекрёстный огонь).
+            if (m.isResonator) continue;
+            if (!isOnAshTrail(m.x, m.y, m.radius)) continue;
+            m.trailBurnTimer = interval;
+            const float typeScale = m.isElite ? getEliteDamageMultiplier() : 1.0f;
+            const float scaling = std::max(0.01f, getDamageMultiplier() * balance.playerDamageMultiplier * typeScale);
+            damageMonster(i, tickDamage / scaling, 0.0f, 0.0f, ASH_TRAIL_ATTACK_ID);
+            ashTrailFlashTimer = 0.35f;
+        }
+    }
     float getExecutionThresholdPercent(int rank) const {
         static const float threshold[4] = {0.0f, 8.0f, 12.0f, 16.0f};
         return threshold[std::max(0, std::min(3, rank))];
@@ -4208,7 +4390,7 @@ struct Game {
         }
         if (m.isBoss && m.phaseInvulnTimer > 0.0f) return;
         const float roll = (rand() % 10000) / 10000.0f;
-        const bool isPassiveProc = attackId == OVERKILL_SHARD_ATTACK_ID || attackId == CROSSFIRE_ATTACK_ID || attackId == EMBER_TICK_ATTACK_ID || attackId == FROST_SHATTER_ATTACK_ID || attackId == REFLECTED_PROJECTILE_ATTACK_ID;
+        const bool isPassiveProc = attackId == OVERKILL_SHARD_ATTACK_ID || attackId == CROSSFIRE_ATTACK_ID || attackId == EMBER_TICK_ATTACK_ID || attackId == FROST_SHATTER_ATTACK_ID || attackId == REFLECTED_PROJECTILE_ATTACK_ID || attackId == ASH_TRAIL_ATTACK_ID;
         const int criticalTier = isPassiveProc ? 0 : getCriticalTierForRoll(roll);
         const bool isSuperCrit = criticalTier == 2;
         const bool isCrit = criticalTier >= 1;
@@ -4284,7 +4466,7 @@ struct Game {
             }
         }
         m.hitFlashTimer = 0.11f;
-        const uint32_t hitColor = executionHit ? 0xFFFF705E : (attackId == EMBER_TICK_ATTACK_ID ? 0xFFFF9347 : (attackId == CROSSFIRE_ATTACK_ID ? 0xFF68E6D8 : (isSuperCrit ? 0xFF8A65FF : (isCrit ? 0xFFFFD848 : (m.isBoss ? 0xFFFF8648 : (m.isSmart ? 0xFF68E8FF : 0xFFFF5870))))));
+        const uint32_t hitColor = executionHit ? 0xFFFF705E : (attackId == ASH_TRAIL_ATTACK_ID ? 0xFFFF8A36 : (attackId == EMBER_TICK_ATTACK_ID ? 0xFFFF9347 : (attackId == CROSSFIRE_ATTACK_ID ? 0xFF68E6D8 : (isSuperCrit ? 0xFF8A65FF : (isCrit ? 0xFFFFD848 : (m.isBoss ? 0xFFFF8648 : (m.isSmart ? 0xFF68E8FF : 0xFFFF5870)))))));
         spawnHitEffect(m.x, m.y, hitColor, isCrit, attackId, m.radius);
         totalDamageDealt += appliedDamage;
         dpsWindowDamage += appliedDamage;
@@ -4467,7 +4649,7 @@ struct Game {
                     pickups.push_back(p);
                 }
             }
-            if (!m.isBoss && attackId != OVERKILL_SHARD_ATTACK_ID && attackId != CROSSFIRE_ATTACK_ID && attackId != EMBER_TICK_ATTACK_ID && attackId != FROST_SHATTER_ATTACK_ID && attackId != REFLECTED_PROJECTILE_ATTACK_ID && excessDamage > 0.0f)
+            if (!m.isBoss && attackId != OVERKILL_SHARD_ATTACK_ID && attackId != CROSSFIRE_ATTACK_ID && attackId != EMBER_TICK_ATTACK_ID && attackId != FROST_SHATTER_ATTACK_ID && attackId != REFLECTED_PROJECTILE_ATTACK_ID && attackId != ASH_TRAIL_ATTACK_ID && excessDamage > 0.0f)
                 triggerOverkillShard(idx, m.x, m.y, excessDamage);
         }
     }
@@ -5113,6 +5295,9 @@ struct Game {
             playerVelocityX = (playerX - framePlayerStartX) / dt;
             playerVelocityY = (playerY - framePlayerStartY) / dt;
         }
+        // Тропа считается после движения: метка должна лечь в ту точку, где герой
+        // реально оказался в этом кадре, а не в прошлую.
+        updateAshTrail(dt);
 
         // Spawning Waves & Bosses
         float baseSpawnRate = 3.2f + std::min(8.5f, runTime / 35.0f) * 0.75f + std::max(0.0f, runTime - 210.0f) / 120.0f;
@@ -6280,6 +6465,12 @@ struct Game {
         }
         else if (menuMusicState) sound.musicMode = 5;
 
+        // Тропа не должна доживать до меню: метки рисует фон меню, и без этого
+        // на нём остаётся застывший след прошлого забега. На экранах, где бой
+        // замирает (прокачка, пауза, сундук, смерть), след остаётся видимым.
+        if (state != STATE_PLAYING && state != STATE_LEVELUP && state != STATE_PAUSED &&
+            state != STATE_CHEST && state != STATE_DEATH && !ashTrailMarks.empty())
+            ashTrailMarks.clear();
         if (state == STATE_CUTSCENE) {
             cutsceneTimer += dt;
             updateEffects(dt);
@@ -6691,6 +6882,10 @@ struct Game {
             if (pickupId == 7)
                 r.drawTextCentered(FONT_SMALL, sx, sy - 38, "ПОРТАЛ • ВОЙТИ", 0xFFB6F7FF, true);
         }
+
+        // Тлеющая тропа лежит на полу: сначала угли, потом знаки ударов — знак
+        // удара должен читаться поверх того, что уже горит.
+        renderAshTrail(r, camX, camY);
 
         // Ground-plane skill impacts are intentionally beneath actors and culled off-screen.
         renderSkillImpactMarks(r, camX, camY);
@@ -7217,8 +7412,14 @@ struct Game {
         put(9, "ПРОКАЧКА", line);
         int ownedItems = 0;
         for (int i = 0; i < ITEM_COUNT; ++i) if (itemLevels[i] > 0) ++ownedItems;
-        snprintf(line, sizeof(line), "ТИР %d  %d/%d  ВОЛНА %d", getBuildTier(), ownedItems, getBuildLimit(), waveNumber);
-        put(10, "СБОРКА", line);
+        // Тропа живёт на полу, а не в списке предметов: в отладке видно, сколько
+        // меток сейчас тлеет и сколько уже легло, — иначе «работает ли предмет»
+        // проверяется на глаз.
+        char trailSuffix[40] = "";
+        if (itemLevels[40] > 0)
+            snprintf(trailSuffix, sizeof(trailSuffix), "  ТРОПА %d/%d", (int)ashTrailMarks.size(), ashTrailFires);
+        snprintf(line, sizeof(line), "ТИР %d  %d/%d  ВОЛНА %d%s", getBuildTier(), ownedItems, getBuildLimit(), waveNumber, trailSuffix);
+        put(10, "СБОРКА", line, ashTrailFlashTimer > 0.0f ? 0xFFFFC58A : 0xFFE6E0F4);
         snprintf(line, sizeof(line), "MODE %d  SFX %d%%  MUS %d%%", sound.musicMode.load(), (int)roundf(sound.sfxVolume.load() * 100.0f), (int)roundf(sound.musicVolume.load() * 100.0f));
         put(11, "ЗВУК", line);
         snprintf(line, sizeof(line), "%d/%d КЛИПОВ  %s", voiceClips, MessageRegistry::voicedDefs(), options.messageSpeechEnabled != 0 ? "ВКЛ" : "ВЫКЛ");
@@ -7953,6 +8154,11 @@ struct Game {
         if (id == 37 && c.activeWeaponCount >= 2) bonus += std::min(0.18f, 0.06f + c.activeWeaponCount * 0.025f);
         if (id == 38 && (c.hpRatio < 0.80f || c.nearbyThreats >= 2)) bonus += c.hpRatio < 0.55f ? 0.20f : 0.12f;
         if (id == 39) bonus += c.resonatorCount > 0 ? 0.20f : 0.04f;
+        if (id == 40) {
+            // Тропа выигрывает там, где враги уже вокруг: она работает по тем, кто
+            // идёт за героем, а не по дальней цели.
+            bonus += c.nearbyThreats >= 3 ? 0.18f : (c.midrangeThreats >= 4 ? 0.09f : 0.02f);
+        }
         if (id == 30) {
             if (c.hpRatio < 0.80f) bonus += 0.12f;
             if (playerHp < playerMaxHp && (itemLevels[4] > 0 || itemLevels[10] > 0 || itemLevels[22] > 0)) bonus += 0.22f;
@@ -8067,6 +8273,13 @@ struct Game {
         if (id == 21) return std::string("рывок возвращается каждые ") + std::to_string(getDashRefreshKillsRequired()) + " убийств";
         if (id == 22) return "+2% макс. HP при убийстве элиты или босса за ранг";
         if (id == 23) return "поглощает половину следующего удара, пока покров заряжается";
+        if (id == 40) {
+            char reason[144];
+            const int rank = std::max(1, std::min(3, next));
+            snprintf(reason, sizeof(reason), "след %d урона раз в %.2f с • врагов рядом %d, им и достанется",
+                     (int)getAshTrailDamage(rank), getAshTrailTickInterval(rank), c.nearbyThreats);
+            return reason;
+        }
         if (id == 39) return c.resonatorCount > 0 ? "разрушение резонатора сейчас даст +8/12/16% заряда суперумения" : "каждый разрушенный резонатор даст +8/12/16% суперзаряда";
         if (id == 38) return "потеря HP зарядит следующий активный удар на +35/50/65% на 4,5 с";
         if (id == 37) return "добьёт обычную цель и элиту при пороге здоровья; боссы исключены";
@@ -11353,6 +11566,7 @@ struct Game {
             "2.10.53 • ANDROID СПРАШИВАЕТ, ЧЕМ ДВИГАТЬСЯ, И ПРЯЧЕТ КЛАВИШИ",
             "2.10.54 • РАЗМЕР КНОПОК КАСАНИЯ В НАСТРОЙКАХ",
             "2.10.55 • ВНЕШНИЙ ВИД КНОПОК: СТИЛЬ, ЦВЕТ, ПРОЗРАЧНОСТЬ",
+            "2.10.56 • ТЛЕЮЩАЯ ТРОПА: СОРОК ПЕРВЫЙ ПРЕДМЕТ",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -11504,6 +11718,7 @@ struct Game {
             "Android больше не решает за игрока, чем двигаться.\n• При первом запуске APK открывается экран «УПРАВЛЕНИЕ»: три схемы на выбор — стик слева (как было), стик справа для левши и крестовина из четырёх кнопок. Каждая нарисована так же, как будет выглядеть на экране боя, поэтому выбираешь руками, а не по названию. Выбор запоминается, второй раз экран не появляется.\n• Сменить схему можно когда угодно: в настройках рядом с «НАЗАД» теперь кнопка «УПРАВЛЕНИЕ» с названием текущей схемы.\n• На Android из интерфейса убраны названия клавиш: «НАЗАД [ESC]» стало «НАЗАД», «ПРОДОЛЖИТЬ [ESC]» — «ПРОДОЛЖИТЬ», подсказка боя «WASD • ДВИЖЕНИЕ SPACE • РЫВОК Q • СУПЕР» заменена на «СТИК — ДВИЖЕНИЕ • РЫВОК — КНОПКА • СУПЕР — КНОПКА», а строка про записанную озвучку и F3 на телефоне не показывается вовсе. На Windows всё осталось как было: те же подсказки с клавишами.\n• Кнопка отладки на телефоне называется «ОТЛ», а не «F3»: такой клавиши там нет.\n• Списки (справка, патчноуты, выбор дела) листаются пальцем: жест вверх-вниз прокручивает на щелчок колеса каждые 22 px, дрожание пальца на 5 px не листает.\n• Найдено и исправлено: в меню касание в нижней левой четверти превращалось в невидимый стик, и строка настроек под пальцем не нажималась. Стик теперь живёт только в бою и только в двух схемах из трёх; в крестовине пальцы двигают кнопками.\n• Файл настроек вырос с 60 до 68 байт. Старый файл читается как есть: схема и отметка «выбор показан» дописаны в хвост, остальные переключатели не сбрасываются.\n• Стенды: touch_probe вырос с 51 до 109 проверок (три схемы, крестовина и диагональ, зеркало, прокрутка пальцем, чтение и запись файла настроек), android_smoke — с 27 до 38 (первый запуск показывает выбор, касание карточки выбирает, «ДАЛЬШЕ» пишет схему в файл, крестовина двигает героя). Новые проверки прогнаны мутациями: стик в верхней половине экрана, стик в меню и «отпускание одной кнопки снимает все» ловятся.\n• Честно: APK по-прежнему не собирался и на телефоне не запускался — здесь нет Windows, JDK, SDK и NDK. Настоящий размер кнопок под большой палец проверяется только на устройстве.",
             "Размер кнопок на телефоне теперь настройка, а не удача экрана.\n• В настройках появилась строка «Размер кнопок касания»: 80, 90, 100, 110, 125, 140 и 160 %. Касание листает ступени по кругу, на клавиатуре с Android работают + и −.\n• Меняется всё сразу и одной пропорцией: кнопки СУПЕР и РЫВОК, крестовина, стик, его шайба и служебные кнопки паузы и отладки. На 160 % кнопка рывка 147 px, на 80 % — 74 px.\n• Размер можно выбрать не только в настройках: на экране «УПРАВЛЕНИЕ» под карточками схем есть ползунок «РАЗМЕР КНОПОК» с «−» и «+», и превью схем сверху сразу рисуется выбранным размером.\n• Превью в карточках схем тоже масштабируется: видно, каким станет управление, а не «как-нибудь».\n• Кнопка не может вырасти во вред: если кадр узкий (окно в сплите), размер ужимается по экрану, и оверлей рисует ровно ту же кнопку, которая нажимается, — цифра в настройках остаётся вашей, а фактический процент виден в раскладке.\n• Подписи не вылезают за кнопку: если «РЫВОК» шире кнопки, обе кнопки действия переходят на короткую форму («СУП», «РЫВ»), а не обрезаются по одной.\n• Файл настроек вырос с 68 до 72 байт; прежний читается как есть, размер в нём считается обычным (100 %).\n• Стенды: touch_probe — 151 проверка (ступени по кругу, кнопки в кадре на любом проценте, стик растёт вместе с кнопками, узкий кадр ужимает размер, подпись всегда влезает), android_smoke — 41 (строка настроек меняет размер, раскладка боя следует за настройкой, новое значение ложится в файл). Мутации: раскладка игнорирует настройку, нет страховки узкого экрана, строка ничего не делает — пойманы все три.\n• На Windows строки про размер кнопок нет: там нет кнопок касания, и настройка, которой нечего менять, только путает. Экран настроек десктопа совпал с 2.10.53 до пикселя.\n• Честно: APK не собирался, на телефоне не запускался. Размер под большой палец окончательно подбирается только на устройстве.",
             "Кнопки касания теперь можно одеть под себя, а не только увеличить.\n• Четыре стиля: СТЕКЛО (как было), ПЛОТНЫЕ (заливка цветом темы — кнопку видно на светлом полу), КОНТУР (без заливки, видно бой сквозь кнопку) и КРУГ (круглые кнопки, не спутать с интерфейсом).\n• Четыре цвета: ЯНТАРЬ (прежние янтарь и лёд), НЕОН (розовый и мятный), МОНО (серый по чёрному) и УГЛИ (оранжевый со стальным). Цвет меняет кнопки, крестовину и стик, интерфейс игры остаётся своим.\n• Прозрачность: 40, 55, 70, 85, 100 % — насколько залита кнопка; рамка и подпись читаются на любом значении.\n• Всё это на одном экране «ВНЕШНИЙ ВИД КНОПОК»: четыре строки, большое превью текущей схемы в пропорциях экрана и легенда «ОБЫЧНО / НАЖАТО». Превью рисует та же функция, что бой, поэтому карточка не может разойтись с игрой.\n• Открыть можно с экрана «УПРАВЛЕНИЕ» (строка «ВНЕШНИЙ ВИД: …») или клавишей L. Сброс — одна кнопка «СБРОСИТЬ ВНЕШНИЙ ВИД»; размер кнопок сброс не трогает.\n• Файл настроек вырос с 72 до 84 байт: прежний читается как есть, внешний вид в нём — стекло, янтарь, 100 %.\n• Стенды: touch_probe — 166 проверок (границы и ступени стилей, цветов и прозрачности, разные настройки дают разные кадры, превью совпадает с настройками), android_smoke — 48 (вход в экран, листание трёх строк, все стили и цвета рисуются, вид ложится в файл, сброс не трогает размер). Мутации: стиль игнорируется, тема игнорируется, строка ничего не делает — пойманы все три.\n• Листы: design/touch_styles.png (четыре стиля), design/touch_themes.png (четыре цвета), design/touch_look.png и design/touch_look_portrait.png (сам экран).\n• Честно: APK не собирался, на телефоне не проверялось. Как читается цвет на солнце и в темноте, видно только на устройстве.",
+            "Сорок первый предмет — «Тлеющая Тропа», тир IV, три ранга. Это не ещё одно срабатывание по событию: предмет работает от шага и оставляет след на полу.\n• Пока герой идёт, каждые 0,16 с под ним остаётся метка; метка живёт 2,6 с, хвост не длиннее 14 меток. Стоя на месте след не появляется вовсе — стенд проверяет это отдельно.\n• Враги на метке получают 6/9/12 урона раз в 0,55/0,50/0,45 с, радиус следа 24/28/32 px. Ожог не критует, и несколько меток подряд не складывают урон: тик общий на всю тропу, а не на каждую метку.\n• Резонатор тропой не горит (это постройка, как и у других площадных пассивок), страж горит — боссов предмет не обходит.\n• Открытие: в кампании — тир сборки IV, в эндлесе — 630-я секунда. Как только предмет открыт, он сразу попадает в пул выбора и листается в арсенале.\n• Иконка: тлеющие отпечатки на камне, один оттенок угля, круглая подложка артефакта. Запечена в оба атласа — стиль «ИИ-АРТ» и стиль «ЦВЕТ».\n• Новый инструмент tools/bake_ai_icon.py. Полный генератор атласа собирает все иконки из concept-файлов, которых в репозитории нет: он либо падает, либо перерисовывает выпущенное. Инструмент вшивает ровно один предмет и не трогает соседние байты.\n• Стенд tools/trail_probe.cpp — 43 проверки: паспорт, открытие и пул, «стоя не горит», шаг и длина хвоста, время жизни метки, кратность урона такту (значит, крита нет), сравнение трёх рангов, резонатор и страж, добивающий тик не запускает «Осколки последнего удара», свой угольный цвет попадания, уборка следа вне боя, отрисовка. Шесть мутаций (урон без ранга, спавн без проверки скорости, метка не гаснет, ожог каждый кадр, тик запускает сверхурон, тик красится цветом обычного удара) пойманы все. Урон за 2 с по стоящей мишени: ранг 1 — 30, ранг 2 — 54, ранг 3 — 72.\n• Стенд оружия печатает для предмета 40 «след от шага, стенд стоячий»: в стоячем стенде с бессмертными мишенями тропе нечего делать, и это сказано прямо, а не выдано за нулевой вклад.\n• Девять экранов из двенадцати совпали с 2.10.55 до пикселя. Меню и патчноуты изменились из-за номера версии и этой заметки, а справка — из-за 41-го предмета в арсенале: счётчик и полоса прокрутки другие (91e21f05 → 651a9753).\n• Цена кадра измерена, а не обещана: полный хвост из 14 меток стоит 0,003 мс логики и 0,059 мс отрисовки при 173 врагах — 0,8 % кадра. У perf_bench появилась сцена trail (герой бежит по кругу), у базовой сцены хеш тот же, что у 2.10.55: fd4cb23a.\n• Лист design/icon_sheet_41.png собран из того же атласа, что идёт в exe (tools/make_icon_sheet.py); снимок боя — design/ash_trail.png, разбор — design/item_41_trail.md.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
@@ -11649,6 +11864,7 @@ struct Game {
         gameMode = previousMode;
         monsters.clear(); projectiles.clear(); pickups.clear();
         particles.clear(); floatTexts.clear(); lightningArcs.clear(); frostWaves.clear(); shockwaves.clear(); bossHazards.clear();
+        clearAshTrail();
         playerX = playerY = 0.0f;
         playerHp = playerMaxHp;
         spawnMonster(0, false, true, 0);

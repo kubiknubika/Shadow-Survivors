@@ -43,6 +43,7 @@ ASSIGN = [
     ("red", "bright"),     # 37 знак палача — багровый
     ("amber", "pure"),     # 38 печать возмездия — золото
     ("blue", "deep"),      # 39 руна свидетеля — индиго
+    ("orange", "dark"),    # 40 тлеющая тропа — остывающий уголь на полу
 ]
 FAMILY_HUE = {"red": 352, "orange": 20, "amber": 42, "lime": 72, "green": 132,
               "teal": 168, "cyan": 190, "blue": 222, "violet": 268, "magenta": 312}
@@ -83,7 +84,7 @@ def _palette(item, hue=None, sat=None, light=None):
     )
 
 
-PALETTES = [_palette(item) for item in range(40)]
+PALETTES = [_palette(item) for item in range(41)]
 
 
 # индексы палитры
@@ -730,7 +731,7 @@ def emit():
              "struct BakedIconImage; // объявлена в skill_icon_atlas.h",
              "#endif", ""]
     tables = []
-    for item in range(40):
+    for item in range(41):
         built = build_icon(item)
         if isinstance(built, tuple):
             pal, flat = built
@@ -757,7 +758,7 @@ def emit():
         lines.append("")
         tables.append(name)
         print(f"  {item:02d}  {ASSIGN[item][0]:8s}/{ASSIGN[item][1]:6s} {source:6s} цветов: {len(used)}")
-    lines.append("static const BakedIconImage SKILL_ICONS_COLOR[40] = {")
+    lines.append("static const BakedIconImage SKILL_ICONS_COLOR[41] = {")
     for name in tables:
         lines.append(f"    {{64,64,{name}_PALETTE,{name}_PIXELS}},")
     lines.append("};")

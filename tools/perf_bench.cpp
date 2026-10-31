@@ -21,6 +21,7 @@
 //     build/perf_bench 600 720x1280          # портрет
 //     build/perf_bench 600 1280x720 2        # кадр в две полосы
 //     build/perf_bench 600 1280x720 1 loot   # сцена с тысячами самоцветов
+//     build/perf_bench 600 1280x720 2 trail  # с тлеющей тропой (предмет 40)
 //     build/perf_bench 600 1280x720 2 g3     # ступень графики: g1 высокое … g4 эконом
 //
 // Пятый аргумент (g0…g4) задаёт уровень графики из настроек: g0 — АВТО,
@@ -69,6 +70,12 @@ int main(int argc, char** argv) {
     // месте 5 минут, и на полу накапливаются тысячи самоцветов. Именно на ней
     // видно, что дорого стоит не толпа, а добыча.
     const bool lootScene = argc > argi + 2 && strcmp(argv[argi + 2], "loot") == 0;
+    // Сцена «тропа»: предмет 40 третьего ранга, а герой бежит по кругу — иначе
+    // тропе нечего оставлять на полу. Стоящий герой и цена тропы — это ноль
+    // проверок, а не ноль цены.
+    bool trailScene = false;
+    for (int i = argi + 2; i < argc; ++i)
+        if (strcmp(argv[i], "trail") == 0) trailScene = true;
     // Пятый аргумент — уровень графики из настроек: g0 авто, g1 высокое,
     // g2 среднее, g3 быстрое, g4 эконом. С ним один и тот же стенд меряет,
     // что игрок реально получит на слабом железе.
@@ -92,6 +99,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 7; ++i) g.itemLevels[i] = 6;
     g.itemLevels[0] = 9;          // клинки на максимуме
     g.itemLevels[7] = 4;          // книга IV — условие эволюции
+    if (trailScene) g.itemLevels[40] = 3;
     g.checkSymbiosis();
     srand(4242);
     for (int i = 0; i < 160; ++i) g.spawnMonster(i % 10, i % 9 == 0, false);
@@ -109,6 +117,15 @@ int main(int argc, char** argv) {
     for (int f = 0; f < frames; ++f) {
         // Модалка левелапа останавливает бой, а стенду нужен кадр боя.
         if (g.state == STATE_LEVELUP) g.state = STATE_PLAYING;
+        if (trailScene) {
+            // Круг радиусом ~520 px: скорость выше порога метки, след ложится
+            // непрерывно, и в кадре постоянно живёт полный хвост.
+            const float t = (float)f / 60.0f * 1.35f;
+            g.keyD = cosf(t) > 0.0f;
+            g.keyA = cosf(t) < 0.0f;
+            g.keyS = sinf(t) > 0.0f;
+            g.keyW = sinf(t) < 0.0f;
+        }
         const auto t0 = std::chrono::high_resolution_clock::now();
         g.update(dt);
         const auto t1 = std::chrono::high_resolution_clock::now();
@@ -129,6 +146,8 @@ int main(int argc, char** argv) {
            w, h, frames, threads, updateMs, renderMs, frameMs, frameMs > 0.0 ? 1000.0 / frameMs : 0.0);
     printf("сущностей в конце: мобов %d, снарядов %d, частиц %d; хеш кадра %08x\n",
            (int)g.monsters.size(), (int)g.projectiles.size(), (int)g.particles.size(), hash);
+    if (trailScene) printf("тропа: меток на полу %d, положено за прогон %d\n",
+                           (int)g.ashTrailMarks.size(), g.ashTrailFires);
     if (frameMs > 16.7) {
         printf("НЕ ВЛЕЗАЕТ в 60 fps: %.2f мс при бюджете 16.7 мс\n", frameMs);
         return 1;

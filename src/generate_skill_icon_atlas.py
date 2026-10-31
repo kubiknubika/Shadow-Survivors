@@ -55,6 +55,10 @@ ASSETS = [
     (37,  DESIGN / 'execution_mark_id37_ai_concept.png'),
     (38,  DESIGN / 'vengeance_seal_id38_ai_concept.png'),
     (39,  DESIGN / 'witness_rune_id39_ai_concept.png'),
+    # 40: concept-файла нет — иконка нарисована позже и лежит в design/ai_icons.
+    # Полную пересборку атласа делает только tools/bake_ai_icon.py, он не трогает
+    # уже выпущенные 39 иконок.
+    (40,  DESIGN / 'ai_icons' / 'icon_40_ember_trail.png'),
 ]
 
 def fmt_array(values, per_line=24, formatter=str):
@@ -101,7 +105,7 @@ for wid, path in ASSETS:
         '',
     ])
 lines.extend([
-    'static const BakedIconImage SKILL_ICONS_AI[40] = {',
+    'static const BakedIconImage SKILL_ICONS_AI[41] = {',
 ])
 for wid, _ in ASSETS:
     name = f'SKILL_ICON_{wid:02d}_AI'
