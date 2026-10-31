@@ -18,7 +18,14 @@
 //  5. известные совпадения прошлых лет (14.02, 17.03, 16–17.02.2026) отдают
 //     правильный праздник — те самые даты, на которых ломался выбор;
 //  6. окно Нового года, переходящее через 31 декабря, считается как близкое, а
-//     не «через 364 дня».
+//     не «через 364 дня»;
+//  7. пломба на «мёртвый» промежуток года: у календаря есть долг — 103 дня без
+//     праздников (9 июля — 19 октября). Число не «примерно», а измерено; если
+//     окна сдвинут, стенд скажет, а не промолчит;
+//  8. ничьи по расстоянию до «своего дня»: таких дней 13 на 2024–2040, и ни
+//     одна ничья не приходится на чужой фокус (иначе праздник отбирал бы день);
+//  9. лунный новый год считается по таблице: после последнего известного года
+//     окно уезжает на 1 февраля, и календарь обязан назвать дату примерной.
 #include <cstdio>
 #include <cstring>
 #include "holidays.h"
@@ -148,6 +155,84 @@ static void checkDateShift() {
     }
 }
 
+
+// ── Пломбы на то, что обычные проверки не видят ─────────────────────────────
+// Промежуток без праздников: календарь состоит из восьми окон, и летом между
+// Купалой и Хэллоуином зияет дыра. Раньше в holidays.h стояло утверждение, что
+// «мёртвых месяцев дольше двух недель нет», — стенд это не проверял, и
+// утверждение было неправдой. Теперь число измеряется и держится пломбой.
+static void checkCalendarGap() {
+    int worst = 0, endY = 0, endM = 0, endD = 0, gap = 0;
+    int covered = 0, total = 0;
+    for (int year = 2024; year <= 2040; ++year)
+        for (int m = 1; m <= 12; ++m)
+            for (int d = 1; d <= holidayDaysInMonth(m, year); ++d) {
+                ++total;
+                if (holidayForDate(m, d, year) == HOLIDAY_NONE) {
+                    if (++gap > worst) { worst = gap; endY = year; endM = m; endD = d; }
+                } else { ++covered; gap = 0; }
+            }
+    char what[200];
+    // 103 дня — измеренный долг: 9 июля — 19 октября. Если окна поменяют, а
+    // праздника в промежутке не появится, число станет другим, и это надо
+    // заметить, а не унаследовать молча.
+    snprintf(what, sizeof(what), "самый длинный будний промежуток %d дн. (ждали 103, кончается %02d.%02d.%d)",
+             worst, endD, endM, endY);
+    expect(worst == 103, what);
+    printf("  самый длинный будний промежуток: %d дн., кончается %02d.%02d.%d (долг дизайна)\n",
+           worst, endD, endM, endY);
+    // Покрытие года: восемь окон — это примерно четверть календаря. Число тоже
+    // пломба: «праздник идёт» должно оставаться событием, а не фоном, и в то же
+    // время окон не должно стать вдвое меньше от случайной правки.
+    const int percent = total ? covered * 100 / total : 0;
+    snprintf(what, sizeof(what), "праздники покрывают %d %% дней года (ждали 25)", percent);
+    expect(percent == 25, what);
+    printf("  покрытие года праздниками: %d %% (%d из %d дней)\n", percent, covered, total);
+}
+
+// Ничьи по расстоянию до «своего дня». Побеждает тот, кто выше в таблице, — это
+// правило, но у правила есть цена: в такой день игрок видит один праздник из
+// двух равноправных. Пломба фиксирует, сколько таких дней и что ни один из них
+// не приходится на чужой фокус (иначе это был бы не тай-брейк, а кража дня).
+static void checkFocusTies() {
+    int ties = 0, onFocus = 0;
+    for (int year = 2024; year <= 2040; ++year)
+        for (int m = 1; m <= 12; ++m)
+            for (int d = 1; d <= holidayDaysInMonth(m, year); ++d) {
+                HolidayId list[4];
+                const int n = holidayActiveList(m, d, year, list, 4);
+                if (n < 2) continue;
+                if (holidayFocusDistance(list[0], m, d, year) != holidayFocusDistance(list[1], m, d, year)) continue;
+                ++ties;
+                const HolidayDate f0 = holidayFocusDay(list[0], year);
+                const HolidayDate f1 = holidayFocusDay(list[1], year);
+                if ((f0.month == m && f0.day == d) || (f1.month == m && f1.day == d)) ++onFocus;
+            }
+    char what[200];
+    snprintf(what, sizeof(what), "дней с ничьей по фокусу %d (ждали 13 на 2024–2040)", ties);
+    expect(ties == 13, what);
+    snprintf(what, sizeof(what), "ничьих, пришедшихся на чужой «свой день»: %d (ждали 0)", onFocus);
+    expect(onFocus == 0, what);
+    printf("  ничьи по фокусу: %d дн., из них на чужой фокус: %d\n", ties, onFocus);
+}
+
+// Лунный новый год: таблица дат кончается, и после последнего года окно молча
+// уезжает на 1 февраля. Проверяем, что конец таблицы известен и что календарь
+// может об этом сказать (holidayLunarYearKnown — не мёртвый код).
+static void checkLunarTable() {
+    int last = 2024;
+    while (holidayLunarYearKnown(last + 1)) ++last;
+    char what[200];
+    snprintf(what, sizeof(what), "таблица лунного нового года кончается на %d (ждали 2040)", last);
+    expect(last == 2040, what);
+    snprintf(what, sizeof(what), "год %d должен считаться неизвестным", last + 1);
+    expect(!holidayLunarYearKnown(last + 1), what);
+    const HolidayDate fallback = holidayLunarNewYear(last + 1);
+    snprintf(what, sizeof(what), "фолбэк вне таблицы — 1 февраля (ждали 1.2, вышло %d.%d)", fallback.day, fallback.month);
+    expect(fallback.month == 2 && fallback.day == 1, what);
+    printf("  лунный новый год: таблица до %d, дальше 1 февраля (календарь обязан пометить)\n", last);
+}
+
 int main() {
     printf("Праздники: пересечения окон, 2024–2060\n");
     checkFocusDays();
@@ -155,6 +240,9 @@ int main() {
     checkKnownCollisions();
     checkNewYearDistance();
     checkDateShift();
+    checkCalendarGap();
+    checkFocusTies();
+    checkLunarTable();
     if (failures == 0) {
         printf("  ОК: ошибок нет\n");
         return 0;
