@@ -408,6 +408,291 @@ static void testCorruptSave() {
     remove("shadow_survivors.sav");
 }
 
+// ── 10. Ассортимент заданий: все десять видов встречаются и не повторяются ───
+static void testKindVariety() {
+    printf("[10] ассортимент: десять видов, три разных в день\n");
+    int seen[DAILY_KIND_COUNT] = {0};
+    int days = 0;
+    // Перебираем дни подряд, как это делает игрок: набор зависит только от дня.
+    for (int day = 20500; day < 20800; ++day) {
+        Game* g = makeGame(2026, 10, 31);
+        g->rollDailyMissionsForDay(day);
+        ++days;
+        int distinct = 0;
+        for (int i = 0; i < DAILY_MISSION_COUNT; ++i) {
+            const int k = g->save.dailyKind[i];
+            check(k >= 0 && k < DAILY_KIND_COUNT, "вид вне списка: %d", k);
+            if (k >= 0 && k < DAILY_KIND_COUNT) ++seen[k];
+            bool dup = false;
+            for (int j = 0; j < i; ++j) if (g->save.dailyKind[j] == k) dup = true;
+            check(!dup, "день %d: задание «%s» выдано дважды", day, g->dailyKindTitle(k));
+            if (!dup) ++distinct;
+            check(g->save.dailyTarget[i] > 0, "день %d: цель задания %d нулевая", day, i);
+        }
+        check(distinct == DAILY_MISSION_COUNT, "день %d: разных видов %d из %d", day, distinct, DAILY_MISSION_COUNT);
+        delete g;
+    }
+    // Все виды должны встречаться: иначе задание — мёртвый код.
+    for (int k = 0; k < DAILY_KIND_COUNT; ++k)
+        check(seen[k] > 0, "вид «%s» не выпал ни разу за %d дней", Game::dailyKindTitle(k), days);
+    printf("  видов: %d, дней проверено: %d\n", DAILY_KIND_COUNT, days);
+}
+
+// ── 11. Новые счётчики заданий: считаются в бою и попадают в прогресс ────────
+static void testNewCounters() {
+    printf("[11] новые счётчики: элиты, резонаторы, супер, тир сборки\n");
+    Game* g = makeGame(2026, 10, 31);
+    g->rollDailyMissionsForDay(20700);
+    // День фиксируем явно: commitDailyProgress зовёт ensureDaily, и «чужой»
+    // день заставил бы игру перевыдать набор прямо посреди проверки.
+    g->save.dailyDay = g->dailyToday();
+    g->save.dailyKind[0] = DAILY_ELITES;      g->save.dailyTarget[0] = 100; g->save.dailyProgress[0] = 0;
+    g->save.dailyKind[1] = DAILY_RESONATORS;  g->save.dailyTarget[1] = 100; g->save.dailyProgress[1] = 0;
+    g->save.dailyKind[2] = DAILY_BUILD_TIER;  g->save.dailyTarget[2] = 9;   g->save.dailyProgress[2] = 0;
+
+    g->initRun(0, false);
+    check(g->runElites == 0 && g->runResonators == 0 && g->runSupers == 0,
+          "счётчики нового боя не с нуля");
+    // Элита: убиваем её так же, как игра, — через damageMonster с большим уроном.
+    const size_t before = g->monsters.size();
+    g->spawnMonster(0, true, false);
+    check(g->monsters.size() == before + 1, "элита не заспавнилась");
+    g->damageMonster(g->monsters.size() - 1, 1.0e9f, 0.0f, 0.0f);
+    check(g->runElites == 1, "элита не засчитана (%d)", g->runElites);
+    // Резонатор — destroyed, а не убит: у него отдельная ветка.
+    const int resonatorsBefore = g->countResonators();
+    g->spawnResonator(0);
+    if (g->countResonators() > resonatorsBefore) {
+        for (size_t i = g->monsters.size(); i-- > 0;) {
+            if (g->monsters[i].isResonator && g->monsters[i].hp > 0.0f) {
+                g->damageMonster(i, 1.0e9f, 0.0f, 0.0f);
+                break;
+            }
+        }
+        check(g->runResonators == 1, "резонатор не засчитан (%d)", g->runResonators);
+    }
+    // Супер: заряжаем и применяем.
+    g->superCharge = 100.0f;
+    g->playerHp = g->playerMaxHp;
+    g->state = STATE_PLAYING;
+    g->triggerUltimate();
+    check(g->runSupers == 1, "супер не засчитан (%d)", g->runSupers);
+
+    g->commitDailyProgress();
+    check(g->save.dailyProgress[0] == 1, "элиты не попали в прогресс (%d)", g->save.dailyProgress[0]);
+    check(g->save.dailyProgress[1] == (g->runResonators ? 1 : 0), "резонаторы не попали в прогресс");
+    // Тир сборки считается по лучшему бою и не может быть меньше первого.
+    check(g->save.dailyProgress[2] >= 1, "тир сборки не записан (%d)", g->save.dailyProgress[2]);
+    const int tierAfterFirstRun = g->save.dailyProgress[2];
+
+    // Второй бой хуже — прогресс не должен ухудшиться.
+    g->initRun(0, false);
+    g->commitDailyProgress();
+    check(g->save.dailyProgress[2] == tierAfterFirstRun, "тир ухудшился вторым боем (%d → %d)",
+          tierAfterFirstRun, g->save.dailyProgress[2]);
+    delete g;
+}
+
+// ── 12. Тир-лист жетонов: порог по потраченному, закрытый тир не выдаётся ────
+static void testBoosterTiers() {
+    printf("[12] тир-лист жетонов: порог по потраченному золоту\n");
+    Game* g = makeGame(2026, 10, 31);
+    check(BOOSTER_KINDS == 12, "жетонов %d вместо 12", BOOSTER_KINDS);
+    check(BOOSTER_TIER_GOLD[0] == 0, "первый тир должен быть открыт с нуля");
+    check(BOOSTER_TIER_GOLD[1] > 0 && BOOSTER_TIER_GOLD[2] > BOOSTER_TIER_GOLD[1],
+          "пороги тиров должны расти");
+
+    g->save.goldSpent = 0;
+    check(g->unlockedBoosterTierCount() == 1, "с нуля открыто %d тиров", g->unlockedBoosterTierCount());
+    check(!g->boosterTierUnlocked(1), "второй тир открыт без трат");
+    g->save.goldSpent = BOOSTER_TIER_GOLD[1] - 1;
+    check(!g->boosterTierUnlocked(1), "второй тир открылся на золото меньше порога");
+    g->save.goldSpent = BOOSTER_TIER_GOLD[1];
+    check(g->boosterTierUnlocked(1), "второй тир не открылся на пороге");
+    check(g->unlockedBoosterTierCount() == 2, "открыто %d тиров вместо двух", g->unlockedBoosterTierCount());
+    check(g->unlockedBoosterCount() == 8, "доступно %d жетонов вместо восьми", g->unlockedBoosterCount());
+    g->save.goldSpent = BOOSTER_TIER_GOLD[2];
+    check(g->unlockedBoosterTierCount() == 3, "третий тир не открылся");
+    check(g->unlockedBoosterCount() == BOOSTER_KINDS, "при трёх тирах доступны не все жетоны");
+
+    // Закрытый тир нельзя выбрать, даже если жетон лежит в сейве.
+    g->save.goldSpent = 0;
+    g->save.boosters[BOOSTER_SPEED] = 3;
+    g->save.activeBooster = -1;
+    g->selectBooster(BOOSTER_SPEED);
+    check(g->save.activeBooster == -1, "выбран жетон закрытого тира");
+
+    // И он не срабатывает, если попал в файл сейва руками.
+    g->save.activeBooster = BOOSTER_SPEED;
+    g->save.boosters[BOOSTER_SPEED] = 1;
+    g->initRun(0, false);
+    check(g->runBooster == -1, "жетон закрытого тира сработал в бою (%d)", g->runBooster);
+    check(g->save.boosters[BOOSTER_SPEED] == 1, "жетон закрытого тира списался");
+
+    // Крутка и награда задания не выдают жетоны закрытых тиров.
+    g->save.goldSpent = 0;
+    g->save.activeBooster = -1;
+    bool closedTierPrize = false, closedTierReward = false;
+    for (int day = 20500; day < 20800; ++day) {
+        for (int i = 0; i < 30; ++i) {
+            int kind = 0, value = 0, bk = 0;
+            g->dailyPrize(day, i, &kind, &value, &bk);
+            if (bk >= g->unlockedBoosterCount()) closedTierPrize = true;
+        }
+    }
+    check(!closedTierPrize, "крутка выдала жетон закрытого тира");
+    for (int day = 20500; day < 20800; ++day) {
+        Game* h = makeGame(2026, 10, 31);
+        h->rollDailyMissionsForDay(day);
+        for (int i = 0; i < DAILY_MISSION_COUNT; ++i) {
+            h->save.dailyReward[i] = 2;   // награда — жетон
+            h->save.dailyProgress[i] = h->save.dailyTarget[i];
+            h->save.dailyClaimed = 0;
+            h->save.goldSpent = 0;
+            h->claimDaily(i);
+            for (int k = h->unlockedBoosterCount(); k < BOOSTER_KINDS; ++k)
+                if (h->save.boosters[k] > 0) closedTierReward = true;
+        }
+        delete h;
+    }
+    check(!closedTierReward, "награда задания выдала жетон закрытого тира");
+    delete g;
+}
+
+// ── 13. Все двенадцать жетонов действительно что-то делают ───────────────────
+static void testEveryBoosterWorks() {
+    printf("[13] каждый из двенадцати жетонов меняет бой\n");
+    // Базовая линия: бой без жетона.
+    auto runWith = [](int kind, int* boosterOut) -> Game* {
+        Game* g = makeGame(2026, 10, 31);
+        g->save.goldSpent = 2000000000;      // все тиры открыты
+        for (int k = 0; k < BOOSTER_KINDS; ++k) g->save.boosters[k] = 1;
+        g->save.activeBooster = kind;
+        g->initRun(0, false);
+        if (boosterOut) *boosterOut = g->runBooster;
+        return g;
+    };
+    Game* base = makeGame(2026, 10, 31);
+    base->save.goldSpent = 2000000000;
+    for (int k = 0; k < BOOSTER_KINDS; ++k) base->save.boosters[k] = 1;
+    base->save.activeBooster = -1;
+    base->initRun(0, false);
+
+    for (int k = 0; k < BOOSTER_KINDS; ++k) {
+        int used = -1;
+        Game* g = runWith(k, &used);
+        check(used == k, "жетон «%s» не попал в бой (%d)", Game::boosterTitle(k), used);
+        bool differs = false;
+        switch (k) {
+            case BOOSTER_GOLD:    differs = g->runGoldMultiplier > base->runGoldMultiplier; break;
+            case BOOSTER_HEALTH:  differs = g->playerMaxHp > base->playerMaxHp; break;
+            case BOOSTER_RAGE:    differs = g->runDamageMultiplier > base->runDamageMultiplier; break;
+            case BOOSTER_LUCK:    differs = g->rerollsPerLevel() > 1; break;
+            case BOOSTER_SPEED:   differs = g->getMoveSpeed() > base->getMoveSpeed(); break;
+            case BOOSTER_XP:      differs = g->getXpMultiplier() > base->getXpMultiplier(); break;
+            case BOOSTER_HUNT:    differs = g->runEliteBonus > base->runEliteBonus; break;
+            case BOOSTER_CHARGE:  differs = g->getSuperGainMultiplier() > base->getSuperGainMultiplier(); break;
+            case BOOSTER_HUNGER:  differs = g->runGoldMultiplier > base->runGoldMultiplier &&
+                                            g->playerMaxHp < base->playerMaxHp; break;
+            case BOOSTER_RESONANCE: differs = g->resonatorCap() > base->resonatorCap(); break;
+            case BOOSTER_BREAK:   differs = g->runBreakthroughEarly > 0; break;
+            case BOOSTER_WRATH:   differs = g->runDamageMultiplier > base->runDamageMultiplier; break;
+            default: break;
+        }
+        check(differs, "жетон «%s» (%s) не изменил бой", Game::boosterTitle(k), Game::boosterEffect(k));
+        delete g;
+    }
+    delete base;
+
+    // Жетон действует ровно один бой — в том числе верхних тиров.
+    Game* once = makeGame(2026, 10, 31);
+    once->save.goldSpent = 2000000000;
+    once->save.boosters[BOOSTER_WRATH] = 1;
+    once->save.activeBooster = BOOSTER_WRATH;
+    once->initRun(0, false);
+    const float boostedDamage = once->runDamageMultiplier;
+    once->initRun(0, false);
+    check(once->runBooster == -1, "второй бой снова получил жетон гнева");
+    check(once->runDamageMultiplier < boostedDamage, "множитель урона не сбросился (%f)", once->runDamageMultiplier);
+    check(once->save.boosters[BOOSTER_WRATH] == 0, "жетон не сгорел (%d)", once->save.boosters[BOOSTER_WRATH]);
+    delete once;
+}
+
+// ── 14. Потраченное золото: растёт на покупках, не сбрасывается казной ───────
+static void testGoldSpent() {
+    printf("[14] потраченное золото: копится покупками, не сбрасывается\n");
+    Game* g = makeGame(2026, 10, 31);
+    g->save.gold = 1000000;
+    g->save.goldSpent = 0;
+    const int cost = g->getMetaUpgradeCost(0);
+    g->spendGold(cost);
+    check(g->save.gold == 1000000 - cost, "золото не списалось (%d)", g->save.gold);
+    check(g->save.goldSpent == cost, "потраченное не выросло (%d)", g->save.goldSpent);
+
+    // Потолок тот же, что у казны: счётчик не должен уехать в минус от переполнения.
+    g->save.goldSpent = 2000000000;
+    g->save.gold = 5000;
+    g->spendGold(1000);
+    check(g->save.goldSpent == 2000000000, "потраченное вышло за потолок (%d)", g->save.goldSpent);
+    check(g->save.gold == 4000, "золото списалось неверно (%d)", g->save.gold);
+
+    // Оценка для старого сейва: выкупленная кузница даёт больше миллиона.
+    g->save.metaRanks[0] = 12; g->save.metaRanks[1] = 12; g->save.metaRanks[2] = 12;
+    g->save.metaRanks[3] = 12; g->save.metaRanks[4] = 12; g->save.metaRanks[5] = 12;
+    const int estimate = g->estimateSpentGold();
+    check(estimate > 1000000, "оценка потраченного для выкупленной кузницы %d — меньше миллиона", estimate);
+    check(estimate < 2000000000, "оценка потраченного %d — больше потолка", estimate);
+    delete g;
+}
+
+// ── 15. Сейв v10 → v11: старый выбранный жетон не превращается в новый ──────
+static void testTierMigration() {
+    printf("[15] сейв v10 (204 байта) → v11: жетоны и потраченное\n");
+    // Пишем файл ровно того вида, какой оставляла 2.12.16: версия 10, четыре
+    // жетона, выбран третий (удача), за ним сразу поле activeBooster.
+    SaveData old = {};
+    old.magic = 0x53484457;
+    old.gold = 250000;
+    old.saveVersion = 10;
+    old.metaRanks[0] = 5;
+    old.boosters[0] = 0; old.boosters[1] = 0; old.boosters[2] = 1; old.boosters[3] = 4;
+    FILE* f = fopen("shadow_survivors.sav", "wb");
+    check(f != nullptr, "не удалось создать сейв v10");
+    if (!f) return;
+    // Файл v10 собирается по своему раскладу, а не по нынешнему: жетонов было
+    // четыре, и номер выбранного лежал сразу за ними (смещение 200 в нынешней
+    // структуре — это уже начало пятого жетона, а не выбор).
+    const size_t v10Size = offsetof(SaveData, boosters) + 4 * sizeof(int) + sizeof(int);
+    check(v10Size == 204, "длина сейва v10 получилась %zu вместо 204", v10Size);
+    {
+        std::vector<char> bytes(v10Size, 0);
+        memcpy(bytes.data(), &old, offsetof(SaveData, boosters) + 4 * sizeof(int));
+        const int legacyActive = (int)BOOSTER_LUCK;
+        memcpy(bytes.data() + offsetof(SaveData, boosters) + 4 * sizeof(int), &legacyActive, sizeof(int));
+        fwrite(bytes.data(), 1, v10Size, f);
+    }
+    fclose(f);
+
+    Game* g = new Game();
+    g->simulationMode = true;
+    g->ignoreSavedState = false;
+    srand(4242);
+    g->init();
+    check(g->save.saveVersion == 11, "версия сейва после миграции %u", g->save.saveVersion);
+    // init() успевает начать забег, а забег сжигает выбранный жетон. Значит,
+    // проверять надо не поле в сейве, а то, что жетон сработал именно тот.
+    check(g->runBooster == BOOSTER_LUCK,
+          "выбранный жетон потерялся при миграции (в бою %d вместо %d)", g->runBooster, BOOSTER_LUCK);
+    check(g->save.boosters[BOOSTER_LUCK] == 3,
+          "запас жетона удачи испорчен (%d вместо 3 после сгорания одного)", g->save.boosters[BOOSTER_LUCK]);
+    for (int k = 4; k < BOOSTER_KINDS; ++k)
+        check(g->save.boosters[k] == 0, "при миграции появился жетон тира (%d: %d)", k, g->save.boosters[k]);
+    // Потраченное восстановлено по купленным рангам: пять рангов «Силы клинка».
+    check(g->save.goldSpent > 0, "потраченное после миграции ноль");
+    delete g;
+    remove("shadow_survivors.sav");
+}
+
 int main() {
     printf("СТЕНД ДНЕВНЫХ ДАРОВ\n\n");
     testSameDayIsStable();
@@ -421,6 +706,12 @@ int main() {
     testLegacySave(68, "версия до развилок");
     testLegacySave((int)offsetof(SaveData, activeBooster), "обрезанный хвост");
     testCorruptSave();
+    testKindVariety();
+    testNewCounters();
+    testBoosterTiers();
+    testEveryBoosterWorks();
+    testGoldSpent();
+    testTierMigration();
     printf("\n");
     if (failures == 0) printf("ОК: обещания дневных даров выполнены\n");
     else printf("ПРОВАЛОВ: %d\n", failures);

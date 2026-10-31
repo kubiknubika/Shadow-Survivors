@@ -226,7 +226,7 @@ static inline int holidayMonsterSlot(int type) {
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 171;
+static constexpr int PATCH_NOTES_COUNT = 172;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -1013,12 +1013,21 @@ static_assert(sizeof(GameOptions) == 100, "2.12.2 options layout changed unexpec
 // Сервер для этого не нужен — игра офлайн, и обещание «раз в день» держится
 // арифметикой, а не доверием к клиенту.
 static constexpr int DAILY_MISSION_COUNT = 3;
-static constexpr int BOOSTER_KINDS = 4;
+// Жетоны разложены по тирам: четыре на тир, три тира. Верхний тир — это не
+// «то же, но больше», а другая ниша (опыт, скорость, резонаторы, прорыв),
+// иначе тир-лист был бы одной длинной лестницей «+5 % к тому же».
+static constexpr int BOOSTER_TIER_COUNT = 3;
+static constexpr int BOOSTER_PER_TIER = 4;
+static constexpr int BOOSTER_KINDS = BOOSTER_TIER_COUNT * BOOSTER_PER_TIER;
 static constexpr int DAILY_ROLLS_FREE = 1;
 
 // Задания: что считаем и как. Сумма копится между забегами, кроме времени и
 // уровня — там берётся лучший забег (иначе задание «дожить до 5 минут»
 // выполнялось бы суммой трёх коротких смертей).
+// Десять видов, а не шесть: три задания дня из шести видов почти всегда
+// сводились к «убей и собери», потому что половина списка — счётчики одного и
+// того же боя. Новые четыре заставляют играть иначе: элиты — риск, резонаторы —
+// арена, супер — ресурс, тир сборки — сама сборка.
 enum DailyKind {
     DAILY_KILLS = 0,
     DAILY_GOLD,
@@ -1026,16 +1035,36 @@ enum DailyKind {
     DAILY_CHESTS,
     DAILY_LEVELS,
     DAILY_BOSSES,
+    DAILY_ELITES,
+    DAILY_RESONATORS,
+    DAILY_SUPERS,
+    DAILY_BUILD_TIER,
     DAILY_KIND_COUNT
 };
 
 // Жетоны на один забег. Каждый сгорает на старте боя, эффект — только этот бой.
+// Порядок = порядок в тир-листе: первые четыре открыты сразу, следующие четыре
+// — после миллиона потраченного золота, последние — после того, как кузница
+// выкуплена почти целиком.
 enum BoosterKind {
     BOOSTER_GOLD = 0,
     BOOSTER_HEALTH,
     BOOSTER_RAGE,
-    BOOSTER_LUCK
+    BOOSTER_LUCK,
+    BOOSTER_SPEED,
+    BOOSTER_XP,
+    BOOSTER_HUNT,
+    BOOSTER_CHARGE,
+    BOOSTER_HUNGER,
+    BOOSTER_RESONANCE,
+    BOOSTER_BREAK,
+    BOOSTER_WRATH
 };
+
+// Порог открытия тира — потраченное за всё время золото, а не казна: казна
+// копится и тратится, а потраченное только растёт, и «тир открылся» нельзя
+// случайно отменить покупкой.
+static const int BOOSTER_TIER_GOLD[BOOSTER_TIER_COUNT] = {0, 1000000, 1800000};
 
 // Аномалия забега: одна на бой, выпадает в initRun. Внутри забега правило
 // постоянное — игрок успевает его заметить, а не гадает, что сейчас сработало.
@@ -1053,7 +1082,7 @@ struct SaveData {
     int seenIntroCutscene = 0;
     int seenTwistCutscene = 0;
     int seenEndingCutscene = 0;
-    uint32_t saveVersion = 10;
+    uint32_t saveVersion = 11;
     int enemyOathRanks[3] = {0, 0, 0};
     // Appended in v5 for binary compatibility: narrative evidence and permanently broken seals.
     uint32_t storySealMask = 0;
@@ -1086,8 +1115,11 @@ struct SaveData {
     int dailyClaimed = 0;                               // биты забранных заданий
     int dailyRolls = 0;                                 // круток сделано сегодня
     int rollTokens = 0;                                 // дополнительные крутки (награда)
-    int boosters[BOOSTER_KINDS] = {0, 0, 0, 0};         // жетоны на один забег
+    int boosters[BOOSTER_KINDS] = {0};                  // жетоны на один забег, три тира
     int activeBooster = -1;                             // выбранный жетон (-1 — нет)
+    // v11 (tail): сколько золота потрачено за всё время. По нему открываются
+    // тиры жетонов. Потолок — тот же, что у казны: 2e9.
+    int goldSpent = 0;
 };
 
 // ── Формат сейва ─────────────────────────────────────────────────────────────
@@ -1110,7 +1142,7 @@ static_assert(offsetof(SaveData, campaignFork) == 116, "сейв: смещени
 static_assert(offsetof(SaveData, dailyDay) == 120, "сейв: хвост дневных даров поехал — нужна миграция");
 static_assert(sizeof(((SaveData*)nullptr)->dailyKind) == DAILY_MISSION_COUNT * sizeof(int),
               "сейв: у заданий дня должно быть три пары «вид/цель»");
-static_assert(sizeof(SaveData) == 204, "сейв: размер после дневных даров изменился — нужна миграция");
+static_assert(sizeof(SaveData) == 240, "сейв: размер после тиров жетонов изменился — нужна миграция");
 
 struct UIButton {
     int x, y, w, h;
@@ -1353,6 +1385,10 @@ struct Game {
     int runGold = 0;
     int runBossKills = 0;
     int runChests = 0;              // сундуков открыто за забег (задание дня)
+    int runElites = 0;              // элит убито за забег (задание дня)
+    int runResonators = 0;          // резонаторов разбито за забег (задание дня)
+    int runSupers = 0;              // супер применён раз за забег (задание дня)
+    int runBuildTierBest = 0;       // лучший тир сборки за забег (задание дня)
     int runAnomaly = 0;             // аномалия этого забега (0..ANOMALY_COUNT-1)
     int runBooster = -1;            // жетон, сгоревший на этом забеге (-1 — нет)
     int upgradeRerollsLeft = 1;     // замен прокачки осталось (жетон удачи даёт вторую)
@@ -1365,6 +1401,13 @@ struct Game {
     float runSpawnMultiplier = 1.0f;
     float runEliteBonus = 0.0f;
     int runBreakthroughEarly = 0;
+    // Поправки от жетонов верхних тиров. Отдельные поля, а не «ещё один общий
+    // множитель»: у каждого своя точка применения, и складывать их в один
+    // множитель значило бы обещать на экране не то, что считается.
+    float runMoveMultiplier = 1.0f;
+    float runSuperGainMultiplier = 1.0f;
+    float runHealthMultiplier = 1.0f;
+    int runResonatorBonus = 0;
     int dashRuneKillCounter = 0;
     int echoStepCharges = 0;
     bool dashEvadeTriggered = false;
@@ -1926,7 +1969,7 @@ struct Game {
                     migrated = true;
                 }
             } else {
-                SaveData tmp;
+                SaveData tmp = {};   // хвост короче файла = «поля нет», а не мусор
                 size_t got = fread(&tmp, 1, sizeof(SaveData), f);
                 if (got >= sizeof(uint32_t) && tmp.magic == 0x53484457) {
                     save = tmp;
@@ -1971,7 +2014,11 @@ struct Game {
                     // v10: дневные дары дописаны в хвост сейва. Файл до 2.12.16
                     // короче — счётчики начинаются с нуля, и задания выдаются
                     // при первом открытии экрана. Ранги и печати не трогаются.
-                    if (loadedVersion < 10 || got < offsetof(SaveData, activeBooster) + sizeof(save.activeBooster)) {
+                    // Смещение «выбранного жетона» в сейве v10: сразу после
+                    // четырёх жетонов. Оно нужно и миграции v10→v11, и проверке
+                    // «файл короче, чем его собственный хвост».
+                    const size_t legacyActiveOffset = offsetof(SaveData, boosters) + 4 * sizeof(int);
+                    if (loadedVersion < 10 || got < legacyActiveOffset + sizeof(int)) {
                         save.dailyDay = 0; save.dailyClaimed = 0; save.dailyRolls = 0;
                         save.rollTokens = 0; save.activeBooster = -1;
                         for (int i = 0; i < DAILY_MISSION_COUNT; ++i) {
@@ -1980,6 +2027,28 @@ struct Game {
                         }
                         for (int i = 0; i < BOOSTER_KINDS; ++i) save.boosters[i] = 0;
                         save.saveVersion = 10;
+                        migrated = true;
+                    }
+                    // v11: жетонов стало двенадцать (три тира по четыре), а в
+                    // хвост дописан счётчик потраченного золота. У файла v10
+                    // хвост другой: четыре жетона и сразу activeBooster, и при
+                    // чтении он ложится ровно на место пятого жетона. Поэтому
+                    // «выбранный жетон» читается по старому смещению — иначе
+                    // номер выбранного жетона молча становился бы запасом
+                    // жетона скорости.
+                    if (loadedVersion < 11) {
+                        int legacyActive = -1;
+                        if (got >= legacyActiveOffset + sizeof(int)) {
+                            const char* raw = reinterpret_cast<const char*>(&tmp);
+                            memcpy(&legacyActive, raw + legacyActiveOffset, sizeof(int));
+                        }
+                        for (int k = 4; k < BOOSTER_KINDS; ++k) save.boosters[k] = 0;
+                        save.activeBooster = (legacyActive >= 0 && legacyActive < 4 &&
+                                              save.boosters[legacyActive] > 0) ? legacyActive : -1;
+                        // Потраченное старый сейв не считал, но восстановить его
+                        // можно честно: по купленным рангам кузницы и договоров.
+                        save.goldSpent = estimateSpentGold();
+                        save.saveVersion = 11;
                         migrated = true;
                     }
                 }
@@ -2027,6 +2096,12 @@ struct Game {
                 if (save.boosters[k] > 9) { save.boosters[k] = 9; migrated = true; }
             }
             if (save.activeBooster < -1 || save.activeBooster >= BOOSTER_KINDS) { save.activeBooster = -1; migrated = true; }
+            if (save.activeBooster >= 0 && !boosterTierUnlocked(boosterTierOf(save.activeBooster))) {
+                // Выбрать жетон закрытого тира можно только правкой файла.
+                save.activeBooster = -1; migrated = true;
+            }
+            if (save.goldSpent < 0) { save.goldSpent = 0; migrated = true; }
+            if (save.goldSpent > 2000000000) { save.goldSpent = 2000000000; migrated = true; }
         }
         if (migrated) writeSave();
     }
@@ -2451,7 +2526,7 @@ struct Game {
     float getMoveSpeed() const {
         float spd = HERO_DEFS[selectedHero].moveSpeed;
         spd *= (1.0f + getMetaUpgradeEffectRank(2) * 0.03f + itemLevels[8] * 0.14f);
-        return spd;
+        return spd * runMoveMultiplier;
     }
 
     float getPickupRadius() const {
@@ -2586,7 +2661,9 @@ struct Game {
         const double multiplier = OATH_COST_BASE + OATH_COST_STEP * (double)rank;
         return clampShopPrice((double)ENEMY_OATHS[id].baseCost * multiplier);
     }
-    float getSuperGainMultiplier() const { return 1.0f + itemLevels[15] * 0.06f + itemLevels[16] * 0.05f; }
+    float getSuperGainMultiplier() const {
+        return (1.0f + itemLevels[15] * 0.06f + itemLevels[16] * 0.05f) * runSuperGainMultiplier;
+    }
     // Боссовый бонус дешевле по слотам, чем кажется: он работал и на элитном
     // замере (оба флага жили на одной мишени), поэтому 20 % за ранг были двойным
     // счётом. Теперь это чистая ниша против стражей.
@@ -3044,6 +3121,9 @@ struct Game {
         for (int i = 0; i < ITEM_COUNT; ++i) count += itemLevels[i] > 0;
         return count;
     }
+
+    // Потолок резонаторов на арене: жетон третьего тира добавляет два.
+    int resonatorCap() const { return MAX_ACTIVE_RESONATORS + runResonatorBonus; }
 
     int getBuildTier() const {
         const int startingTier = gameMode == MODE_STORY ? campaignStartingTier(selectedStoryMission) : 1;
@@ -3654,6 +3734,7 @@ struct Game {
         // The emergency spell has a real price: spend 12% max HP and cannot cast at critical health.
         playerHp -= healthCost;
         superCharge = 0.0f;
+        ++runSupers;
         superActive = true;
         superTimer = 0.65f;
         screenShake = 0.38f;
@@ -3712,14 +3793,77 @@ struct Game {
             case DAILY_CHESTS: return "ОТКРЫТЬ СУНДУКОВ";
             case DAILY_LEVELS: return "ВЗЯТЬ УРОВНЕЙ ЗА БОЙ";
             case DAILY_BOSSES: return "ПОБЕДИТЬ СТРАЖЕЙ";
+            case DAILY_ELITES: return "СРАЗИТЬ ЭЛИТ";
+            case DAILY_RESONATORS: return "РАЗБИТЬ РЕЗОНАТОРОВ";
+            case DAILY_SUPERS: return "ПРИМЕНИТЬ СУПЕР";
+            case DAILY_BUILD_TIER: return "СОБРАТЬ ТИР СБОРКИ";
             default: return "?";
         }
     }
-    // Время и уровень считаются по лучшему забегу: «продержаться 5 минут»
-    // суммой трёх коротких смертей — это не задание, а бухгалтерия. Остальные
-    // три копятся между забегами, потому что там сумма честно означает усилие.
-    static bool dailyKindIsBest(int kind) { return kind == DAILY_SURVIVE || kind == DAILY_LEVELS; }
+    // Время, уровень и тир сборки — «сколько удалось за один бой»: их сумма по
+    // трём коротким смертям была бы бухгалтерией, а не заданием. Остальные
+    // копятся между забегами, потому что там сумма честно означает усилие.
+    static bool dailyKindIsBest(int kind) {
+        return kind == DAILY_SURVIVE || kind == DAILY_LEVELS || kind == DAILY_BUILD_TIER;
+    }
     static bool dailyKindIsSeconds(int kind) { return kind == DAILY_SURVIVE; }
+
+    static int boosterTierOf(int kind) {
+        if (kind < 0 || kind >= BOOSTER_KINDS) return 0;
+        return kind / BOOSTER_PER_TIER;
+    }
+    static const char* boosterTierName(int tier) {
+        static const char* names[BOOSTER_TIER_COUNT] = {"ОСНОВА", "ЗАКАЛ", "ПЕПЕЛ"};
+        return (tier >= 0 && tier < BOOSTER_TIER_COUNT) ? names[tier] : "?";
+    }
+    // Тир открыт, если потрачено не меньше порога. Порог не про казну: казна
+    // копится и тратится, а потраченное только растёт — открытый тир нельзя
+    // потерять, купив что-нибудь.
+    bool boosterTierUnlocked(int tier) const {
+        if (tier <= 0) return true;
+        if (tier >= BOOSTER_TIER_COUNT) return false;
+        return save.goldSpent >= BOOSTER_TIER_GOLD[tier];
+    }
+    int unlockedBoosterTierCount() const {
+        int n = 1;
+        for (int t = 1; t < BOOSTER_TIER_COUNT; ++t) if (boosterTierUnlocked(t)) n = t + 1;
+        return n;
+    }
+    int unlockedBoosterCount() const { return unlockedBoosterTierCount() * BOOSTER_PER_TIER; }
+    // Сколько потрачено золота стоили уже купленные ранги. Нужно один раз — при
+    // переводе сейва v10, где счётчика не было: у игрока, выкупившего кузницу,
+    // второй тир открывается сразу, а не «с нуля».
+    // Короткая запись больших чисел для подписей тир-листа: «1 М», «350 К».
+    static std::string shortGold(int value) {
+        char out[32];
+        if (value >= 1000000) snprintf(out, sizeof(out), "%d,%02d М", value / 1000000, (value % 1000000) / 10000);
+        else if (value >= 10000) snprintf(out, sizeof(out), "%d К", value / 1000);
+        else snprintf(out, sizeof(out), "%d", value);
+        return std::string(out);
+    }
+
+    // Единственная точка, где золото уходит из казны: она же копит счётчик
+    // потраченного. Покупка мимо неё разошлась бы с тир-листом молча.
+    void spendGold(int cost) {
+        if (cost <= 0) return;
+        save.gold = std::max(0, save.gold - cost);
+        save.goldSpent = (int)std::min<long long>(2000000000LL, (long long)save.goldSpent + cost);
+    }
+
+    int estimateSpentGold() const {
+        long long total = 0;
+        for (int id = 0; id < 6; ++id) {
+            const int ranks = std::max(0, std::min(META_DEFS[id].maxRank, save.metaRanks[id]));
+            for (int r = 0; r < ranks; ++r)
+                total += clampShopPrice((double)META_DEFS[id].baseCost * (META_COST_BASE + META_COST_STEP * r));
+        }
+        for (int id = 0; id < ENEMY_OATH_COUNT; ++id) {
+            const int ranks = std::max(0, std::min(ENEMY_OATHS[id].maxRank, getEnemyOathRank(id)));
+            for (int r = 0; r < ranks; ++r)
+                total += clampShopPrice((double)ENEMY_OATHS[id].baseCost * (OATH_COST_BASE + OATH_COST_STEP * r));
+        }
+        return (int)std::min<long long>(2000000000LL, total);
+    }
 
     static const char* boosterTitle(int kind) {
         switch (kind) {
@@ -3727,6 +3871,14 @@ struct Game {
             case BOOSTER_HEALTH: return "ЖЕТОН СТОЙКОСТИ";
             case BOOSTER_RAGE: return "ЖЕТОН ЯРОСТИ";
             case BOOSTER_LUCK: return "ЖЕТОН УДАЧИ";
+            case BOOSTER_SPEED: return "ЖЕТОН СКОРОСТИ";
+            case BOOSTER_XP: return "ЖЕТОН ПАМЯТИ";
+            case BOOSTER_HUNT: return "ЖЕТОН ОХОТЫ";
+            case BOOSTER_CHARGE: return "ЖЕТОН РАЗГОНА";
+            case BOOSTER_HUNGER: return "ЖЕТОН ГОЛОДА";
+            case BOOSTER_RESONANCE: return "ЖЕТОН РЕЗОНАНСА";
+            case BOOSTER_BREAK: return "ЖЕТОН ПРОРЫВА";
+            case BOOSTER_WRATH: return "ЖЕТОН ГНЕВА";
             default: return "?";
         }
     }
@@ -3736,7 +3888,28 @@ struct Game {
             case BOOSTER_HEALTH: return "+25% ЗДОРОВЬЯ НА БОЙ";
             case BOOSTER_RAGE: return "+12% УРОНА ЗА БОЙ";
             case BOOSTER_LUCK: return "+1 ЗАМЕНА И +4% ЭЛИТ";
+            case BOOSTER_SPEED: return "+12% СКОРОСТИ ДВИЖЕНИЯ";
+            case BOOSTER_XP: return "+15% ОПЫТА ЗА БОЙ";
+            case BOOSTER_HUNT: return "+8% ЭЛИТ И +8% ЗОЛОТА";
+            case BOOSTER_CHARGE: return "СУПЕР ЗАРЯЖАЕТСЯ НА 20% БЫСТРЕЕ";
+            case BOOSTER_HUNGER: return "+35% ЗОЛОТА, −10% ЗДОРОВЬЯ";
+            case BOOSTER_RESONANCE: return "+2 РЕЗОНАТОРА НА АРЕНЕ";
+            case BOOSTER_BREAK: return "ПРОРЫВ НА 3 УРОВНЯ РАНЬШЕ";
+            case BOOSTER_WRATH: return "+22% УРОНА ЗА БОЙ";
             default: return "?";
+        }
+    }
+    // Короткая подпись для узкой карточки: полный текст не влезает в 200 px.
+    // Карточка сама выбирает: влезает полный — печатается полный, иначе этот.
+    static const char* boosterShortEffect(int kind) {
+        switch (kind) {
+            case BOOSTER_SPEED: return "+12% СКОРОСТИ";
+            case BOOSTER_HUNT: return "+8% ЭЛИТ, ЗОЛОТО";
+            case BOOSTER_CHARGE: return "+20% К СУПЕРУ";
+            case BOOSTER_HUNGER: return "+35% ЗОЛ, −10% HP";
+            case BOOSTER_RESONANCE: return "+2 РЕЗОНАТОРА";
+            case BOOSTER_BREAK: return "ПРОРЫВ РАНЬШЕ";
+            default: return boosterEffect(kind);
         }
     }
     static const char* anomalyTitle(int id) {
@@ -3765,6 +3938,9 @@ struct Game {
     static int dailyTargetFor(int kind, int tier) {
         // Три ступени сложности сменяют друг друга по дням: одно и то же число
         // каждый день — это не задание, а кнопка.
+        // Пороги стоят по замеру бота (design/daily_rewards.md): 15 минут дают
+        // около 32 уровней, 9 сундуков и 3 стражей, так что третья ступень
+        // каждого задания — это «хороший забег», а не «неделя игры».
         static const int targets[DAILY_KIND_COUNT][3] = {
             {250, 400, 600},     // DAILY_KILLS
             {4000, 6000, 8000},  // DAILY_GOLD
@@ -3772,6 +3948,10 @@ struct Game {
             {2, 3, 4},           // DAILY_CHESTS
             {10, 14, 18},        // DAILY_LEVELS
             {1, 2, 3},           // DAILY_BOSSES
+            {6, 10, 14},         // DAILY_ELITES
+            {2, 3, 4},           // DAILY_RESONATORS
+            {2, 3, 5},           // DAILY_SUPERS
+            {2, 3, 4},           // DAILY_BUILD_TIER
         };
         const int t = std::max(0, std::min(2, tier));
         return targets[std::max(0, std::min(DAILY_KIND_COUNT - 1, kind))][t];
@@ -3786,11 +3966,14 @@ struct Game {
     static int dailyRewardGold(int kind, int tier) {
         static const int gold[3] = {900, 1400, 1900};
         const int t = std::max(0, std::min(2, tier));
-        return kind == DAILY_BOSSES ? gold[t] * 2 : gold[t];
+        // Стражи и резонаторы — редкая цель, платим вдвое.
+        const bool rare = kind == DAILY_BOSSES || kind == DAILY_RESONATORS;
+        return rare ? gold[t] * 2 : gold[t];
     }
 
-    void rollDailyMissions() {
-        const int day = dailyToday();
+    // Набор заданий для конкретного дня: вынесено из rollDailyMissions, чтобы
+    // стенд мог спросить «а что было бы 5 марта» не подделывая часы системы.
+    void rollDailyMissionsForDay(int day) {
         const int tier = ((day % 3) + 3) % 3;
         // Три разных вида из шести: два задания «убей» в один день — это одно
         // задание, посчитанное дважды.
@@ -3814,6 +3997,8 @@ struct Game {
         save.dailyRolls = 0;
         save.dailyDay = day;
     }
+
+    void rollDailyMissions() { rollDailyMissionsForDay(dailyToday()); }
 
     // Вызывается на входе в меню, на экране даров и в конце боя: смена суток
     // не должна ждать, пока игрок откроет конкретный экран.
@@ -3852,7 +4037,7 @@ struct Game {
         } else if (reward == 1) {
             save.rollTokens = std::min(9, save.rollTokens + 1);
         } else {
-            const int kind = (int)(dailyHash((uint32_t)day * 31u + (uint32_t)index * 7u) % BOOSTER_KINDS);
+            const int kind = (int)(dailyHash((uint32_t)day * 31u + (uint32_t)index * 7u) % (uint32_t)unlockedBoosterCount());
             save.boosters[kind] = std::min(9, save.boosters[kind] + 1);
         }
         save.dailyClaimed |= (1 << index);
@@ -3869,7 +4054,9 @@ struct Game {
         const uint32_t h = dailyHash((uint32_t)day * 2654435761u + (uint32_t)index * 0x9E3779B9u);
         const int roll = (int)(h % 100u);
         const bool pity = (index % 5) == 4;
-        *boosterKind = (int)((h >> 16) % BOOSTER_KINDS);
+        // Жетон выпадает только из открытых тиров: иначе половина призов
+        // молча легла бы в запас, которым нельзя воспользоваться.
+        *boosterKind = (int)((h >> 16) % (uint32_t)unlockedBoosterCount());
         if (pity || (roll >= 55 && roll < 85)) { *kind = 1; *value = 1; }
         else if (roll >= 85 && roll < 95) { *kind = 2; *value = 1; }
         else if (roll >= 95) { *kind = 0; *value = 2200 + (int)((h >> 8) % 900u); }
@@ -3898,6 +4085,9 @@ struct Game {
     }
     // Что выпало в прошлый раз — не в сейве: это подпись на экране, а не
     // состояние. После перезапуска экран честно молчит, а не врёт о недавнем.
+    // Какой тир жетонов открыт на экране. Это подпись экрана, а не состояние
+    // игрока: в сейв не идёт и после перезапуска начинается с первого тира.
+    int boosterTierView = 0;
     int dailyLastPrizeKind = -1;
     int dailyLastPrizeValue = 0;
     int dailyLastPrizeBooster = 0;
@@ -3908,6 +4098,7 @@ struct Game {
     }
     void selectBooster(int kind) {
         if (kind < 0 || kind >= BOOSTER_KINDS) return;
+        if (!boosterTierUnlocked(boosterTierOf(kind))) return;   // тир ещё закрыт
         if (save.boosters[kind] <= 0) return;
         save.activeBooster = (save.activeBooster == kind) ? -1 : kind;
         sound.play(SFX_CLICK, 0.02f);
@@ -3919,8 +4110,13 @@ struct Game {
     // бонусом портала, то есть наградой за выход, а не за игру.
     void commitDailyProgress() {
         ensureDaily();
+        // «Тир сборки» — лучший за бой; считаем его здесь, а не по событию:
+        // тир растёт только от стражей, и записывать его в момент убийства
+        // значило бы дублировать правило в двух местах.
+        runBuildTierBest = std::max(runBuildTierBest, getBuildTier());
         const int values[DAILY_KIND_COUNT] = {
-            kills, runGold, (int)runTime, runChests, playerLevel, runBossKills
+            kills, runGold, (int)runTime, runChests, playerLevel, runBossKills,
+            runElites, runResonators, runSupers, runBuildTierBest
         };
         for (int i = 0; i < DAILY_MISSION_COUNT; ++i) {
             const int kind = save.dailyKind[i];
@@ -3941,6 +4137,10 @@ struct Game {
         runGoldMultiplier = runDamageMultiplier = runXpMultiplier = runSpawnMultiplier = 1.0f;
         runEliteBonus = 0.0f;
         runBreakthroughEarly = 0;
+        runMoveMultiplier = 1.0f;
+        runSuperGainMultiplier = 1.0f;
+        runHealthMultiplier = 1.0f;
+        runResonatorBonus = 0;
         switch (runAnomaly) {
             case 0: runSpawnMultiplier = 0.94f; runGoldMultiplier = 1.06f; break;
             case 1: runEliteBonus = 4.0f; runGoldMultiplier = 1.04f; break;
@@ -3953,13 +4153,27 @@ struct Game {
         // отменишь»: жетон — это разовый вход, а не режим.
         runBooster = -1;
         upgradeRerollsLeft = 1;   // generateUpgradeChoices выдаст верное число на первом уровне
-        if (save.activeBooster >= 0 && save.activeBooster < BOOSTER_KINDS && save.boosters[save.activeBooster] > 0) {
+        if (save.activeBooster >= 0 && save.activeBooster < BOOSTER_KINDS && save.boosters[save.activeBooster] > 0 &&
+            boosterTierUnlocked(boosterTierOf(save.activeBooster))) {
             runBooster = save.activeBooster;
             save.boosters[runBooster] = std::max(0, save.boosters[runBooster] - 1);
-            if (runBooster == BOOSTER_GOLD) runGoldMultiplier *= 1.25f;
-            else if (runBooster == BOOSTER_HEALTH) {}
-            else if (runBooster == BOOSTER_RAGE) runDamageMultiplier = 1.12f;
-            else { upgradeRerollsLeft = 2; runEliteBonus += 4.0f; }
+            switch (runBooster) {
+                case BOOSTER_GOLD: runGoldMultiplier *= 1.25f; break;
+                case BOOSTER_HEALTH: runHealthMultiplier *= 1.25f; break;
+                case BOOSTER_RAGE: runDamageMultiplier *= 1.12f; break;
+                case BOOSTER_LUCK: upgradeRerollsLeft = 2; runEliteBonus += 4.0f; break;
+                // II тир: скорость, опыт, элиты с золотом, заряд супера.
+                case BOOSTER_SPEED: runMoveMultiplier *= 1.12f; break;
+                case BOOSTER_XP: runXpMultiplier *= 1.15f; break;
+                case BOOSTER_HUNT: runEliteBonus += 8.0f; runGoldMultiplier *= 1.08f; break;
+                case BOOSTER_CHARGE: runSuperGainMultiplier *= 1.20f; break;
+                // III тир: обмен, резонаторы, прорыв, урон.
+                case BOOSTER_HUNGER: runGoldMultiplier *= 1.35f; runHealthMultiplier *= 0.90f; break;
+                case BOOSTER_RESONANCE: runResonatorBonus += 2; break;
+                case BOOSTER_BREAK: runBreakthroughEarly += 3; break;
+                case BOOSTER_WRATH: runDamageMultiplier *= 1.22f; break;
+                default: break;
+            }
             save.activeBooster = -1;
         }
     }
@@ -4013,6 +4227,10 @@ struct Game {
         runGold = 0;
         runBossKills = 0;
         runChests = 0;
+        runElites = 0;
+        runResonators = 0;
+        runSupers = 0;
+        runBuildTierBest = 1;
         buildTierUpValue = getBuildTier();
         dashRuneKillCounter = 0; veilCooldown = 0.0f; retaliationChargeTimer = 0.0f; overkillShardCooldown = 0.0f; crossfireGlobalCooldown = 0.0f; emberGlobalCooldown = 0.0f; frostShatterCooldown = 0.0f; projectileParryCooldown = 0.0f;
         ashRhythmSparkCount = 0; ashRhythmFlashTimer = 0.0f;
@@ -4028,7 +4246,7 @@ struct Game {
         playerVelocityX = playerVelocityY = 0.0f;
         playerFacing = 1;
         playerMaxHp = HERO_DEFS[selectedHero].baseHp + getMetaUpgradeEffectRank(1) * 10.0f;
-        if (runBooster == BOOSTER_HEALTH) playerMaxHp = roundf(playerMaxHp * 1.25f);
+        playerMaxHp = roundf(playerMaxHp * runHealthMultiplier);
         playerHp = playerMaxHp;
         playerWard = wardFlashTimer = 0.0f;
         playerHurtTimer = 0.0f;
@@ -4839,7 +5057,7 @@ struct Game {
     }
 
     void spawnResonator(int index) {
-        if (monsters.size() >= 520 || countResonators() >= MAX_ACTIVE_RESONATORS) return;
+        if (monsters.size() >= 520 || countResonators() >= resonatorCap()) return;
         float bx = playerX, by = playerY;
         bool found = false;
         const float nearRing = getResonatorOffscreenRadius();
@@ -5671,6 +5889,7 @@ struct Game {
             m.hitFlashTimer = 0.12f;
             spawnHitEffect(m.x, m.y, 0xFFBD69FF, true);
             if (m.hp <= 0.0f) {
+                ++runResonators;
                 const int burstCount = getResonatorBurstCount();
                 pendingResonatorBurst += burstCount;
                 char burstLabel[64];
@@ -5801,6 +6020,7 @@ struct Game {
                 addShockwave(m.x, m.y, 64.0f, 0xFFFFD77A, 0.42f);
             }
             kills++;
+            if (m.isElite) ++runElites;
             if (m.fromHunt) onHuntPackKill(m.x, m.y);
             if (itemLevels[21] > 0) {
                 if (++dashRuneKillCounter >= getDashRefreshKillsRequired()) {
@@ -6485,7 +6705,7 @@ struct Game {
         resonatorSpawnTimer = std::max(0.0f, resonatorSpawnTimer - dt);
         if (resonatorSpawnTimer <= 0.0f) {
             const int beforeResonators = countResonators();
-            if (beforeResonators < MAX_ACTIVE_RESONATORS) spawnResonator(resonatorSpawnIndex++);
+            if (beforeResonators < resonatorCap()) spawnResonator(resonatorSpawnIndex++);
             const int afterResonators = countResonators();
             if (afterResonators > beforeResonators) {
                 const Monster& newResonator = monsters.back();
@@ -6494,7 +6714,7 @@ struct Game {
                 announce(GMSG_RESONATOR_SPAWN, gameMode == MODE_STORY ? "ЭХО-ЛИТЕЙНЯ: НАЙДИ РЕЗОНАТОР И РАЗРУШЬ — ОН ПЕЧАТАЕТ КОПИИ ПРИКАЗА." : "НОВЫЙ РЕЗОНАТОР НА ПОЛЕ — НАЙДИ И РАЗРУШЬ ЕГО", 3.4f);
             }
             // Let the player reach the current distant objective before another is introduced.
-            resonatorSpawnTimer = afterResonators < MAX_ACTIVE_RESONATORS
+            resonatorSpawnTimer = afterResonators < resonatorCap()
                 ? 40.0f + (rand() % 1001) / 100.0f
                 : 16.0f;
         }
@@ -9350,7 +9570,7 @@ struct Game {
         const char* stage = gameMode == MODE_STORY
             ? storyStageNames[std::max(0, std::min(5, currentRunChapter))]
             : chapterNames[std::min(3, (int)(runTime / 90.0f))];
-        snprintf(buf, sizeof(buf), "%s  •  %s  •  %d/%d РЕЗОНАТОРОВ", stage, phaseNames[getDifficultySegment()], countResonators(), MAX_ACTIVE_RESONATORS);
+        snprintf(buf, sizeof(buf), "%s  •  %s  •  %d/%d РЕЗОНАТОРОВ", stage, phaseNames[getDifficultySegment()], countResonators(), resonatorCap());
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 137, buf, 0xFFE4D7B5);
         if (gameMode == MODE_STORY) {
             const CampaignMissionDef& mission = selectedCampaignMission();
@@ -9482,9 +9702,9 @@ struct Game {
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 61, buf, 0xFFE4D7B5);
         const int resonatorCount = countResonators();
         if (gameMode == MODE_STORY)
-            snprintf(buf, sizeof(buf), "%d ИЗ %d РЕЗОНАТОРОВ   •   +4 ЭХА/МИН   •   ВЗРЫВ: %d", resonatorCount, MAX_ACTIVE_RESONATORS, getResonatorBurstCount());
+            snprintf(buf, sizeof(buf), "%d ИЗ %d РЕЗОНАТОРОВ   •   +4 ЭХА/МИН   •   ВЗРЫВ: %d", resonatorCount, resonatorCap(), getResonatorBurstCount());
         else
-            snprintf(buf, sizeof(buf), "%d ИЗ %d РЕЗОНАТОРОВ   •   +4 ВРАГА/МИН   •   ВЗРЫВ: %d", resonatorCount, MAX_ACTIVE_RESONATORS, getResonatorBurstCount());
+            snprintf(buf, sizeof(buf), "%d ИЗ %d РЕЗОНАТОРОВ   •   +4 ВРАГА/МИН   •   ВЗРЫВ: %d", resonatorCount, resonatorCap(), getResonatorBurstCount());
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 87, buf, resonatorCount ? 0xFFE2B5FF : 0xFF85E8A5);
         if (gameMode == MODE_STORY) {
             const CampaignMissionDef& mission = selectedCampaignMission();
@@ -10167,11 +10387,18 @@ struct Game {
         // всплывающей строке на старте: через две минуты её уже никто не помнит.
         {
             char modLine[192];
-            if (runBooster >= 0)
-                snprintf(modLine, sizeof(modLine), "АНОМАЛИЯ: %s  •  ЖЕТОН: %s",
-                         anomalyTitle(runAnomaly), boosterTitle(runBooster));
-            else
+            if (runBooster >= 0) {
+                // Эффект печатается, только если строка влезает: у жетонов
+                // верхних тиров подпись длиннее, и «+2 РЕЗОНАТОРА» иначе резало
+                // бы строку о край окна.
+                snprintf(modLine, sizeof(modLine), "АНОМАЛИЯ: %s  •  ЖЕТОН: %s — %s",
+                         anomalyTitle(runAnomaly), boosterTitle(runBooster), boosterShortEffect(runBooster));
+                if (r.textWidth(FONT_SMALL, modLine) > SCREEN_W - 40)
+                    snprintf(modLine, sizeof(modLine), "АНОМАЛИЯ: %s  •  ЖЕТОН: %s",
+                             anomalyTitle(runAnomaly), boosterTitle(runBooster));
+            } else {
                 snprintf(modLine, sizeof(modLine), "АНОМАЛИЯ: %s", anomalyTitle(runAnomaly));
+            }
             r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, my + 96, modLine, 0xFFFFC48A);
         }
 
@@ -13413,7 +13640,8 @@ struct Game {
             if (save.dailyReward[i] == 0) snprintf(reward, sizeof(reward), "НАГРАДА: %d ЗОЛОТА", dailyRewardValue(i));
             else if (save.dailyReward[i] == 1) snprintf(reward, sizeof(reward), "НАГРАДА: ЖЕТОН КРУТКИ");
             else {
-                const int bk = (int)(dailyHash((uint32_t)save.dailyDay * 31u + (uint32_t)i * 7u) % BOOSTER_KINDS);
+                const int bk = (int)(dailyHash((uint32_t)save.dailyDay * 31u + (uint32_t)i * 7u) %
+                                   (uint32_t)unlockedBoosterCount());
                 snprintf(reward, sizeof(reward), "НАГРАДА: %s", boosterTitle(bk));
             }
             r.drawTextRight(FONT_SMALL, margin + cardW - 14, y + 10, reward, claimed ? 0xFF6E6678 : 0xFFFFD776);
@@ -13448,26 +13676,54 @@ struct Game {
 
         // ── Крутка ───────────────────────────────────────────────────────────
         const int rollY = topY + DAILY_MISSION_COUNT * (cardH + 8) + 2;
-        int rollH = portrait ? 132 : 96;
+        // Ширина под текст считается до высоты панели: от неё зависит, влезут
+        // ли шансы одной строкой, а от этого — нужна ли панели лишняя строка.
+        const int rollBtnW = std::max(150, std::min(250, cardW / 3));
+        const int rollBtnX = margin + cardW - 14 - rollBtnW;
+        const int textW = std::max(80, rollBtnX - (margin + 14) - 10);
+        const char* oddsWhole = "ШАНСЫ: ЗОЛОТО 55% • ЖЕТОН НА БОЙ 30% • КРУТКА 10% • КРУПНОЕ ЗОЛОТО 5%";
+        const bool oddsNeedSplit = r.textWidth(FONT_SMALL, oddsWhole) > textW;
+        int rollH = portrait ? 132 : (oddsNeedSplit ? 110 : 96);
         // Жетоны внизу не должны уехать за подвал: на низком окне крутка
-        // ужимается первой, потому что её содержимое — три строки текста.
-        const int boostMinH = portrait ? 128 : 64;
+        // ужимается первой, потому что её содержимое — строки текста.
+        const int boostMinH = portrait ? 150 : 84;
         if (rollY + rollH + 8 + boostMinH > bodyBottom) rollH = std::max(72, bodyBottom - boostMinH - 8 - rollY);
+        // Если высоты не хватило, двухстрочные шансы не рисуются: вторая строка
+        // легла бы на «ВЫПАЛО». Лучше усечённая строка, чем наложение.
+        const bool splitOdds = oddsNeedSplit && rollH >= 100;
         r.fillRoundedRect(margin, rollY, cardW, rollH, 8, 0xFF17102A, 244);
         r.drawRoundedRect(margin, rollY, cardW, rollH, 8, 0xFFB58EFF, 1);
+        const int rollBtnH = std::max(28, std::min(38, rollH - 46));
+        const int rollBtnY = rollY + 8;
+        // Заголовок укорачивается до того, как его закроет кнопка: раньше
+        // «… ЖЕТОНОВ КРУТКИ: 0» уходило под «КРУТИТЬ», и число было нарисовано,
+        // но невидимо — читалось как обрыв на двоеточии.
         char line[200];
         snprintf(line, sizeof(line), "КРУТКА ДНЯ • СВОБОДНЫХ: %d • ЖЕТОНОВ КРУТКИ: %d",
                  dailyFreeRollsLeft(), save.rollTokens);
-        r.drawText(FONT_SMALL, margin + 14, rollY + 8, line, 0xFFE0D4FF);
-        const int rollBtnW = std::max(150, std::min(250, cardW / 3));
-        const int rollBtnH = std::max(28, std::min(38, rollH - 46));
-        const int rollBtnX = margin + cardW - 14 - rollBtnW, rollBtnY = rollY + 8;
-        const int textW = std::max(80, rollBtnX - (margin + 14) - 10);
+        if (r.textWidth(FONT_SMALL, line) > textW) {
+            snprintf(line, sizeof(line), "КРУТКА • СВОБОДНЫХ: %d • ЖЕТОНОВ: %d",
+                     dailyFreeRollsLeft(), save.rollTokens);
+            if (r.textWidth(FONT_SMALL, line) > textW)
+                snprintf(line, sizeof(line), "КРУТОК: %d • ЖЕТОНОВ: %d",
+                         dailyFreeRollsLeft(), save.rollTokens);
+        }
+        r.drawText(FONT_SMALL, margin + 14, rollY + 8, fitText(r, FONT_SMALL, line, textW).c_str(), 0xFFE0D4FF);
         if (rollH >= 84) {
-            r.drawText(FONT_SMALL, margin + 14, rollY + 26,
-                       fitText(r, FONT_SMALL, "ШАНСЫ: ЗОЛОТО 55% • ЖЕТОН НА БОЙ 30% • КРУТКА 10% • КРУПНОЕ ЗОЛОТО 5%", textW).c_str(),
-                       0xFF9E92C0);
-            r.drawText(FONT_SMALL, margin + 14, rollY + 42,
+            // Шансы печатаются до нажатия — это обещание, а не подпись. Поэтому
+            // «КРУПНОЕ ЗО…» на узком экране недопустимо: строка делится на две.
+            int nextLineY = rollY + 42;
+            if (!splitOdds) {
+                r.drawText(FONT_SMALL, margin + 14, rollY + 26,
+                           fitText(r, FONT_SMALL, oddsWhole, textW).c_str(), 0xFF9E92C0);
+            } else {
+                r.drawText(FONT_SMALL, margin + 14, rollY + 26,
+                           fitText(r, FONT_SMALL, "ШАНСЫ: ЗОЛОТО 55% • ЖЕТОН НА БОЙ 30%", textW).c_str(), 0xFF9E92C0);
+                r.drawText(FONT_SMALL, margin + 14, rollY + 42,
+                           fitText(r, FONT_SMALL, "КРУТКА 10% • КРУПНОЕ ЗОЛОТО 5%", textW).c_str(), 0xFF9E92C0);
+                nextLineY = rollY + 58;
+            }
+            r.drawText(FONT_SMALL, margin + 14, nextLineY,
                        fitText(r, FONT_SMALL, "ПЯТАЯ КРУТКА ДНЯ — ВСЕГДА ЖЕТОН НА БОЙ", textW).c_str(), 0xFF9E92C0);
         }
         char last[128];
@@ -13492,10 +13748,14 @@ struct Game {
         // Два правила, которые игрок иначе узнаёт на своей шкуре: задания
         // времени и уровня не складываются, а жетон сгорает на старте.
         const int infoY = rollY + rollH + 6;
-        const int cols = portrait ? 2 : BOOSTER_KINDS;
+        // Жетоны — тир-лист: заголовок с тремя тирами, ниже карточки одного
+        // выбранного тира. Показывать все двенадцать сразу нельзя: на 720 px
+        // это три строки по четыре, и они выдавливают крутку с заданиями.
+        const int cols = portrait ? 2 : BOOSTER_PER_TIER;
         const int cellW = (cardW - (cols - 1) * 8) / cols;
         const int cellH = 58;
-        const int boostH = cellH * (portrait ? 2 : 1) + (portrait ? 8 : 0);
+        const int tabH = 22;
+        const int boostH = tabH + 4 + cellH * (portrait ? 2 : 1) + (portrait ? 8 : 0);
         // Жетоны прижаты к подвалу: между ними и круткой остаётся воздух, и
         // карточки не растягиваются на полэкрана пустыми прямоугольниками.
         const int boostY = bodyBottom - boostH - (portrait ? 0 : 6);
@@ -13536,29 +13796,95 @@ struct Game {
             }
         }
 
-        // ── Жетоны на бой ────────────────────────────────────────────────────
+        // ── Жетоны на бой: тир-лист ──────────────────────────────────────────
         if (boostY >= rollY + rollH) {
-            for (int k = 0; k < BOOSTER_KINDS; ++k) {
-                const int col = k % cols, row = k / cols;
+            const int tiersUnlocked = unlockedBoosterTierCount();
+            boosterTierView = std::max(0, std::min(BOOSTER_TIER_COUNT - 1, boosterTierView));
+            // Заголовок: три тира слева, состояние справа. Открытый тир —
+            // именем, закрытый — порогом: «ТИР II · 1,00 М» читается как цель.
+            int tabX = margin + 2;
+            const int tabW = 62, tabGap = 6;
+            for (int t = 0; t < BOOSTER_TIER_COUNT; ++t) {
+                const bool unlocked = t < tiersUnlocked;
+                const bool active = t == boosterTierView;
+                const int x = tabX + t * (tabW + tabGap);
+                const bool hov = mouseX >= x && mouseX <= x + tabW && mouseY >= boostY && mouseY <= boostY + tabH;
+                const uint32_t edge = active ? 0xFFFFD776 : (unlocked ? 0xFF6A5A8C : 0xFF3A3348);
+                r.fillRoundedRect(x, boostY, tabW, tabH, 5,
+                                  active ? 0xFF2E2440 : (hov ? 0xFF241C34 : 0xFF171322), 240);
+                r.drawRoundedRect(x, boostY, tabW, tabH, 5, edge, active ? 2 : 1);
+                char tab[32];
+                if (unlocked) {
+                    snprintf(tab, sizeof(tab), "ТИР %s", t == 0 ? "I" : (t == 1 ? "II" : "III"));
+                } else {
+                    // Замка в шрифте нет — закрытый тир подписан своим порогом.
+                    snprintf(tab, sizeof(tab), "%s", t == 1 ? "II ЗАКР" : "III ЗАКР");
+                }
+                r.drawTextCentered(FONT_SMALL, x + tabW / 2, boostY + 4, tab,
+                                   active ? 0xFFFFE6A0 : (unlocked ? 0xFFC8BEDA : 0xFF6E6678));
+                if (mouseClicked && hov) boosterTierView = t;
+            }
+            // Справа — сколько ещё нужно потратить до следующего закрытого тира.
+            const int statusX = tabX + BOOSTER_TIER_COUNT * (tabW + tabGap) + 8;
+            const int statusW = cardW - 14 - (statusX - margin);
+            if (statusW > 70) {
+                char status[128];
+                int nextTier = -1;
+                for (int t = 0; t < BOOSTER_TIER_COUNT; ++t) if (!boosterTierUnlocked(t)) { nextTier = t; break; }
+                // Числа — в коротком виде: «1000000 / 1800000» на 960×720 не
+                // влезает рядом с тремя вкладками и обрезается многоточием.
+                if (nextTier < 0) {
+                    snprintf(status, sizeof(status), "ВСЕ ТИРЫ ОТКРЫТЫ • ПОТРАЧЕНО %s",
+                             shortGold(save.goldSpent).c_str());
+                } else {
+                    snprintf(status, sizeof(status), "ДО ТИРА %s: %s / %s",
+                             nextTier == 1 ? "II" : "III",
+                             shortGold(save.goldSpent).c_str(),
+                             shortGold(BOOSTER_TIER_GOLD[nextTier]).c_str());
+                }
+                r.drawText(FONT_SMALL, statusX, boostY + 4,
+                           fitText(r, FONT_SMALL, status, statusW).c_str(), 0xFF8A82A8);
+            }
+
+            const int cardsTop = boostY + tabH + 4;
+            const bool viewUnlocked = boosterTierView < tiersUnlocked;
+            for (int slot = 0; slot < BOOSTER_PER_TIER; ++slot) {
+                const int k = boosterTierView * BOOSTER_PER_TIER + slot;
+                const int col = slot % cols, row = slot / cols;
                 const int x = margin + col * (cellW + 8);
-                const int y = boostY + row * (cellH + 8);
+                const int y = cardsTop + row * (cellH + 8);
                 const bool owned = save.boosters[k] > 0;
                 const bool selected = save.activeBooster == k;
+                // Карточка закрытого тира видна, но погашена: тир-лист должен
+                // показывать, к чему идёшь, а не прятать это за замком.
+                const uint32_t titleCol = !viewUnlocked ? 0xFF6E6678 : (owned ? 0xFFF0E8FF : 0xFF8A8298);
+                const uint32_t effectCol = !viewUnlocked ? 0xFF5A5468 : (owned ? 0xFFB8E8C8 : 0xFF6E6678);
+                const uint32_t stateCol = !viewUnlocked ? 0xFF5A5468 : (selected ? 0xFFFFD776 : 0xFF9E92C0);
                 r.fillRoundedRect(x, y, cellW, cellH, 7, selected ? 0xFF24382A : 0xFF171322, 240);
-                r.drawRoundedRect(x, y, cellW, cellH, 7, selected ? 0xFF8FE0A8 : (owned ? 0xFF6A5A8C : 0xFF3A3348), selected ? 2 : 1);
+                r.drawRoundedRect(x, y, cellW, cellH, 7,
+                                  selected ? 0xFF8FE0A8 : (owned && viewUnlocked ? 0xFF6A5A8C : 0xFF3A3348),
+                                  selected ? 2 : 1);
                 char t[64];
                 snprintf(t, sizeof(t), "%s ×%d", boosterTitle(k), save.boosters[k]);
-                r.drawText(FONT_SMALL, x + 8, y + 6, fitText(r, FONT_SMALL, t, cellW - 16).c_str(),
-                           owned ? 0xFFF0E8FF : 0xFF8A8298);
-                if (cellH > 36)
+                r.drawText(FONT_SMALL, x + 8, y + 6, fitText(r, FONT_SMALL, t, cellW - 16).c_str(), titleCol);
+                if (cellH > 36) {
+                    // Эффект — вся суть карточки, и «+12% СКОРОСТИ ДВИЖ…» вместо
+                    // него читается как незаконченная фраза. Поэтому: влезает
+                    // полный текст — полный, иначе короткий, и только в крайнем
+                    // случае многоточие.
+                    const char* full = boosterEffect(k);
+                    const char* eff = r.textWidth(FONT_SMALL, full) <= cellW - 16 ? full : boosterShortEffect(k);
                     r.drawText(FONT_SMALL, x + 8, y + cellH - 18,
-                               fitText(r, FONT_SMALL, boosterEffect(k), cellW - 16).c_str(),
-                               owned ? 0xFFB8E8C8 : 0xFF6E6678);
-                if (cellH > 44)
+                               fitText(r, FONT_SMALL, eff, cellW - 16).c_str(), effectCol);
+                }
+                if (cellH > 44) {
+                    const char* state = !viewUnlocked ? "ТИР ЗАКРЫТ"
+                                      : (selected ? "ВЫБРАН НА БОЙ" : (owned ? keyHint("ВЗЯТЬ") : "НЕТ ЖЕТОНА"));
                     r.drawText(FONT_SMALL, x + 8, y + 20,
-                               selected ? "ВЫБРАН НА БОЙ" : (owned ? keyHint("ВЗЯТЬ") : "НЕТ ЖЕТОНА"),
-                               selected ? 0xFFFFD776 : 0xFF9E92C0);
-                if (owned && mouseClicked && mouseX >= x && mouseX <= x + cellW && mouseY >= y && mouseY <= y + cellH)
+                               fitText(r, FONT_SMALL, state, cellW - 16).c_str(), stateCol);
+                }
+                if (viewUnlocked && owned && mouseClicked &&
+                    mouseX >= x && mouseX <= x + cellW && mouseY >= y && mouseY <= y + cellH)
                     selectBooster(k);
             }
         }
@@ -13573,7 +13899,7 @@ struct Game {
             // касанием, и строка говорит, куда касаться.
             const std::string hint = touchControls
                 ? "КАСАНИЕ ПО КНОПКЕ — ЗАБРАТЬ, КРУТИТЬ ИЛИ ВЗЯТЬ ЖЕТОН"
-                : keyHint("1–3 — ЗАБРАТЬ • R — КРУТИТЬ • 4–7 — ЖЕТОН • [ESC] — НАЗАД");
+                : keyHint("1–3 — ЗАБРАТЬ • R — КРУТИТЬ • TAB — ТИР • 4–7 — ЖЕТОН • [ESC] — НАЗАД");
             r.drawText(FONT_SMALL, 16, backY + 9,
                        fitText(r, FONT_SMALL, hint.c_str(), SCREEN_W - backW - 48).c_str(), 0xFFAAA0C8);
         }
@@ -14070,6 +14396,7 @@ struct Game {
             "2.12.14 • ТЕМП НАГРАД: РОВНО, БЕЗ ЗАЛПОВ",
             "2.12.15 • ДАРЫ ДНЯ: ЗАДАНИЯ, КРУТКА, ЖЕТОНЫ",
             "2.12.16 • ВЁРСТКА: НИ ВЫЛЕТОВ, НИ НАЛОЖЕНИЙ",
+            "2.12.17 • ДЕСЯТЬ ЗАДАНИЙ, ТРИ ТИРА ЖЕТОНОВ",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -14243,6 +14570,7 @@ struct Game {
             "Темп наград: ровно, без залпов и без провисаний.\n• Новый стенд tools/pacing_probe.cpp отвечает не «сколько», а «когда»: награды по минутам, промежутки между уровнями, худшие засухи, разброс золота между забегами и таблица «сколько забегов ждать следующий ранг».\n• Кузница: цена ранга росла в 1,58 раза, а добыча за забег — нет. Первые шесть рангов покупались пачкой в первом же забеге (0,03 забега на ранг), а двенадцатый ждали 4,4 забега. Теперь цена линейная: ожидание 0,4 → 1,9 забега, ни один ранг не ждёт больше чем в 1,15 раза дольше предыдущего, а весь магазин стоит столько же (около 1,81 млн золота). Договоры так же: 0,1 → 0,5 забега.\n• Драфт прокачки мог не предложить ни одного оружия: вес карточки зависит от тира, а не от типа. Забег, где первые три уровня выпали «Магнит», «Сапоги ветра» и «Книга мудрости», не наносил урона — на стенде у него к первой минуте 188 мобов на арене и 51 убийство против 94 у соседнего зерна. Без урона нет убийств, без убийств нет опыта, без опыта нет следующего уровня: награды не редеют, а прекращаются. Теперь среди четырёх карточек всегда есть оружие, пока оружие можно взять.\n• Замер (15 минут, шесть зёрен): 32–33 уровня, 9 сундуков, 24,8–26,6 тыс. золота, медиана 3,17 награды в минуту, худшая минута 1,5, худшая засуха 60 с. Было: 12–38 уровней, 2,5–37,8 тыс. золота, засуха до 267 с — но там же изменилась и модель игрока, поэтому вклад самих правок измерен отдельно: ожидание ранга 0,03…4,4 → 0,4…1,9, а разброс золота между забегами от гарантии оружия 1,83 → 1,07 раза.\n• Разброс золота между забегами упал с 15,4 раза до 1,07 — это и есть «скачки»: когда одно зерно даёт 2,5 тыс., а другое 37,8 тыс., следующий вечер непредсказуем.\n• Пул драфта растёт ровно: 16 предметов на старте, дальше по одному-два в минуту до 41 к двенадцатой. «Новые игрушки» — тоже награда, и они не приходят пачкой на третьей минуте.\n• Честно: бот не уклоняется. В смертном режиме он погибает на 3–4-й минуте (10–12 уровней, 1,8–2,8 тыс. золота) — это нижняя граница, вердикт ставится по бессмертному прогону, где награды видно до пятнадцатой минуты. Пороги и полный разбор — design/pacing.md.",
             "Вёрстка проверена стендом, а не глазами.\n• Новый стенд tools/ui_probe.cpp читает журнал рендерера: каждая нарисованная строка попадает в него тем же вызовом, что и на экран, поэтому стенд не может разойтись с игрой — текст, который игра не нарисовала, в проверку не попадёт. Считаются чернила глифов из атласа, а не lineHeight: номинальная рамка объявляла вылетом строку, которая на самом деле влезает. Журнал выключен в игре и включается только стендом, так что кадр не подорожал.\n• Проверка идёт по достижимым логическим кадрам, а не по размерам окон. Игра рисует в логические пиксели (logicalScreenSize: в альбоме высота 720, в портрете ширина 720), и 21 окно от 640×480 до 3440×1440 схлопывается в 11 кадров: 960×720, 1152×720, 1200×720, 1280×720, 1728×720 и портреты 720×960, 720×1024, 720×1152, 720×1280, 720×1568, 720×1600. Прежние проверки на 640×480, 800×480, 1024×600 и 1080×1920 мерели кадры, которых в игре не бывает.\n• Дары дня: карточки заданий начинались поверх панели заголовка — край шапки считался как топ-бар (68/46), а под ним лежит панель 94 px. Теперь 68/44 + 4 + 94.\n• Арена прослушивания: панель была жёстко 250/48/780, при кадре 720 px вылезала за правый край и накрывала «РЫВОК ГОТОВ» и строку резонаторов. Теперь она по ширине кадра и ниже полос боссов (342 в портрете, 200 в альбоме), панель трека — тоже в ширину кадра.\n• Справка: восемь строк арсенала — это 1054 px, на кадре 720×960 список уходил под нижний край и ложился на кнопки «ВЕРНУТЬСЯ В МЕНЮ» и «СЛОВАРЬ». Число строк теперь считается по высоте кадра. Третья подсказка (723 px) на узком кадре заменяется короткой. Название предмета ужимается под подпись тира: «Клятва Последнего Рассвета» наезжала на «АРТЕФАКТ • ТИР 5» на 11 px. Две кнопки футера делят одну строку вместо наезда на 34 px при кадре 720.\n• Управление: описание схемы «Левый большой палец ведёт стик…» — 480 px, а карточка на кадре 1152–1280 даёт 322–365 px: строка срезалась левым краем. Переносится по ширине карточки.\n• Финал кампании: строка итогов 738 px при кадре 720 — делится по смыслу на две; три кнопки в ряд (3×320 + 36) не влезали, «БЕСКОНЕЧНЫЙ РЕЖИМ» уезжал за край — в портрете они встают столбиком.\n• Выход с добычей: «СОБРАНО ЗОЛОТА…» — 749 px при кадре 720, делится на две строки.\n• Внешний вид кнопок: подсказка последней строки (844) ложилась на «СБРОСИТЬ ВНЕШНИЙ ВИД» (842) — превью больше не занимает их место.\n• Выбор героя: на узкой карточке (960×720 — 280 px) описание занимает четыре строки, и «ПОБЕДЫ НАД БОССАМИ» ложилось на «между забегами»; счётчик идёт за переносом.\n• HUD не рисуется под полноэкранными окнами (прокачка, сундук, конец забега): их баннеры ложились на верхнюю полосу. Пауза оставлена как была — там HUD виден за окном, и это правильно. В портретном HUD подсказки пересчитаны (−29/−16): хвост второй строки срезался о нижний край.\n• Телефон проверяется тем же стендом: тач-оверлей рисуется не в Game::render, а отдельным слоем (так его зовёт main_android.cpp), поэтому стенд вызывает drawTouchOverlay сам. Каждый экран идёт три раза — компьютер, телефон и телефон с кнопками 160 % (крайняя ступень настройки).\n• Найдено на 160 %: «СУПЕР» и «РЫВОК» ложились на описания карточек прокачки (720×960, 720×1024, 720×1280). Хуже — зоны кнопок перехватывали тап: карточка под невидимой кнопкой не нажималась. Теперь в прокачке и сундуке оверлей не рисуется и тап по месту кнопки остаётся кликом по карточке.\n• Итог: 25 экранов × 11 кадров × 3 интерфейса — 21 609 строк, 0 вылетов, 0 наложений, 0 обрезок, код возврата 0.• Итог (компьютер): 25 экранов × 11 кадров — 0 вылетов, 0 наложений, 0 обрезок. Стенд проверен мутацией: возврат панели арены на y=48 даёт 21 наложение, то есть он ловит именно то, что должен.\n• Хеши экранов (1280×720) сменились там, где правилась геометрия: справка d0e03f1c → cdd12cea, управление b0beafd1 → 922ee70b, выбор героя 1b4acf2e → 3b09a2fa, сундук 2e19657e → 924339d5, прокачка c3563983 → b82e0a7f, дары дня c8f29886 → 645600bd. Остальные не изменились ни на пиксель.\n• Честно: проверено на стенде, а не на живых устройствах. Как это читается на реальном телефоне с его плотностью и вырезом, стенд не знает.",
             "Дары дня: ежедневные задания, крутка и жетоны на один бой.\n• Девятый пункт меню «ДАРЫ ДНЯ» и клавиша G: три задания, крутка и четыре жетона на бой. Задания меняются в полночь по местным часам — это единственное место в игре, где важен календарь.\n• Всё дневное выводится из номера дня арифметикой, а не из rand(): один день даёт одни и те же задания и ту же последовательность круток в любом забеге, после перезапуска и на любом устройстве. «Перекрутить, пока не выпадет хорошее» нельзя без правки файла сейва, а сервер игре не нужен — она офлайн.\n• Задания: убить врагов, собрать золото, продержаться, открыть сундуки, взять уровней за бой, победить стражей. Время и уровни считаются по лучшему бою — задание «продержаться 5 минут» суммой трёх коротких смертей было бы бухгалтерией, а не заданием; остальные копятся между забегами.\n• Награда за задание — золото, жетон крутки или жетон на бой. Награда забирается один раз: у кнопки три состояния (не готово, забрать, забрано), повторный клик и перезапуск её не удваивают.\n• Крутка: одна бесплатная в день плюс дополнительные за задания. Шансы написаны на экране до нажатия: золото 55%, жетон на бой 30%, жетон крутки 10%, крупное золото 5%. Пятая крутка дня всегда даёт жетон на бой — полоса из пяти золотых круток подряд читается как сломанная крутилка, даже когда она честная.\n• Жетоны на один бой: нажива (+25% золота), стойкость (+25% здоровья), ярость (+12% урона), удача (+1 замена прокачки на каждом уровне и +4% элит). Жетон сгорает на старте и действует ровно этот бой — второй забег идёт без него, что видно и по счётчику, и по множителю.\n• Аномалии забега: один из шести правил на бой (тихая ночь, кровавая луна, тёплый пепел, густая тьма, ранний прорыв, щедрое эхо). Правило объявляется на старте и видно в паузе — аномалия, о которой игрок узнаёт по факту смерти, это не правило, а слух. Поправки в пределах ±10%, чтобы не ломать ровный темп из 2.12.14.\n• Замена прокачки стала счётчиком, а не флагом: без жетона удачи по-прежнему одна замена на уровень.\n• Найдено и починено по пути: в радиальном меню у пунктов не было заливки — сектора рисовались на фоне арены, лишь бы попали в таблицу заливок. «Безопасные эхо» тоже читались как список.\n• Сейв вырос с 120 до 204 байт, версия 10. Старый файл читается как есть: ранги кузницы, печати, развилки и рекорды на месте, дневные счётчики начинаются с нуля и задания выдаются в первый же запуск.\n• Новый стенд tools/daily_probe.cpp проверяет обещания, а не числа: стабильность дня, различие дней, однократность награды, гарантию пятой крутки, расход жетонов, «жетон — один бой», учёт прогресса (сумма против лучшего боя), все шесть аномалий за 400 забегов и чтение старых сейвов трёх размеров.\n• Замер: темп не поехал. 15 минут, 12 зёрен: 32,2 уровня, золото 24,3–31,4 тыс. (1,29 раза), медиана 3,0 награды в минуту, худшая минута 1,5 — «ОК: темп ровный». Разброс золота между забегами вырос с 1,07 до 1,29 раза: это и есть добавленная случайность, и она осталась внутри порога 2,0.\n• Честно: дневные задания проверены стендом, а не живой неделей игры. Сколько дней подряд игрок захочет их закрывать — вопрос к людям, а не к арифметике.",
+            "Дары дня, второй заход: заданий стало десять, а жетоны разделились на три тира.\n• • Новые задания считаются по бою, а не по календарной неделе: сразить элит (6/10/14), разрушить резонаторы (2/3/4), применить супер (2/3/5) и поднять сборку до тира (2/3/4). Тир сборки берётся по лучшему бою — как время и уровни: «дойти до тира 3» суммой трёх слабых забегов было бы подлогом.\n• • Счётчики элит, резонаторов и суперумения копятся в забеге и сбрасываются на старте следующего; засчитываются смерть элиты, разрушение резонатора и удачный супер, а не «почти получилось».\n• • Жетонов стало двенадцать — три тира по четыре. Тир I «ОСНОВА» открыт сразу: нажива (+25% золота), стойкость (+25% здоровья), ярость (+12% урона), удача (+1 замена и +4% элит). Тир II «ЗАКАЛ» — за 1 000 000 потраченного золота: скорость (+12% движения), память (+15% опыта), охота (+8% элит и +8% золота), разгон (+20% к суперу). Тир III «ПЕПЕЛ» — за 1 800 000: голод (+35% золота, −10% здоровья), резонанс (+2 резонатора на поле), прорыв (прорыв на 3 уровня раньше), гнев (+22% урона). Верхние тиры не «лучше в процентах», а про другой стиль боя — иначе тир-лист был бы шкалой, а не выбором.\n• • Порог считается по потраченному, а не по заработанному: золото, лежащее в сундуке, тир не открывает. Списание идёт через одну точку (кузница и договоры), поэтому счётчик нельзя уронить или удвоить отдельной покупкой.\n• • Закрытый тир не выдаётся ни заданием, ни круткой, и выбранный жетон закрытого тира (например, из правленого сейва) в бой не пойдёт. Открытые тиры отбирают жетон из всех доступных, а не из первых четырёх: после второго тира выпадает восемь вариантов, после третьего — двенадцать.\n• • Экран даров: три вкладки тиров (закрытые подписаны «ЗАКР»), справа — сколько потрачено до следующего тира, ниже — четыре карточки выбранного тира. TAB, [ и ] листают тиры, 4–7 выбирают жетон текущего тира. Цифры в статусе сокращены («1,00 М»), иначе на 960 и 1280 шириной строка уезжала за край и обрезалась многоточием.\n• • В паузе к строке правила забега добавлен сгоревший жетон и его эффект — но только если строка влезает в окно: на узком экране остаётся одно название, а не половина эффекта.\n• • Сейв вырос с 204 до 240 байт, версия 11. Файл 2.12.16 читается: четыре старых жетона на месте, номер выбранного берётся из его прежнего места, новые восемь — по нулям, а потраченное золото восстанавливается по рангам кузницы. Файлы до 2.12.16 читаются как раньше.\n• • Найдено и починено по пути: буфер миграции заполнялся не нулями, и файл короче своего хвоста читал мусор со стека как номер жетона; при миграции v10→v11 место хвоста бралось по новому раскладу, где на том же смещении уже пятый жетон.\n• • Стенд tools/daily_probe.cpp вырос с 9 проверок до 15: ассортимент (все десять видов выпадают за 300 дней, три разных в день, без повторов), новые счётчики в бою, пороги тиров и отказ закрытому тиру, каждый из двенадцати жетонов действительно меняет бой, копившееся золото и миграция сейва v10. Две мутации (тиры открыты всегда; потраченное не копится) валят стенд — он проверяет обещание, а не себя.\n• • Замер: вёрстка цела — ui_probe: 11 кадров × 25 экранов × 3 интерфейса, 21 726 строк, 0 наложений, 0 обрезок, 0 вылетов. screen_check: изменился только кадр «дары дня» (645600bd → 99778fa3) и добавлен «дары дня тир III» (a3c2815d); остальные 21 хеш совпали, значит правки не тронули ни пикселя вне экрана даров.\n• • Честно про пороги 1 млн и 1,8 млн: они выбраны по замеру темпа (27,2 тыс. золота за 15-минутный забег, разброс 1,29 раза), а не по живой игре на сотни забегов. 1 млн — это примерно 37 полностью потраченных забегов, 1,8 млн — около 66. Заодно видно, куда попал третий порог: вся кузница целиком стоит 1 813 680, то есть тир III открывается ровно тогда, когда выкуплено всё, — раньше этого числа он был бы недостижим, позже не значил бы ничего. Если через месяц игры тир II покажется недостижимым, это правится одной константой, и вся причина видна в этой строке.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
@@ -15046,7 +15374,7 @@ struct Game {
             }
 
             if (mouseClicked && hov && canAfford) {
-                save.gold -= cost;
+                spendGold(cost);
                 save.metaRanks[i]++;
                 writeSave();
                 sound.play(SFX_LEVELUP, 0.02f);
@@ -15104,7 +15432,7 @@ struct Game {
                 snprintf(buf, sizeof(buf), maxed ? "МАКСИМУМ" : "%d золота", cost);
                 r.drawTextCentered(FONT_SMALL, bx + bw / 2, by + 15, buf, canBuy || maxed ? 0xFFFFFFFF : 0xFFA898B8);
                 if (mouseClicked && hov && canBuy) {
-                    save.gold -= cost; setEnemyOathRank(i, rank + 1); writeSave(); sound.play(SFX_LEVELUP, 0.02f);
+                    spendGold(cost); setEnemyOathRank(i, rank + 1); writeSave(); sound.play(SFX_LEVELUP, 0.02f);
                 }
             }
             const int oathInfoY = portraitShop ? oathY + 3 * (oathH + oathGapY) + 8 : 540;
@@ -15785,7 +16113,11 @@ struct Game {
             // это те же действия пальцем, но клавиши должны работать всегда.
             if (key >= '1' && key <= '3') claimDaily(key - '1');
             else if (key == 'R' || key == 'r') doDailyRoll();
-            else if (key >= '4' && key <= '7') selectBooster(key - '4');
+            else if (key == 9) boosterTierView = (boosterTierView + 1) % BOOSTER_TIER_COUNT;   // TAB — следующий тир
+            else if (key == '[') boosterTierView = (boosterTierView + BOOSTER_TIER_COUNT - 1) % BOOSTER_TIER_COUNT;
+            else if (key == ']') boosterTierView = (boosterTierView + 1) % BOOSTER_TIER_COUNT;
+            else if (key >= '4' && key <= '7')
+                selectBooster(boosterTierView * BOOSTER_PER_TIER + (key - '4'));
             else if (key == 27 || key == 13 || key == 32) state = dailyReturnState;
         } else if (state == STATE_HALL) {
             if (key == 9) hallPage = 1 - hallPage;

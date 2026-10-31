@@ -109,6 +109,7 @@ int main(int argc, char** argv) {
         {"play", STATE_PLAYING}, {"pause", STATE_PAUSED}, {"chest", STATE_CHEST},
         {"levelup", STATE_LEVELUP}, {"controls", STATE_CONTROLS_SETUP},
         {"look", STATE_BUTTON_LOOK}, {"holidays", STATE_HOLIDAY}, {"trail", STATE_PLAYING},
+        {"daily", STATE_DAILY},
     };
     int state = strcmp(screen, "debug") == 0 ? STATE_PLAYING : STATE_SETTINGS;
     for (const Case& c : cases) if (strcmp(c.name, screen) == 0) state = c.state;
@@ -139,6 +140,11 @@ int main(int argc, char** argv) {
         if (strncmp(argv[i], "scroll", 6) == 0) g.arsenalScrollRow = std::max(0, atoi(argv[i] + 6));
     g.renderThreads = threads;
     for (int i = 0; i < 5; ++i) g.itemLevels[i] = 3;
+    // «runboosterNN» — жетон, сгоревший в этом бою: нужен снимкам паузы, где
+    // печатается правило забега. Множители здесь не важны, только строка.
+    for (int i = 1; i < argc; ++i)
+        if (strncmp(argv[i], "runbooster", 10) == 0)
+            g.runBooster = std::max(0, std::min(BOOSTER_KINDS - 1, atoi(argv[i] + 10)));
     g.state = (GameState)state;
     if (state == STATE_PLAYING || state == STATE_LEVELUP || state == STATE_CHEST || state == STATE_PAUSED) {
         for (int i = 0; i < 60; ++i) g.spawnMonster(i % 8, i % 9 == 0, false);
@@ -159,6 +165,25 @@ int main(int argc, char** argv) {
         g.spawnFloorDeviceAt(FLOOR_DEVICE_PLATE, -160.0f, 30.0f);
         g.spawnFloorDeviceAt(FLOOR_DEVICE_SPIKES, 140.0f, -60.0f);
         g.spawnFloorDeviceAt(FLOOR_DEVICE_SIGIL, 20.0f, 160.0f);
+    }
+    // «daily» — экран даров с тир-листом жетонов. Аргументы dailyTierN (какой
+    // тир открыт на экране) и spendNNN (сколько потрачено — от этого зависит,
+    // какие тиры открыты): снимок должен показывать и закрытый тир, и открытый.
+    if (strcmp(screen, "daily") == 0) {
+        g.ensureDaily();
+        g.save.dailyProgress[0] = g.save.dailyTarget[0];
+        g.save.dailyProgress[1] = g.save.dailyTarget[1] / 3;
+        g.save.dailyClaimed = 1 << 2;
+        g.save.dailyProgress[2] = g.save.dailyTarget[2];
+        for (int i = 1; i < argc; ++i) {
+            if (strncmp(argv[i], "dailyTier", 9) == 0) g.boosterTierView = std::max(0, std::min(2, atoi(argv[i] + 9)));
+            if (strncmp(argv[i], "spend", 5) == 0) g.save.goldSpent = std::max(0, atoi(argv[i] + 5));
+        }
+        g.save.boosters[BOOSTER_RAGE] = 2;
+        g.save.boosters[BOOSTER_LUCK] = 1;
+        if (g.save.goldSpent >= BOOSTER_TIER_GOLD[1]) { g.save.boosters[BOOSTER_SPEED] = 2; g.save.boosters[BOOSTER_XP] = 1; }
+        if (g.save.goldSpent >= BOOSTER_TIER_GOLD[2]) { g.save.boosters[BOOSTER_HUNGER] = 1; g.save.boosters[BOOSTER_BREAK] = 1; }
+        g.save.activeBooster = BOOSTER_RAGE;
     }
     if (strcmp(screen, "debug") == 0) g.debugOverlay = true;
     // «trail» — бой с тлеющей тропой (предмет 40). Сцена двигает героя по дуге,

@@ -49,7 +49,10 @@ int main(int argc, char** argv) {
     // праздник, -2 — календарь на закреплённой дате 31 октября 2026.
     // Пятый вариант карты — рисунок пола: 0..4 или -1 «как в режиме». У каждого
     // рисунка свой хеш, иначе новый пол в одном варианте проходил бы мимо сверки.
-    struct Case { const char* name; int state; int holiday; int layout; bool devices; };
+    // dailySpend — сколько золота «потрачено» к моменту кадра экрана даров:
+    // от этой цифры зависят открытые тиры жетонов, вкладки и подпись до
+    // следующего тира. Без неё в сверку попадал только первый тир.
+    struct Case { const char* name; int state; int holiday; int layout; bool devices; int dailySpend = 0; };
     const Case cases[] = {
         {"меню", STATE_MENU, -1, -1, false},
         {"настройки", STATE_SETTINGS, -1, -1, false},
@@ -82,6 +85,10 @@ int main(int argc, char** argv) {
         // показывал бы «0 / N» и «НЕТ ЖЕТОНА» и половина вёрстки осталась бы
         // без сверки.
         {"дары дня", STATE_DAILY, -2, -1, false},
+        // Третий тир: открыты все вкладки, статус говорит «все тиры открыты»,
+        // а карточки — «ПЕПЕЛ». Отдельный кадр, иначе верх тир-листа никто
+        // никогда не увидит в сверке.
+        {"дары дня тир III", STATE_DAILY, -2, -1, false, 2000000},
         {"бой праздник", STATE_PLAYING, 0, -1, false},
     };
     SCREEN_W = 1280; SCREEN_H = 720;
@@ -117,6 +124,12 @@ int main(int argc, char** argv) {
             g.save.boosters[BOOSTER_RAGE] = 2;
             g.save.boosters[BOOSTER_LUCK] = 1;
             g.save.activeBooster = BOOSTER_RAGE;
+            g.save.goldSpent = c.dailySpend;
+            if (c.dailySpend >= BOOSTER_TIER_GOLD[2]) {
+                g.save.boosters[BOOSTER_HUNGER] = 1;
+                g.save.boosters[BOOSTER_BREAK] = 1;
+            }
+            g.boosterTierView = std::min(2, g.unlockedBoosterTierCount() - 1);
         }
         if (c.state == STATE_SHOP) {
             // Разные ранги в одном кадре: подпись «Ранг N / 12», закрашенная
