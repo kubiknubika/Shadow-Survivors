@@ -225,7 +225,7 @@ static inline int holidayMonsterSlot(int type) {
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 161;
+static constexpr int PATCH_NOTES_COUNT = 162;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -411,6 +411,32 @@ struct ItemDef {
     const char* name;
     const char* desc;
 };
+
+// ── Роль оружия ─────────────────────────────────────────────────────────────
+// Оружие делится на два дела, и это правило, а не подпись на карточке:
+//   • АОЕ — чистит волну: урон размазан по многим целям;
+//   • ПО СТРАЖАМ — снимает одного: по стражу бьёт на 35 % сильнее.
+// Без второго правила «чистить толпу» и «убить стража» были одним и тем же
+// выбором, и оружие отличалось только цифрой урона.
+enum { WEAPON_ROLE_AOE = 0, WEAPON_ROLE_BOSS = 1 };
+static const int WEAPON_ROLES[7] = {
+    WEAPON_ROLE_BOSS,  // 0 Серебряные клинки — узкий веер в одну цель
+    WEAPON_ROLE_AOE,   // 1 Огненный шар — взрыв по области
+    WEAPON_ROLE_AOE,   // 2 Рунический вихрь — кольцо вокруг героя
+    WEAPON_ROLE_BOSS,  // 3 Цепная молния — добивает одну цель повторными разрядами
+    WEAPON_ROLE_AOE,   // 4 Кровавая аура — всё, что подошло
+    WEAPON_ROLE_AOE,   // 5 Боевой топор — пробивает насквозь
+    WEAPON_ROLE_AOE    // 6 Ледяное кольцо — новa по кругу
+};
+static inline const char* weaponRoleLabel(int weaponId) {
+    if (weaponId < 0 || weaponId >= 7) return "АОЕ";
+    return WEAPON_ROLES[weaponId] == WEAPON_ROLE_BOSS ? "ПО СТРАЖАМ" : "АОЕ";
+}
+// Подпись на карточке прокачки: роль впереди, потому что она и есть выбор.
+static inline std::string weaponCardLabel(int weaponId) {
+    return std::string("ОРУЖИЕ • ") + weaponRoleLabel(weaponId);
+}
+static constexpr float WEAPON_ROLE_BOSS_BONUS = 1.35f;
 
 static const ItemDef ITEM_DEFS[ITEM_COUNT] = {
     // 0..6: Active Weapons
@@ -2384,6 +2410,11 @@ struct Game {
         return tier >= 2 ? 4.0f : (tier == 1 ? 1.85f : 1.0f);
     }
     float getEvoMultiplier(int weaponId) const { return evolvedWeapons[weaponId] ? 1.65f : 1.0f; }
+    // Роль оружия работает только по стражам: обычную волну АОЕ и так чистит.
+    float getWeaponRoleBossMultiplier(int attackId) const {
+        if (attackId < 0 || attackId >= 7) return 1.0f;
+        return WEAPON_ROLES[attackId] == WEAPON_ROLE_BOSS ? WEAPON_ROLE_BOSS_BONUS : 1.0f;
+    }
     // Урон от уровня у всех семи оружий растёт по одной кривой: 1-й ранг — база,
     // к 4-му — ×1.80, к 8-му — ×1.90. Раньше у каждого оружия был свой линейный
     // наклон (+7.5, +14, +6.5 … урона за уровень), и к 8-му рангу урон утраивался:
@@ -2483,7 +2514,7 @@ struct Game {
         }
         if (weaponId < 0 || weaponId >= 7) return std::string();
         static const char* signature[7] = {
-            "КЛИНКИ: чаще залп; пробой на 4-м и 7-м ранге",
+            "КЛИНКИ: оружие одной цели, +35% урона стражам",
             "ОГОНЬ: большой взрыв; новые снаряды на 4-м и 7-м",
             "ВИХРЬ: сферы вращаются быстрее и множатся",
             "МОЛНИЯ: +удар каждые 2 ранга, цепь ищет дальше",
@@ -5114,11 +5145,12 @@ struct Game {
         const int retaliationRank = std::max(0, std::min(3, itemLevels[38]));
         const bool retaliationHit = retaliationRank > 0 && retaliationChargeTimer > 0.0f && isActiveWeaponAttack(attackId);
         const float retaliationMultiplier = retaliationHit ? 1.0f + getRetaliationBonusPercent(retaliationRank) : 1.0f;
-        const float excessDamage = std::max(0.0f, rawDmg * getDamageMultiplier() * balance.playerDamageMultiplier *
+        const float bossRoleScale = m.isBoss ? getWeaponRoleBossMultiplier(attackId) : 1.0f;
+        const float excessDamage = std::max(0.0f, rawDmg * getDamageMultiplier() * balance.playerDamageMultiplier * bossRoleScale *
                     (m.isBoss ? getBossDamageMultiplier() : 1.0f) *
                     (m.isElite ? getEliteDamageMultiplier() : 1.0f) *
                     getCriticalDamageMultiplier(criticalTier) * exposureMultiplier * retaliationMultiplier - m.hp);
-        float dmg = rawDmg * getDamageMultiplier() * balance.playerDamageMultiplier *
+        float dmg = rawDmg * getDamageMultiplier() * balance.playerDamageMultiplier * bossRoleScale *
                     (m.isBoss ? getBossDamageMultiplier() : 1.0f) *
                     (m.isElite ? getEliteDamageMultiplier() : 1.0f) *
                     getCriticalDamageMultiplier(criticalTier) * exposureMultiplier * retaliationMultiplier;
@@ -5419,7 +5451,7 @@ struct Game {
                     p.damage = 25.5f * getWeaponLevelCurve(lvl) * getEvoMultiplier(0) * getWeaponRankDamageMultiplier(0);
                     p.radius = 9.0f * areaMult * getWeaponRankAreaMultiplier(0);
                     p.life = 1.35f;
-                    p.pierce = 1 + (lvl >= 4 ? 1 : 0) + (lvl >= 7 ? 1 : 0);
+                    p.pierce = 1; // оружие одной цели: толпу насквозь не пробивает (это дело топора)
                     p.isEnemy = false;
                     p.isCrit = false;
                     projectiles.push_back(p);
@@ -5656,8 +5688,8 @@ struct Game {
             weaponTimers[6] -= dt;
             if (weaponTimers[6] <= 0.0f) {
                 int lvl = itemLevels[6];
-                weaponTimers[6] = std::max(1.30f, (3.2f - lvl * 0.22f) * cdMult * getWeaponRankCooldownMultiplier(6));
-                float maxRad = (155.0f + lvl * 18.0f) * areaMult * getWeaponRankAreaMultiplier(6);
+                weaponTimers[6] = std::max(1.10f, (3.2f - lvl * 0.25f) * cdMult * getWeaponRankCooldownMultiplier(6));
+                float maxRad = (165.0f + lvl * 20.0f) * areaMult * getWeaponRankAreaMultiplier(6);
                 float dmg = 40.0f * getWeaponLevelCurve(lvl) * getEvoMultiplier(6) * getWeaponRankDamageMultiplier(6);
                 FrostWave fw = {playerX, playerY, 20.0f, maxRad, 0.40f, 0.40f};
                 frostWaves.push_back(fw);
@@ -9285,7 +9317,9 @@ struct Game {
             const uint32_t tier = getItemTierColor(id);
             r.fillRect(x, y, cardW, cardH, hovered ? 0xFF2E2052 : 0xFF1B1430, 248);
             r.drawRect(x, y, cardW, cardH, hovered ? 0xFFFFE058 : tier, hovered ? 3 : 2);
-            r.drawText(FONT_SMALL, x + 12, y + 9, def.isWeapon ? "АКТИВНОЕ ОРУЖИЕ" : "ПАССИВНЫЙ АРТЕФАКТ", def.isWeapon ? 0xFF78E0FF : 0xFFE890FF, false);
+            // Роль — в первой строке карточки: «ОРУЖИЕ • АОЕ» или «ОРУЖИЕ • ПО СТРАЖАМ».
+            const std::string cardKind = def.isWeapon ? weaponCardLabel(id) : std::string("ПАССИВНЫЙ АРТЕФАКТ");
+            r.drawText(FONT_SMALL, x + 12, y + 9, cardKind.c_str(), def.isWeapon ? 0xFF78E0FF : 0xFFE890FF, false);
             char tierLabel[24]; snprintf(tierLabel, sizeof(tierLabel), "ТИР %d", getItemTier(id));
             r.drawTextRight(FONT_SMALL, x + cardW - 12, y + 9, tierLabel, tier, false);
             r.drawWeaponIcon(x + 30, y + 55, id, 22);
@@ -9373,8 +9407,12 @@ struct Game {
 
             // Type Badge
             r.fillRoundedRect(cx + 20, cardY + 18, cardW - 40, 26, 6, def.isWeapon ? 0xFF183858 : 0xFF381854);
-            r.drawTextCentered(FONT_SMALL, cx + cardW / 2, cardY + 22,
-                def.isWeapon ? "АКТИВНОЕ ОРУЖИЕ" : "ПАССИВНЫЙ АРТЕФАКТ",
+            std::string wideKind = def.isWeapon ? weaponCardLabel(itemId) : std::string("ПАССИВНЫЙ АРТЕФАКТ");
+            // В широком окне карточка уже: если подпись с ролью не влезает, роль
+            // остаётся в карточке прокачки и в аудите, а бейдж не режется.
+            if (r.textWidth(FONT_SMALL, wideKind.c_str()) > cardW - 52)
+                wideKind = def.isWeapon ? "ОРУЖИЕ" : "ПАССИВНЫЙ АРТЕФАКТ";
+            r.drawTextCentered(FONT_SMALL, cx + cardW / 2, cardY + 22, wideKind.c_str(),
                 def.isWeapon ? 0xFF78E0FF : 0xFFE890FF);
             if (i == advisorCard) r.drawTextRight(FONT_SMALL, cx + cardW - 16, cardY + 51, "СОВЕТ ИИ", 0xFF75F0B0);
 
@@ -13079,6 +13117,7 @@ struct Game {
             "2.12.4 • АПДЕЙТЕР ПРОВЕРЯЕТ САМ СЕБЯ",
             "2.12.5 • КНОПКА «НАЗАД» В ПРАЗДНИКАХ",
             "2.12.6 • РОСТ СПОСОБНОСТЕЙ ПОЛОЖЕ",
+            "2.12.7 • РОЛИ: АОЕ И ПО СТРАЖАМ",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -13242,6 +13281,7 @@ struct Game {
             "Сборка 2.12.3 прошла, а в консоли осталось чужое сообщение - и это был не код игры.\n• В логе обновления появилась строка «после.» не является командой, хотя сборка закончилась BUILD SUCCESS. Такое бывает, когда update.bat на диске не совпадает с версией в ветке: cmd читает чужие строки и выполняет их обрывки. В том запуске копия действительно расходилась с веткой - апдейтер сам отложил её перед git pull, поэтому обновление всё равно доехало.\n• Теперь апдейтер сверяет себя с веткой до начала работы: git hash-object update.bat против HEAD:update.bat. Если файл испорчен или старше того, что лежит в ветке, он ставит версию из ветки и просит запустить заново - вместо того чтобы выполнять обрывки чужих строк. Если на диске лежит более свежая копия (её скачали руками), она остаётся: версии сравниваются.\n• Из 2.12.3 сюда же: код возврата git снимается до показа лога, показ идёт средствами cmd, а при провале сборки на экран попадают error-строки из build\build.log.\n• Честно: воспроизвести именно строку «после.» не удалось - в файле из ветки такой команды нет. Поэтому лечится не симптом, а причина: расхождение файла с веткой теперь видно и исправляется само.",
             "Из календаря праздников нельзя было выйти мышью или пальцем.\n• Экран открывается из настроек и из паузы, но выйти из него можно было только клавишей ESC. Кнопки не было вовсе: три переключателя внизу — «ПРАЗДНИКИ», «ПРОВЕРКА», «СДВИГ ДАТЫ» — и всё. На телефоне клавиши нет, то есть с телефона календарь становился ловушкой.\n• Теперь в подвале есть «← НАЗАД [ESC]»: в альбоме — справа в ряду переключателей, в портрете — четвёртой строкой столбика. Та же кнопка, что в настройках: нажатие, подсветка под курсором, на телефоне подпись читается как «← НАЗАД».\n• Клавиши работают как раньше: ESC, ENTER и SPACE закрывают календарь и возвращают туда, откуда его открыли (в настройки или в паузу).\n• Попутно в альбоме подсказка клавиш стояла прямо на ряду кнопок (строка на SCREEN_H-22 при кнопках до SCREEN_H-20) — теперь она над рядом и ужимается по ширине. В портрете подвал вырос с 132 до 176 px: четыре кнопки в прежние 132 не вставали.\n• Подписи кнопок ужимаются по своей ширине: на 800×600 «ПРОВЕРКА: ПО КАЛЕНДАРЮ» была шире кнопки и заезжала на соседнюю.\n• Хеш экрана «праздники» сменился с 3f868c27 на 39049f60 — это тот самый ряд кнопок. Кадры боя не изменились: 2.12.5 рисует календарь, а не арену.",
             "Две правки по одному отзыву: «ТЕМП: медленно» в журнале устарел, а способности растут слишком сильно.\n• Строка «ТЕМП: МЕДЛЕННО / СРЕДНЕ / БЫСТРО / ОЧЕНЬ БЫСТРО» убрана из журнала справа сверху: темп музыки по толпе и так слышен и виден цветными волнами по краю экрана, а подпись только занимала место. Рамка журнала стала ниже: 102 -> 80 px.\n• Рост способностей от ранга: урон за ранг умножался на +8-14 % и получал разгон на поздних рангах, у каждого оружия был свой наклон урона от уровня, сверху шли частота, снаряды и площадь. Одно оружие с 1-го до 8-го ранга усиливалось в 29-82 раза по одной цели и в 43-1200 раз по толпе.\n• Теперь урон от уровня у всех семи оружий идёт по одной кривой: 1-й ранг - база, 4-й - x1.8, 8-й - x1.9 (было до x3.6). Кривая спереди круче, поэтому середина забега не просела.\n• Множитель урона за ранг: 9 %, 8 %, 5 %, дальше по 2 % - без разгона. Пол паузы между срабатываниями поднят: клинки 0.30 вместо 0.22 с, молния 0.95 вместо 0.65, топор 0.65 вместо 0.55, кольцо 1.30 вместо 1.20.\n• Охват не трогал: снаряды и радиусы остались прежними - это роль оружия, а не темп роста. У молнии с 4-го ранга на один разряд больше: на стенде зачистки она стояла на самой границе.\n• Итог по стенду оружия (одна цель / толпа): клинки x35.5 / x101.7 вместо x72.8 / x209.9, шар x18.3 / x98.6 вместо x47.5 / x197.3, вихрь x11.5 / x383.7 вместо x29.3 / x1210, молния x9.9 / x11.4 вместо x38.1 / x42.8, топор x16.2 / x26.9 вместо x82.0 / x111.2, кольцо x3.5 / x18.2 вместо x11.7 / x56.2, аура x2.5 вместо x9.6.\n• То есть 1-4-й ранги почти как были (на 10-20 % слабее), а 5-8-й дают вдвое меньше. Ранг 8 у каждого оружия остаётся лучшим, но перестаёт быть кнопкой зачистки.\n• Стенд зачистки (40 мобов с здоровьем 5-й минуты): на 4-м ранге 12.6 с у клинков, 7.7 у шара, 9.8 у вихря, 18.9 у молнии, 14.0 у ауры, 9.7 у топора, 17.7 у кольца при лимите 20 с - провалов 0.\n• tools/weapon_probe.cpp: пассивки усредняются по семи зёрнам, артефакты «не про урон» помечаются как шум и не валят стенд. Строка сравнения с суперумением считается по замеру, а не вписана руками.\n• Честно: баланс проверен стендами, а не живым забегом; сколько волн выживает игрок после правки, никто не проходил.",
+            "Оружие получило роли: «АОЕ» чистит толпу, «ПО СТРАЖАМ» снимает одного.\n• Раньше все семь оружий были одним выбором с разной цифрой: и волну, и стража ими били одинаково, и держать оружие «под босса» было незачем.\n• Роль — правило, а не подпись: оружие роли «по стражам» бьёт стражей на 35 % сильнее. Сейчас это серебряные клинки и цепная молния, у остальных пяти роль АОЕ.\n• Клинки стали оружием одной цели: узкий веер, без пробива насквозь (раньше на 4-м и 7-м ранге клинок шёл через двоих). Толпу пробивает топор — это его дело.\n• Ледяное кольцо получило чуть шире волну (165 + 20 за уровень вместо 155 + 18) и чуть короче паузу (3.2 - 0.25 за уровень): на стенде зачистки оно упиралось в лимит.\n• Роль видно на карточке прокачки: «ОРУЖИЕ • АОЕ» или «ОРУЖИЕ • ПО СТРАЖАМ». В широком окне, где карточка уже, длинная подпись заменяется на «ОРУЖИЕ», а не режется.\n• Аудит стал строже. В стенде оружия появился сценарий «страж»: мишень 30 px, помеченная стражем (его способности выключены, иначе его снаряды попадали бы в замер). Теперь стенд печатает таблицу ролей и проверяет поведение, а не намерение: оружие «по стражам» обязано бить стража сильнее любого АОЕ; лучшее АОЕ обязано чистить толпу сильнее любого «по стражам»; у «по стражам» урон по стражу не ниже 60 % урона по толпе; у АОЕ толпа не меньше двух урона по стражу.\n• Замер на 8-м ранге: страж — клинки 2151, молния 1375, лучшее АОЕ 713 (топор), то есть x3. Толпа — вихрь 4239, лучшее «по стражам» 1541 (клинки), то есть x2.8. На 4-м ранге: 648 против 326 и 1135 против 502.\n• Стенд зачистки волны теперь учитывает роль: лимит 30 с для «по стражам» против 20 с для АОЕ (медленная зачистка — цена за урон по стражу, а не поломка), а каждый замер идёт по трём зёрнам и требует два успешных из трёх: на одном зерне разница в пару мобов решала исход.\n• Честно: роли проверены стендами, а не живым забегом; ощущение «нужно ли брать оружие под босса» может сказать только человек.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");

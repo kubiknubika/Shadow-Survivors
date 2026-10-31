@@ -51,6 +51,9 @@
     // и удар на 27 урона «не менял» hp, хотя реально проходил (стенд показывал 0 DPS).
 static const float INF_HP = 1.0e6f;
 static const int CROWD = 24;
+// Страж — мишень размером со стража (30 px), а не с моба: по такой цели видно
+// и роль оружия (+35 % «по стражам»), и то, попадает ли оружие в крупную цель.
+static constexpr float BOSS_RADIUS = 30.0f;
 
 struct Result {
     int casts = 0;
@@ -81,7 +84,8 @@ static std::vector<Dummy> layoutTargets(int count, float inner, float outer) {
 // Один замер: ставит оружие, мишени и гоняет игру, пока не выйдет время.
 static Result measure(Game& g, int itemId, int level, bool evolved, int targetCount,
                       float inner, float outer, float seconds, float orbitSpeed = 0.0f,
-                      int passiveId = -1, bool pinTargets = true) {
+                      int passiveId = -1, bool pinTargets = true,
+                      float dummyRadius = 18.0f, bool dummyIsBoss = false) {
     Result res;
     const float dt = 1.0f / 60.0f;
 
@@ -136,8 +140,22 @@ static Result measure(Game& g, int itemId, int level, bool evolved, int targetCo
         m.x = d.x; m.y = d.y;
         m.vx = m.vy = 0.0f;
         m.hp = m.maxHp = INF_HP;
-        m.radius = 18.0f;
+        m.radius = dummyRadius;
         m.isElite = false;
+        // «Страж» — не просто большая мишень: по нему работает правило роли
+        // оружия (+35 % урона оружием «по стражам»), и он должен его получать.
+        // Способности стража выключены, иначе его снаряды попадали бы в замер.
+        if (dummyIsBoss) {
+            m.isBoss = true;
+            m.bossType = 0;
+            m.bossPhase = 1;
+            m.abilityTimer = 1.0e9f;
+            m.specialTimer = 1.0e9f;
+            m.bossSummonWindup = 0.0f;
+            m.phaseInvulnTimer = 0.0f;
+            m.shieldHits = 0;
+            m.isShieldBearer = false;
+        }
         dummyIds.push_back(m.uniqueId);
         dummySlot.push_back((int)i);
     }
@@ -325,8 +343,8 @@ int main(int argc, char** argv) {
            "оружие", "ранг", "220 px", "90 px", "20 px", "в движ.", "толпа", "за удар", "сраб/м");
 
     struct Row {
-        const char* name; int level;
-        Result far, close, near, moving, crowd;
+        const char* name; int id; int level;
+        Result far, close, near, moving, crowd, boss;
     };
     std::vector<Row> rows;
     // Разброс урона по оружию на 1-м и 8-м ранге: нужен в отчёте о суперумении,
@@ -349,23 +367,28 @@ int main(int argc, char** argv) {
             Result moving = measure(g, w, level, evolved, 1, 220.0f, 220.0f, seconds, 110.0f);
             srand(20260201);
             Result crowd = measure(g, w, level, evolved, CROWD, 120.0f, 330.0f, seconds);
+            // Страж: одна мишень 30 px вплотную. Именно здесь видно, окупается ли
+            // оружие роли «по стражам»: обычную волну чистит любое.
+            srand(20260201);
+            Result boss = measure(g, w, level, evolved, 1, 90.0f, 90.0f, seconds, 0.0f, -1, true,
+                                  BOSS_RADIUS, true);
             char label[64];
             if (evolved) snprintf(label, sizeof(label), "%s (эволюция)", weaponName[w]);
             else snprintf(label, sizeof(label), "%s", weaponName[w]);
             printf("%-30s %5d %8.0f %8.0f %8.0f %8.0f %8.0f %9.0f %7.1f\n",
                    label, level, far.dps(), close.dps(), near.dps(), moving.dps(), crowd.dps(),
                    crowd.perCast(), crowd.casts / std::max(0.001, crowd.seconds) * 60.0);
-            if (csv) fprintf(csv, "%s,%d,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.1f,%.1f\n", weaponName[w], level,
+            if (csv) fprintf(csv, "%s,%d,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.1f,%.1f,%.0f\n", weaponName[w], level,
                              far.dps(), close.dps(), near.dps(), moving.dps(), crowd.dps(), crowd.perCast(),
                              crowd.casts / std::max(0.001, crowd.seconds) * 60.0,
-                             crowd.targetsPerCast);
+                             crowd.targetsPerCast, boss.dps());
             if (level == 1 || level == 8) {
                 const double dps = std::max(close.dps(), crowd.dps());
                 double& lo = (level == 1) ? rank1Min : rank8Min;
                 double& hi = (level == 1) ? rank1Max : rank8Max;
                 if (dps > 0.0) { lo = std::min(lo, dps); hi = std::max(hi, dps); }
             }
-            rows.push_back({weaponName[w], level, far, close, near, moving, crowd});
+            rows.push_back({weaponName[w], w, level, far, close, near, moving, crowd, boss});
         }
     }
 
@@ -412,6 +435,67 @@ int main(int argc, char** argv) {
         if (row.near.dps() < 1.0) {
             printf("  %s на ранге %d не наносит урона мишени в 20 px\n", row.name, row.level);
             ++failures;
+        }
+    }
+
+    // ── Роли: АОЕ и оружие по стражам ────────────────────────────────────────
+    // Раньше аудит мерил только «сколько урона», и все семь оружий выглядели
+    // одним и тем же выбором с разной цифрой. Теперь у каждого оружия есть роль
+    // (WEAPON_ROLES в game.h), и стенд проверяет не слова, а поведение:
+    //   • оружие «по стражам» должно бить стража сильнее любого АОЕ-оружия;
+    //   • лучшее АОЕ-оружие должно чистить толпу сильнее любого «по стражам»;
+    //   • у оружия «по стражам» урон по стражу не должен проваливаться против
+    //     его же урона по толпе (иначе это АОЕ с неправильной подписью);
+    //   • у АОЕ урон по толпе должен быть заметно выше урона по стражу.
+    if (onlyWeapon < 0) {
+        printf("\nроли оружия: страж 30 px вплотную против толпы из %d\n", CROWD);
+        // Ширина считается в байтах: кириллица в UTF-8 занимает два байта на букву.
+        printf("%-36s %-20s %8s %8s %7s\n", "оружие", "роль", "страж", "толпа", "толпа/страж");
+        for (const Row& row : rows) {
+            if (row.level != 8) continue;
+            const double bossDps = row.boss.dps();
+            const double crowdDps = row.crowd.dps();
+            printf("%-36s %-20s %8.0f %8.0f %6.1fx\n", row.name, weaponRoleLabel(row.id),
+                   bossDps, crowdDps, bossDps > 1.0 ? crowdDps / bossDps : 0.0);
+        }
+        for (int level : {4, 8}) {
+            double bestAoeBoss = 0.0, bestBossCrowd = 0.0, bestBossOnBoss = 0.0, bestAoeCrowd = 0.0;
+            for (const Row& row : rows) {
+                if (row.level != level) continue;
+                const bool isBossRole = WEAPON_ROLES[row.id] == WEAPON_ROLE_BOSS;
+                if (isBossRole) {
+                    bestBossOnBoss = std::max(bestBossOnBoss, row.boss.dps());
+                    bestBossCrowd = std::max(bestBossCrowd, row.crowd.dps());
+                } else {
+                    bestAoeBoss = std::max(bestAoeBoss, row.boss.dps());
+                    bestAoeCrowd = std::max(bestAoeCrowd, row.crowd.dps());
+                }
+            }
+            printf("  ранг %d: страж — «по стражам» %.0f против АОЕ %.0f; толпа — АОЕ %.0f против «по стражам» %.0f\n",
+                   level, bestBossOnBoss, bestAoeBoss, bestAoeCrowd, bestBossCrowd);
+            if (bestBossOnBoss < bestAoeBoss * 0.98) {
+                printf("    роли не различаются: АОЕ бьёт стража не хуже оружия «по стражам»\n");
+                ++failures;
+            }
+            if (bestAoeCrowd < bestBossCrowd * 0.98) {
+                printf("    роли не различаются: «по стражам» чистит толпу не хуже АОЕ\n");
+                ++failures;
+            }
+            for (const Row& row : rows) {
+                if (row.level != level) continue;
+                const double bossDps = row.boss.dps(), crowdDps = row.crowd.dps();
+                if (WEAPON_ROLES[row.id] == WEAPON_ROLE_BOSS) {
+                    if (bossDps < crowdDps * 0.6) {
+                        printf("    %s подписано «по стражам», но по стражу даёт %.0f против %.0f по толпе\n",
+                               row.name, bossDps, crowdDps);
+                        ++failures;
+                    }
+                } else if (bossDps > 0.0 && crowdDps < bossDps * 2.0) {
+                    printf("    %s подписано «АОЕ», но по толпе даёт лишь %.1fx урона по стражу\n",
+                           row.name, crowdDps / bossDps);
+                    ++failures;
+                }
+            }
         }
     }
 

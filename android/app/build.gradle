@@ -5,8 +5,8 @@ plugins {
 // Версия берётся из src/version.h: build_android.bat передаёт её сюда
 // (-PappVersion / -PappVersionCode), поэтому номер версии в APK, в заголовке
 // окна и в хронике игры не расходятся. Без аргументов работают значения ниже.
-def appVersionName = project.findProperty('appVersion') ?: '2.12.6'
-def appVersionCode = (project.findProperty('appVersionCode') ?: '3206') as int
+def appVersionName = project.findProperty('appVersion') ?: '2.12.7'
+def appVersionCode = (project.findProperty('appVersionCode') ?: '3207') as int
 
 android {
     namespace 'com.shadowsurvivors.game'
