@@ -77,6 +77,11 @@ int main(int argc, char** argv) {
         {"управление", STATE_CONTROLS_SETUP, -1, -1, false},
         {"вид кнопок", STATE_BUTTON_LOOK, -1, -1, false},
         {"праздники", STATE_HOLIDAY, -2, -1, false},
+        // Экран дневных даров: три задания с прогрессом, крутка, жетоны и
+        // список аномалий. Прогресс и жетоны выставляются заранее — иначе кадр
+        // показывал бы «0 / N» и «НЕТ ЖЕТОНА» и половина вёрстки осталась бы
+        // без сверки.
+        {"дары дня", STATE_DAILY, -2, -1, false},
         {"бой праздник", STATE_PLAYING, 0, -1, false},
     };
     SCREEN_W = 1280; SCREEN_H = 720;
@@ -103,6 +108,16 @@ int main(int argc, char** argv) {
         g.renderThreads = threads;
         g.options.graphicsLevel = graphicsLevel;
         g.state = (GameState)c.state;
+        if (c.state == STATE_DAILY) {
+            g.ensureDaily();
+            g.save.dailyProgress[0] = g.save.dailyTarget[0];
+            g.save.dailyProgress[1] = g.save.dailyTarget[1] / 3;
+            g.save.dailyClaimed = 1 << 2;
+            g.save.dailyProgress[2] = g.save.dailyTarget[2];
+            g.save.boosters[BOOSTER_RAGE] = 2;
+            g.save.boosters[BOOSTER_LUCK] = 1;
+            g.save.activeBooster = BOOSTER_RAGE;
+        }
         if (c.state == STATE_SHOP) {
             // Разные ранги в одном кадре: подпись «Ранг N / 12», закрашенная
             // шкала и цена следующего ранга должны попасть в контрольную сумму.
