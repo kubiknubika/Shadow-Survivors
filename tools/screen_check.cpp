@@ -49,27 +49,30 @@ int main(int argc, char** argv) {
     // праздник, -2 — календарь на закреплённой дате 31 октября 2026.
     // Пятый вариант карты — рисунок пола: 0..4 или -1 «как в режиме». У каждого
     // рисунка свой хеш, иначе новый пол в одном варианте проходил бы мимо сверки.
-    struct Case { const char* name; int state; int holiday; int layout; };
+    struct Case { const char* name; int state; int holiday; int layout; bool devices; };
     const Case cases[] = {
-        {"меню", STATE_MENU, -1, -1},
-        {"настройки", STATE_SETTINGS, -1, -1},
-        {"справка", STATE_HELP, -1, -1},
-        {"патчноуты", STATE_PATCH_NOTES, -1, -1},
-        {"зал славы", STATE_HALL, -1, -1},
-        {"выбор героя", STATE_HERO_SELECT, -1, -1},
-        {"бой", STATE_PLAYING, -1, -1},
-        {"бой плиты", STATE_PLAYING, -1, 0},
-        {"бой мозаика", STATE_PLAYING, -1, 1},
-        {"бой ритуал", STATE_PLAYING, -1, 2},
-        {"бой разлив", STATE_PLAYING, -1, 3},
-        {"бой осыпь", STATE_PLAYING, -1, 4},
-        {"пауза", STATE_PAUSED, -1, -1},
-        {"сундук", STATE_CHEST, -1, -1},
-        {"прокачка", STATE_LEVELUP, -1, -1},
-        {"управление", STATE_CONTROLS_SETUP, -1, -1},
-        {"вид кнопок", STATE_BUTTON_LOOK, -1, -1},
-        {"праздники", STATE_HOLIDAY, -2, -1},
-        {"бой праздник", STATE_PLAYING, 0, -1},
+        {"меню", STATE_MENU, -1, -1, false},
+        {"настройки", STATE_SETTINGS, -1, -1, false},
+        {"справка", STATE_HELP, -1, -1, false},
+        {"патчноуты", STATE_PATCH_NOTES, -1, -1, false},
+        {"зал славы", STATE_HALL, -1, -1, false},
+        {"выбор героя", STATE_HERO_SELECT, -1, -1, false},
+        {"бой", STATE_PLAYING, -1, -1, false},
+        {"бой плиты", STATE_PLAYING, -1, 0, false},
+        {"бой мозаика", STATE_PLAYING, -1, 1, false},
+        {"бой ритуал", STATE_PLAYING, -1, 2, false},
+        {"бой разлив", STATE_PLAYING, -1, 3, false},
+        {"бой осыпь", STATE_PLAYING, -1, 4, false},
+        // Отдельный кадр с предметами пола: плита, шипы на замахе и знак-круг
+        // стоят вокруг героя. Без него вся механика пола в сверку не попадала.
+        {"бой пол", STATE_PLAYING, -1, 0, true},
+        {"пауза", STATE_PAUSED, -1, -1, false},
+        {"сундук", STATE_CHEST, -1, -1, false},
+        {"прокачка", STATE_LEVELUP, -1, -1, false},
+        {"управление", STATE_CONTROLS_SETUP, -1, -1, false},
+        {"вид кнопок", STATE_BUTTON_LOOK, -1, -1, false},
+        {"праздники", STATE_HOLIDAY, -2, -1, false},
+        {"бой праздник", STATE_PLAYING, 0, -1, false},
     };
     SCREEN_W = 1280; SCREEN_H = 720;
     for (const Case& c : cases) {
@@ -97,6 +100,13 @@ int main(int argc, char** argv) {
         g.state = (GameState)c.state;
         if (c.state == STATE_PLAYING || c.state == STATE_LEVELUP || c.state == STATE_CHEST || c.state == STATE_PAUSED) {
             for (int i = 0; i < 60; ++i) g.spawnMonster(i % 8, i % 9 == 0, false);
+        }
+        if (c.devices) {
+            g.spawnFloorDeviceAt(FLOOR_DEVICE_PLATE, g.playerX - 150.0f, g.playerY + 40.0f);
+            g.spawnFloorDeviceAt(FLOOR_DEVICE_SPIKES, g.playerX + 120.0f, g.playerY - 70.0f);
+            g.floorDevices.back().timer = 0.85f;
+            g.spawnFloorDeviceAt(FLOOR_DEVICE_SIGIL, g.playerX + 30.0f, g.playerY + 150.0f);
+            g.floorDeviceSpawnTimer = 1e9f;
         }
         for (int f = 0; f < 3; ++f) {
             if (g.state == STATE_LEVELUP) break;

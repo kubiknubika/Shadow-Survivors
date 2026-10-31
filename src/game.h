@@ -17,6 +17,7 @@
 #include "messages.h"
 #include "holidays.h"
 #include "holiday_art.h"
+#include "floor_art.h"
 
 enum GameState {
     STATE_MENU = 0,
@@ -182,6 +183,9 @@ static constexpr int EMBER_TICK_ATTACK_ID = 34;
 static constexpr int FROST_SHATTER_ATTACK_ID = 35;
 static constexpr int REFLECTED_PROJECTILE_ATTACK_ID = 36;
 static constexpr int ASH_TRAIL_ATTACK_ID = 37;
+// Напольные устройства — пассивный источник урона: ни крита, ни «меча-проклятия»,
+// ни цепей, иначе пол превращался бы в скрытое оружие билда.
+static constexpr int FLOOR_TRAP_ATTACK_ID = 38;
 // Тлеющая тропа (предмет 40). След — это не аура и не снаряд: он остаётся на
 // полу за спиной и живёт своей жизнью. Числа вынесены сюда, потому что их
 // проверяет стенд tools/trail_probe.cpp, а не только игра.
@@ -221,7 +225,7 @@ static inline int holidayMonsterSlot(int type) {
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 154;
+static constexpr int PATCH_NOTES_COUNT = 155;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -298,6 +302,51 @@ static const ArenaLayoutDef ARENA_LAYOUTS[ARENA_LAYOUT_COUNT] = {
     {"РАЗЛИВ", 0, true, false, 63, 0xFF123A60, 56},
     {"ОСЫПЬ", 0, false, true, 31, 0xFF7A4A1E, 44},
 };
+
+// ── Напольные устройства ──────────────────────────────────────────────────────
+// Пол — не только картинка: на нём стоят три предмета, с которыми игрок
+// взаимодействует ногами, а не кнопкой.
+//   • ПЛИТА  — нажать собой: разряд по площади, врагов отбрасывает;
+//   • ШИПЫ   — сначала трещины с огнём (1,1 с), потом выброс: бьёт и героя, и
+//              врагов, поэтому врагов на них можно навести;
+//   • ЗНАК   — постоять в круге 1,4 с: лечение и опыт, но стоять на месте в
+//              бою дорого.
+// Вид предмета зависит от рисунка пола: на «Плитах» и «Разливе» чаще плиты
+// (вода проводит разряд), на «Мозаике» и «Ритуале» — знаки, на «Осыпи» — шипы.
+// Позиции детерминированные (никакого rand), иначе сдвигался бы общий поток
+// случайности и вместе с ним сцена боя.
+enum FloorDeviceKind {
+    FLOOR_DEVICE_PLATE = 0,
+    FLOOR_DEVICE_SPIKES,
+    FLOOR_DEVICE_SIGIL,
+    FLOOR_DEVICE_COUNT
+};
+
+struct FloorDevice {
+    int kind = FLOOR_DEVICE_PLATE;
+    float x = 0.0f, y = 0.0f;
+    float life = 0.0f;     // сколько ещё лежит на полу
+    float timer = 0.0f;    // замах шипов / заряд знака / вспышка
+    int stage = 0;         // 0 — готово, 1 — сработало
+    float tick = 0.0f;     // шаг урона шипов, пока они торчат
+    bool used = false;
+};
+
+static constexpr int FLOOR_DEVICE_MAX = 5;
+static constexpr float FLOOR_DEVICE_SPAWN_INTERVAL = 6.5f;
+static constexpr float FLOOR_DEVICE_FIRST_DELAY = 4.0f;
+static constexpr float FLOOR_DEVICE_LIFE = 19.0f;
+static constexpr float FLOOR_DEVICE_MIN_PLAYER = 120.0f;
+static constexpr float FLOOR_DEVICE_MAX_PLAYER = 380.0f;
+static constexpr float FLOOR_DEVICE_MIN_GAP = 110.0f;
+static constexpr float FLOOR_PLATE_RADIUS = 44.0f;
+static constexpr float FLOOR_PLATE_BLAST = 138.0f;
+static constexpr float FLOOR_SPIKE_RADIUS = 58.0f;
+static constexpr float FLOOR_SPIKE_WINDUP = 1.1f;
+static constexpr float FLOOR_SPIKE_ACTIVE = 0.7f;
+static constexpr float FLOOR_SPIKE_TICK = 0.22f;
+static constexpr float FLOOR_SIGIL_RADIUS = 50.0f;
+static constexpr float FLOOR_SIGIL_CHARGE = 1.4f;
 
 // Monster rosters are per place, not global: the crypt sends shields and brutes, the
 // cathedral sends shooters, the ash throne sends heavy elites. This is what makes one
@@ -1285,6 +1334,11 @@ struct Game {
     std::vector<Shockwave> shockwaves;
     std::vector<SkillImpactMark> skillImpactMarks;
     std::vector<AshTrailMark> ashTrailMarks;
+    std::vector<FloorDevice> floorDevices;
+    float floorDeviceSpawnTimer = FLOOR_DEVICE_FIRST_DELAY;
+    int floorDeviceSequence = 0;
+    int floorDevicesTriggered = 0;
+    int floorDevicesHealed = 0;
     std::vector<BossHazard> bossHazards;
 
     float spawnAccumulator = 0.0f;
@@ -2921,6 +2975,270 @@ struct Game {
         addShockwave(x, y, 78.0f, color, 0.38f);
     }
 
+    // ── Пол, который отвечает ────────────────────────────────────────────────
+    // Вид предмета задаёт рисунок пола, а не место: «Ритуал» зовёт стоять в
+    // знаках, «Осыпь» — ходить между шипами, «Плиты» — нажимать плиты.
+    int pickFloorDeviceKind(int sequence) const {
+        static const int table[ARENA_LAYOUT_COUNT][5] = {
+            {FLOOR_DEVICE_PLATE, FLOOR_DEVICE_PLATE, FLOOR_DEVICE_SPIKES, FLOOR_DEVICE_PLATE, FLOOR_DEVICE_SIGIL},
+            {FLOOR_DEVICE_SIGIL, FLOOR_DEVICE_PLATE, FLOOR_DEVICE_SIGIL, FLOOR_DEVICE_SPIKES, FLOOR_DEVICE_PLATE},
+            {FLOOR_DEVICE_SIGIL, FLOOR_DEVICE_SIGIL, FLOOR_DEVICE_PLATE, FLOOR_DEVICE_SIGIL, FLOOR_DEVICE_SPIKES},
+            {FLOOR_DEVICE_PLATE, FLOOR_DEVICE_SPIKES, FLOOR_DEVICE_PLATE, FLOOR_DEVICE_PLATE, FLOOR_DEVICE_SIGIL},
+            {FLOOR_DEVICE_SPIKES, FLOOR_DEVICE_SPIKES, FLOOR_DEVICE_PLATE, FLOOR_DEVICE_SPIKES, FLOOR_DEVICE_SIGIL},
+        };
+        const int layout = std::max(0, std::min(ARENA_LAYOUT_COUNT - 1, currentArenaLayout()));
+        return table[layout][((sequence % 5) + 5) % 5];
+    }
+
+    // Урон растёт с местом (актом), но не с билдом героя: шипы — это шипы, а не
+    // оружие. Враги на плите получают вдвое больше, чем герой на шипах: плита
+    // должна быть выгодной, иначе её никто не станет искать.
+    float floorDeviceEnemyDamage() const { return 22.0f + (float)(currentArenaTheme() + 1) * 14.0f; }
+    float floorDevicePlayerDamage() const { return 10.0f + (float)(currentArenaTheme() + 1) * 4.0f; }
+
+    void clearFloorDevices() {
+        floorDevices.clear();
+        floorDeviceSpawnTimer = FLOOR_DEVICE_FIRST_DELAY;
+        floorDeviceSequence = 0;
+        floorDevicesTriggered = 0;
+        floorDevicesHealed = 0;
+    }
+
+    // Поставить предмет вручную: этим пользуются стенды и отладка.
+    bool spawnFloorDeviceAt(int kind, float x, float y) {
+        if ((int)floorDevices.size() >= FLOOR_DEVICE_MAX) return false;
+        if (kind < 0 || kind >= FLOOR_DEVICE_COUNT) return false;
+        FloorDevice d;
+        d.kind = kind;
+        d.x = x; d.y = y;
+        d.life = FLOOR_DEVICE_LIFE;
+        floorDevices.push_back(d);
+        return true;
+    }
+
+    // Позиция считается хешем от номера предмета — без rand(): лишний вызов
+    // сдвинул бы общий поток случайности, а он задаёт и сцену боя, и декор.
+    bool spawnFloorDevice() {
+        if ((int)floorDevices.size() >= FLOOR_DEVICE_MAX) return false;
+        const int sequence = floorDeviceSequence++;
+        const int kind = pickFloorDeviceKind(sequence);
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            const uint32_t seed = (uint32_t)(sequence + 1) * 2654435761u ^ (uint32_t)(attempt + 1) * 2246822519u;
+            const float angle = (float)(seed % 6283u) * 0.001f;
+            const float spread = FLOOR_DEVICE_MAX_PLAYER - FLOOR_DEVICE_MIN_PLAYER;
+            const float dist = FLOOR_DEVICE_MIN_PLAYER + (float)((seed >> 11) % 1000u) * 0.001f * spread;
+            float x = playerX + cosf(angle) * dist;
+            // Кадр шире, чем выше: по вертикали отступаем сильнее, чтобы предмет
+            // не прилипал к полосе HUD и не уезжал под нижнюю подсказку.
+            float y = playerY + sinf(angle) * dist * 0.68f;
+            clampWorldPointToPlayfield(x, y, 92.0f);
+            const float dx = x - playerX, dy = y - playerY;
+            if (dx * dx + dy * dy < FLOOR_DEVICE_MIN_PLAYER * FLOOR_DEVICE_MIN_PLAYER) continue;
+            bool crowded = false;
+            for (const FloorDevice& other : floorDevices) {
+                const float ox = other.x - x, oy = other.y - y;
+                if (ox * ox + oy * oy < FLOOR_DEVICE_MIN_GAP * FLOOR_DEVICE_MIN_GAP) { crowded = true; break; }
+            }
+            if (crowded) continue;
+            if (!spawnFloorDeviceAt(kind, x, y)) return false;
+            static const char* const hint[FLOOR_DEVICE_COUNT] = {
+                "НАЖМИ ПЛИТУ", "ШИПЫ — ОБОЙДИ", "ЗНАК — ПОСТОЙ В КРУГЕ"
+            };
+            static const uint32_t hintColor[FLOOR_DEVICE_COUNT] = {0xFFFFC060, 0xFFFF9A50, 0xFF7CF0D0};
+            addFloatingText(x, y - 52.0f, hint[kind], hintColor[kind], false, (sequence * 5) % 13);
+            return true;
+        }
+        return false;
+    }
+
+    // Урон по площади по врагам. rawDmg идёт через damageMonster, поэтому
+    // множители билда работают как у любого другого источника.
+    void damageEnemiesOnFloor(float x, float y, float radius, float rawDmg, uint32_t color, float knockback) {
+        for (size_t i = 0; i < monsters.size(); ++i) {
+            Monster& m = monsters[i];
+            if (m.hp <= 0.0f) continue;
+            const float dx = m.x - x, dy = m.y - y;
+            const float reach = radius + m.radius * 0.5f;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 > reach * reach) continue;
+            const float len = std::max(1.0f, sqrtf(d2));
+            damageMonster(i, rawDmg, dx / len * knockback, dy / len * knockback, FLOOR_TRAP_ATTACK_ID);
+            if (options.hitEffectsEnabled && m.hp > 0.0f)
+                spawnParticles(m.x, m.y, 5, color, 90.0f, 2, true);
+        }
+    }
+
+    void triggerFloorPlate(FloorDevice& d) {
+        if (d.used) return;
+        d.used = true;
+        d.stage = 1;
+        d.timer = 0.35f;
+        ++floorDevicesTriggered;
+        const float damage = floorDeviceEnemyDamage() * 2.2f;
+        damageEnemiesOnFloor(d.x, d.y, FLOOR_PLATE_BLAST, damage, 0xFFFFC060, 52.0f);
+        addShockwave(d.x, d.y, FLOOR_PLATE_BLAST, 0xFFFFC060, 0.55f);
+        spawnParticles(d.x, d.y, 18, 0xFFFFD070, 150.0f, 3, true);
+        addFloatingText(d.x, d.y - 34.0f, "ПЛИТА СРАБОТАЛА", 0xFFFFD070, true);
+        if (options.screenShakeEnabled) screenShake = std::max(screenShake, 0.10f);
+        sound.play(SFX_BOSS_IMPACT, 0.04f);
+    }
+
+    void eruptFloorSpikes(FloorDevice& d) {
+        d.stage = 1;
+        d.timer = 0.0f;
+        d.tick = 0.0f;
+        const float px = d.x - playerX, py = d.y - playerY;
+        const float playerReach = FLOOR_SPIKE_RADIUS + 12.0f;
+        if (px * px + py * py <= playerReach * playerReach)
+            applyBossAbilityHit(floorDevicePlayerDamage(), false);
+        damageEnemiesOnFloor(d.x, d.y, FLOOR_SPIKE_RADIUS, floorDeviceEnemyDamage() * 0.9f, 0xFFD89060, 18.0f);
+        addShockwave(d.x, d.y, FLOOR_SPIKE_RADIUS + 16.0f, 0xFFD89060, 0.34f);
+        spawnParticles(d.x, d.y, 14, 0xFFC07040, 120.0f, 3, true);
+        sound.play(SFX_HIT, 0.05f);
+    }
+
+    void completeFloorSigil(FloorDevice& d) {
+        if (d.used) return;
+        d.used = true;
+        d.stage = 1;
+        d.timer = 0.3f;
+        ++floorDevicesHealed;
+        const float heal = playerMaxHp * 0.12f;
+        restorePlayerHp(heal);
+        playerXp += 6 + currentArenaTheme() * 2;
+        superCharge = std::min(100.0f, superCharge + 4.0f);
+        addFloatingText(playerX, playerY - 30.0f, "ЗНАК: +12% HP", 0xFF7CF0D0, true);
+        addShockwave(d.x, d.y, FLOOR_SIGIL_RADIUS + 40.0f, 0xFF5CF0D0, 0.45f);
+        spawnParticles(d.x, d.y, 20, 0xFF7CF0D0, 110.0f, 2, true);
+        sound.play(SFX_LEVELUP, 0.05f);
+    }
+
+    void updateFloorDevices(float dt) {
+        if (dt <= 0.0f) return;
+        if (state != STATE_PLAYING) return;
+        floorDeviceSpawnTimer -= dt;
+        if (floorDeviceSpawnTimer <= 0.0f) {
+            floorDeviceSpawnTimer = FLOOR_DEVICE_SPAWN_INTERVAL;
+            spawnFloorDevice();
+        }
+        for (FloorDevice& d : floorDevices) {
+            d.life -= dt;
+            const float dx = playerX - d.x, dy = playerY - d.y;
+            const float d2 = dx * dx + dy * dy;
+            if (d.kind == FLOOR_DEVICE_PLATE) {
+                if (!d.used && d2 <= FLOOR_PLATE_RADIUS * FLOOR_PLATE_RADIUS) triggerFloorPlate(d);
+                if (d.timer > 0.0f) d.timer -= dt;
+            } else if (d.kind == FLOOR_DEVICE_SPIKES) {
+                if (d.stage == 0) {
+                    d.timer += dt;
+                    if (d.timer >= FLOOR_SPIKE_WINDUP) eruptFloorSpikes(d);
+                } else if (!d.used) {
+                    d.timer += dt;
+                    d.tick -= dt;
+                    // Шипы торчат 0,7 с и бьют врагов шагами: враг, вбежавший на
+                    // уже поднятые шипы, тоже получает своё.
+                    if (d.tick <= 0.0f) {
+                        d.tick = FLOOR_SPIKE_TICK;
+                        damageEnemiesOnFloor(d.x, d.y, FLOOR_SPIKE_RADIUS, floorDeviceEnemyDamage() * 0.55f, 0xFFD89060, 0.0f);
+                    }
+                    if (d.timer >= FLOOR_SPIKE_ACTIVE) {
+                        d.used = true;
+                        d.life = std::min(d.life, 0.35f);
+                    }
+                }
+            } else {
+                if (!d.used) {
+                    if (d2 <= FLOOR_SIGIL_RADIUS * FLOOR_SIGIL_RADIUS) {
+                        d.timer += dt;
+                        if (d.timer >= FLOOR_SIGIL_CHARGE) completeFloorSigil(d);
+                    } else if (d.timer > 0.0f) {
+                        // Вышел из круга — заряд тает, но не мгновенно: шаг назад
+                        // и обратно не должен обнулять полторы секунды стояния.
+                        d.timer = std::max(0.0f, d.timer - dt * 0.6f);
+                    }
+                } else if (d.timer > 0.0f) d.timer -= dt;
+            }
+        }
+        floorDevices.erase(std::remove_if(floorDevices.begin(), floorDevices.end(),
+            [](const FloorDevice& d) { return d.life <= 0.0f; }), floorDevices.end());
+    }
+
+    // Спрайты запечены в 96 px и рисуются один к одному: масштаб «ближайший
+    // сосед» держит пиксель-арт резким, но дробное растяжение всё равно съедает
+    // тонкие прожилки на трещинах. Поэтому размер в кадре равен размеру атласа.
+    void renderFloorDevices(Renderer& r, float camX, float camY) {
+        if (floorDevices.empty()) return;
+        const int themeIndex = currentArenaTheme();
+        for (const FloorDevice& d : floorDevices) {
+            const float sx = d.x - camX, sy = d.y - camY;
+            if (sx < -100.0f || sx > SCREEN_W + 100.0f || sy < -100.0f || sy > SCREEN_H + 100.0f) continue;
+            const int alpha = (int)(255.0f * std::min(1.0f, std::max(0.0f, d.life * 2.0f)));
+            const int cx = (int)sx, cy = (int)sy;
+            float glowPhase = (float)((int)(globalTime * 0.0f));
+            glowPhase = sinf(globalTime * 2.4f + d.x * 0.01f) * 0.5f + 0.5f;
+
+            if (d.kind == FLOOR_DEVICE_PLATE) {
+                const int size = 96;
+                if (!d.used) {
+                    // Есть ли на плите достойная цель? Плиту видно всегда, но когда
+                    // рядом стоит враг, она зовёт громче: ореол гуще и быстрее, кольцо
+                    // разряда обведено — бей по ней, пока он не ушёл.
+                    bool bait = false;
+                    const float baitR = FLOOR_PLATE_RADIUS + 100.0f;
+                    for (size_t mi = 0; mi < monsters.size(); ++mi) {
+                        const float mdx = monsters[mi].x - d.x, mdy = monsters[mi].y - d.y;
+                        if (mdx * mdx + mdy * mdy <= baitR * baitR) { bait = true; break; }
+                    }
+                    const float pulse = bait ? sinf(globalTime * 8.0f) * 0.5f + 0.5f : glowPhase;
+                    const int glow = (bait ? 165 : 120) + (int)(pulse * (bait ? 75.0f : 55.0f));
+                    r.addGlow(cx, cy, 60, bait ? 0xFFFF7040 : 0xFFFFA840, glow);
+                    r.drawBakedSpriteScaled(&FLOOR_PLATE, cx - size / 2, cy - size / 2, size, size, alpha);
+                    // Обод: у медальонов на полу его нет, а плита — предмет, на неё
+                    // надо наступить именно здесь.
+                    r.drawCircleRing(cx, cy, 44, 1, bait ? 0xFFFFC070 : 0xFFB07838, bait ? 210 : 150, false);
+                    // Кнопка по центру: светлее камня, чтобы плита не читалась как
+                    // ещё один медальон на полу.
+                    r.addGlow(cx, cy, 18, 0xFFFFE2A8, bait ? 170 : 120);
+                    r.drawCircleRing(cx, cy, 20, 1, 0xFFFFF0C8, bait ? 220 : 165, false);
+                    if (bait) r.drawCircleRing(cx, cy, 32, 1, 0xFFFF9A50, 140, true);
+                } else {
+                    // Нажатая плита гаснет: тёмная заливка поверх камня.
+                    r.drawBakedSpriteScaled(&FLOOR_PLATE, cx - size / 2, cy - size / 2, size, size, alpha * 3 / 4);
+                    r.drawBakedSpriteWash(&FLOOR_PLATE, cx, cy, false, 0xFF0E0A14, 130);
+                }
+            } else if (d.kind == FLOOR_DEVICE_SPIKES) {
+                if (d.stage == 0) {
+                    const float t = std::min(1.0f, d.timer / FLOOR_SPIKE_WINDUP);
+                    const int size = 96;
+                    r.addGlow(cx, cy, 34 + (int)(t * 30.0f), 0xFFFF6A20, 55 + (int)(t * 130.0f));
+                    r.drawBakedSpriteScaled(&FLOOR_CRACKS, cx - size / 2, cy - size / 2, size, size, alpha);
+                    // Огонь в трещинах разгорается к моменту выброса.
+                    if (t > 0.55f) r.drawCircleRing(cx, cy, 26 + (int)(t * 10.0f), 1, 0xFFFF8A3A, 90, true);
+                } else {
+                    const int size = 100;
+                    r.addGlow(cx, cy, 52, 0xFFFF9A50, 95);
+                    r.drawBakedSpriteScaled(&FLOOR_SPIKES, cx - size / 2, cy - size / 2, size, size, alpha);
+                }
+            } else {
+                const int size = 96;
+                r.addGlow(cx, cy, 50, 0xFF5CF0D0, 70 + (int)(glowPhase * 45.0f));
+                r.drawBakedSpriteScaled(&FLOOR_SIGIL, cx - size / 2, cy - size / 2, size, size, alpha);
+                // Заряд — двенадцать насечек по кругу: видно, сколько ещё стоять.
+                const float progress = d.used ? 1.0f
+                    : std::max(0.0f, std::min(1.0f, d.timer / FLOOR_SIGIL_CHARGE));
+                const int lit = (int)(progress * 12.0f + 0.5f);
+                for (int tick = 0; tick < 12; ++tick) {
+                    const float a = -1.5707963f + tick * 0.5235988f;
+                    const uint32_t col = tick < lit ? 0xFFB6FFF0 : 0xFF2F5A58;
+                    r.drawLine(cx + (int)(cosf(a) * 34.0f), cy + (int)(sinf(a) * 34.0f),
+                               cx + (int)(cosf(a) * 42.0f), cy + (int)(sinf(a) * 42.0f),
+                               col, 2, tick < lit ? 220 : 120, tick < lit);
+                }
+            }
+            (void)themeIndex;
+        }
+    }
+
     void checkSymbiosis() {
         static const int relicForWeapon[7] = {7, 8, 9, 10, 11, 12, 13};
         static const char* evoNames[7] = {"ТЫСЯЧА КЛИНКОВ БУРИ", "МЕТЕОРИТНЫЙ КАТАКЛИЗМ", "КОЛЕСО АРКАНЫ", "ГНЕВ ГРОМОВЕРЖЦА", "ПОЖИРАТЕЛЬ ДУШ", "ЖНЕЦ СМЕРТИ", "АБСОЛЮТНЫЙ НОЛЬ"};
@@ -3102,6 +3420,7 @@ struct Game {
         bossHazards.clear();
         clearAshTrail();
         ashTrailFires = 0;
+        clearFloorDevices();
 
         spawnAccumulator = 0.0f;
         pendingSummons = 0;
@@ -3345,10 +3664,13 @@ struct Game {
         }
     }
 
-    void addFloatingText(float x, float y, const char* txt, uint32_t col, bool big = false) {
+    // jitterPx = -1 — обычный разброс через rand(); число — жёсткий сдвиг.
+    // Разброс задаётся снаружи там, где вызов rand() сдвинул бы общий поток
+    // случайности (подсказки пола появляются сами по себе, без боя).
+    void addFloatingText(float x, float y, const char* txt, uint32_t col, bool big = false, int jitterPx = -1) {
         if (floatTexts.size() > 90) floatTexts.erase(floatTexts.begin());
         FloatingText ft;
-        ft.x = x + (rand() % 16 - 8);
+        ft.x = x + (jitterPx >= 0 ? jitterPx : (rand() % 16 - 8));
         ft.y = y;
         ft.vy = big ? -48.0f : -36.0f;
         ft.maxLife = big ? 0.95f : 0.65f;
@@ -4619,7 +4941,7 @@ struct Game {
         }
         if (m.isBoss && m.phaseInvulnTimer > 0.0f) return;
         const float roll = (rand() % 10000) / 10000.0f;
-        const bool isPassiveProc = attackId == OVERKILL_SHARD_ATTACK_ID || attackId == CROSSFIRE_ATTACK_ID || attackId == EMBER_TICK_ATTACK_ID || attackId == FROST_SHATTER_ATTACK_ID || attackId == REFLECTED_PROJECTILE_ATTACK_ID || attackId == ASH_TRAIL_ATTACK_ID;
+        const bool isPassiveProc = attackId == OVERKILL_SHARD_ATTACK_ID || attackId == CROSSFIRE_ATTACK_ID || attackId == EMBER_TICK_ATTACK_ID || attackId == FROST_SHATTER_ATTACK_ID || attackId == REFLECTED_PROJECTILE_ATTACK_ID || attackId == ASH_TRAIL_ATTACK_ID || attackId == FLOOR_TRAP_ATTACK_ID;
         const int criticalTier = isPassiveProc ? 0 : getCriticalTierForRoll(roll);
         const bool isSuperCrit = criticalTier == 2;
         const bool isCrit = criticalTier >= 1;
@@ -4695,7 +5017,7 @@ struct Game {
             }
         }
         m.hitFlashTimer = 0.11f;
-        const uint32_t hitColor = executionHit ? 0xFFFF705E : (attackId == ASH_TRAIL_ATTACK_ID ? 0xFFFF8A36 : (attackId == EMBER_TICK_ATTACK_ID ? 0xFFFF9347 : (attackId == CROSSFIRE_ATTACK_ID ? 0xFF68E6D8 : (isSuperCrit ? 0xFF8A65FF : (isCrit ? 0xFFFFD848 : (m.isBoss ? 0xFFFF8648 : (m.isSmart ? 0xFF68E8FF : 0xFFFF5870)))))));
+        const uint32_t hitColor = executionHit ? 0xFFFF705E : (attackId == FLOOR_TRAP_ATTACK_ID ? 0xFFFFC070 : (attackId == ASH_TRAIL_ATTACK_ID ? 0xFFFF8A36 : (attackId == EMBER_TICK_ATTACK_ID ? 0xFFFF9347 : (attackId == CROSSFIRE_ATTACK_ID ? 0xFF68E6D8 : (isSuperCrit ? 0xFF8A65FF : (isCrit ? 0xFFFFD848 : (m.isBoss ? 0xFFFF8648 : (m.isSmart ? 0xFF68E8FF : 0xFFFF5870))))))));
         spawnHitEffect(m.x, m.y, hitColor, isCrit, attackId, m.radius);
         totalDamageDealt += appliedDamage;
         dpsWindowDamage += appliedDamage;
@@ -5527,6 +5849,9 @@ struct Game {
         // Тропа считается после движения: метка должна лечь в ту точку, где герой
         // реально оказался в этом кадре, а не в прошлую.
         updateAshTrail(dt);
+        // Пол тикает следом за движением героя: плита должна сработать в той
+        // точке, где он реально оказался в этом кадре.
+        updateFloorDevices(dt);
 
         // Spawning Waves & Bosses
         float baseSpawnRate = 3.2f + std::min(8.5f, runTime / 35.0f) * 0.75f + std::max(0.0f, runTime - 210.0f) / 120.0f;
@@ -7322,6 +7647,7 @@ struct Game {
 
         // Тлеющая тропа лежит на полу: сначала угли, потом знаки ударов — знак
         // удара должен читаться поверх того, что уже горит.
+        renderFloorDevices(r, camX, camY);
         renderAshTrail(r, camX, camY);
 
         // Ground-plane skill impacts are intentionally beneath actors and culled off-screen.
@@ -7834,7 +8160,7 @@ struct Game {
         const Monster* debugBoss = nullptr;
         for (const Monster& m : monsters) if (m.isBoss && m.hp > 0.0f) { debugBoss = &m; break; }
         const bool hasBossRow = debugBoss != nullptr;
-        const int rows = 18 + (hasBossRow ? 1 : 0) + (hasMessage ? 2 : 0);
+        const int rows = 19 + (hasBossRow ? 1 : 0) + (hasMessage ? 2 : 0);
         const int labelW = 176;
         const int boxW = std::min(SCREEN_W - 16, 486), boxH = rows * lineH + pad * 2;
         const int bx = 8, by = 8;
@@ -7921,6 +8247,20 @@ struct Game {
             snprintf(line, sizeof(line), "%s  •  %s", ARENA_THEMES[mapTheme].name, ARENA_LAYOUTS[mapLayout].name);
             put(17, "КАРТА", line, 0xFF9FE8FF);
         }
+        // Пол: сколько устройств лежит сейчас и сколько уже сработало. Без этой
+        // строки «плита не работает» и «плита не появилась» выглядят одинаково.
+        {
+            int plates = 0, spikes = 0, sigils = 0;
+            for (const FloorDevice& d : floorDevices) {
+                if (d.kind == FLOOR_DEVICE_PLATE) ++plates;
+                else if (d.kind == FLOOR_DEVICE_SPIKES) ++spikes;
+                else ++sigils;
+            }
+            snprintf(line, sizeof(line), "%d/%d  П%d Ш%d З%d  СРАБ %d  ЗНАК %d",
+                     (int)floorDevices.size(), FLOOR_DEVICE_MAX, plates, spikes, sigils,
+                     floorDevicesTriggered, floorDevicesHealed);
+            put(18, "ПОЛ", line, floorDevices.empty() ? 0xFFE6E0F4 : 0xFFFFC878);
+        }
         if (hasBossRow) {
             // Что страж делает прямо сейчас и сколько ждать приёма. Раньше это
             // приходилось вычитывать из боя: таймеров на экране не было.
@@ -7940,9 +8280,9 @@ struct Game {
                      stateWord, (int)bdist, std::max(0.0f, debugBoss->abilityTimer),
                      countBossRetinue(),
                      bossRetinueCap(debugBoss->bossType, debugBoss->bossPhase, debugBoss->bossReinforced));
-            put(18, "СТРАЖ", line, 0xFFFFC878);
+            put(19, "СТРАЖ", line, 0xFFFFC878);
         }
-        const int msgRow = 18 + (hasBossRow ? 1 : 0);
+        const int msgRow = 19 + (hasBossRow ? 1 : 0);
         if (hasMessage) {
             snprintf(line, sizeof(line), "%s  %.1f С", storySpeaker.c_str(), storyTimer);
             put(msgRow, "НА ЭКРАНЕ", line, 0xFFC9A6FF);
@@ -12485,6 +12825,7 @@ struct Game {
             "2.11.1 • ПРАЗДНИКИ: КОГДА ОКНА ПЕРЕСЕКАЮТСЯ",
             "2.11.2 • ЭФФЕКТЫ: ГРОМКОСТЬ ПО ЗАМЕРУ",
             "2.11.3 • КАРТА: ПЯТЬ РИСУНКОВ ПОЛА",
+            "2.12.0 • ПРЕДМЕТЫ НА ПОЛУ",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -12641,6 +12982,7 @@ struct Game {
             "Праздники: окна пересекаются, и теперь видно, кто из них главный.\n• Пересечения — не редкость: за 2024–2040 годы Лунный новый год накрывает День влюблённых 92 дня, Масленица — Лунный 26, Масленица — Валентина 21, Масленица — Патрика 19. В 18 днях совпадают сразу три праздника: 16–17 февраля 2026, 12–17 февраля 2029, 14–17 февраля 2034, 10–15 февраля 2037. Раньше в такой день побеждал тот, кто выше в таблице, — и 14 февраля 2024, 2027, 2032 и 2035 годов игра показывала Лунный новый год вместо Дня влюблённых.\n• Новое правило: идёт тот праздник, чей собственный день ближе к сегодняшнему — по кругу года, чтобы окно через 31 декабря не считалось за 364 дня. 14 февраля всегда День влюблённых, 17 марта — Патрик, даже когда на них наезжает Масленица. Ничья решается прежним порядком (Пасха, Масленица, Лунный, Новый год, Валентин, Патрик, Купала, Хэллоуин), так что выбор всегда один и тот же.\n• Шапка календаря называет соседей: «2026 ГОД • СЕГОДНЯ 17 ФЕВРАЛЯ • ЛУННЫЙ НОВЫЙ ГОД (ещё 9 дн.) • ВМЕСТЕ: МАСЛЕНИЦА, ДЕНЬ ВЛЮБЛЁННЫХ». В списке «ИДЁТ • N» стоит только у ведущего праздника, остальные подписаны «ВМЕСТЕ • N» приглушённым цветом. Список по-прежнему полный: ни один праздник из календаря не исчезает.\n• Шапка календаря была невидима с 2.11.0: линия-разделитель рисовалась как «рамка 255 px» (шестой аргумент drawRect — толщина, а не прозрачность) и заливала верхние 52 px полосой 0x3A3050. Теперь «ПРАЗДНИКИ» и строка «СЕГОДНЯ …» на месте.\n• Экран открывается на том празднике, который идёт сейчас, а не на Хэллоуине — первом в списке. Раньше шапка говорила «идёт Лунный новый год», а панель справа показывала Хэллоуин.\n• Подсказка внизу («↑↓ — ПРАЗДНИК …») больше не обрезается нижним краем: глиф шрифта 19 px, а строка стояла на 16 px от края.\n• Сдвиг даты (проверка праздника) не переходил через Новый год: из 20 декабря сдвиг на 30 дней давал 19 января того же года. Теперь граница года учитывается, и окно Нового года после сдвига считается по своему году.\n• Стенд tools/screen_shot.cpp получил аргумент dateYYYYMMDD — снимок календаря на закреплённую дату (date20260217). Дата проходит через тот же HolidayToday, что и в игре, поэтому снимок не может показать не тот день.\n• Проверка — новый стенд tools/holiday_probe.cpp: перебирает все дни 2024–2060 годов. В свой день всегда побеждает свой праздник, активных праздников в дне не больше трёх (дней с тремя — 18), список отсортирован по расстоянию и детерминирован, окно Нового года через 31 декабря считается как «через день», а не «через 364». Три мутации (расстояние всегда ноль, расстояние без круга года, сортировка по старой таблице) стенд ловит.\n• Хеши экранов (screen_check, 1280×720): праздники 3f868c27 (было 337b66e4). Остальные двенадцать не сдвинулись ни на пиксель — тот же список, что в 2.11.0.",
             "Эффекты: теперь их громкость — результат замера, а не побочный итог формулы синтеза.\n• Банк выровнен: у клинка пик был 1899 против 6800 у огненного шара, и в бою клинок оказывался на 10 дБ тише — не потому, что так задумано, а потому что так сложилась формула. Теперь у каждого эффекта снимается постоянная составляющая, срезаются первые 1,5 мс и последние 8 мс (обрыв волны давал щелчок: у «тира» и «фазы босса» хвост обрывался на 1414 и 2625), а пик приводится к одной величине. Порядок важен: снимать постоянную составляющую до срезания концов нельзя — срезанный хвост сам сдвигает среднее, и у клика выходило −1 %.\n• Числа подобраны по замеру через настоящий микшер: боевые эффекты стоят в 1,7–2 раза выше подложки музыки, сигналы (уровень, сундук, босс, смерть, тир, возрождение) — в 2,4–3,4 раза, сбор трофеев — на уровне подложки и ниже. Раньше удар давал пик 0,038 при подложке 0,112: эффекты тонули под музыкой, а самоцвет на 0,005 не было слышно вовсе.\n• Двадцать одновременных ударов держат пик 0,56 полной шкалы: до колена лимитера (0,62) дело не доходит, клиппинга нет.\n• У удара и клинка теперь по три записи: за бой они звучат десятки раз, и одна волна узнаётся даже сквозь джиттер высоты. Варианты отличаются частотой, длиной и долей шума, выровнены по громкости (не больше 1,6× по RMS) и выбираются счётчиком, а не rand(): лишний вызов rand() в play() сдвигал общий поток случайности и менял сцену боя целиком.\n• Громкость самоцвета больше не задаётся отдельным числом в play(): она в общей таблице, иначе правка таблицы молча не действовала на самый частый звук в игре.\n• Новый стенд tools/sfx_probe.cpp — 495 проверок: банк (пик, длина, постоянная составляющая, нули на концах, отсутствие одинаковых сэмплов и одинаковых вариантов), уровень каждого эффекта через микшер против подложки музыки, плотный бой, полифония и приоритеты, троттлинг, джиттер. Мутации (без нормализации — 20 провалов, всё тише — 23, один вариант вместо трёх — 2) пойманы.\n• Демо-дорожка design/sfx_demo.wav (16,7 с): все 23 эффекта по одному разу и кусок плотного боя, собрана тем же микшером, что и игра, — послушать можно без запуска.\n• Честно: слушал стенд, а не человек. Он ловит щелчки, провалы по громкости, клиппинг и «тот же звук», но не отвечает на вопрос, нравится ли звук. Проверить на слух стоит в наушниках и на телефоне.",
             "Пол был один на место: пять кладок — по одной на каждый акт. Второй бой в том же акте выглядел как первый, потому что он и был первым.\n• Теперь рисунок пола — отдельная вещь от палитры места. Пять вариантов: ПЛИТЫ (кладка и печати, прежний вид), МОЗАИКА (шахматка 192 px с ромбами в светлых квадратах), РИТУАЛ (крупные круги-медальоны на сетке 512 px и печатей вдвое чаще), РАЗЛИВ (лужи с дрожащим бликом; в Руинах, Крипте и Соборе это вода, в Пепельном троне — расплав, в Сердце Архива — разлитые чернила), ОСЫПЬ (обломки колонн, кучи щебня и треснувшие плиты).\n• Вариант не зависит от места: пять мест на пять рисунков — двадцать пять разных арен. Роспись врагов при этом по-прежнему привязана к месту, поэтому знакомый бестиарий приходит на незнакомый пол, а не наоборот.\n• В кампании рисунок задаёт дело (соседние дела одного акта не повторяют пол), в бесконечном режиме он меняется каждые 90 с, а палитра — каждые 150 с: сочетания не повторяются подряд, и за десять минут забега игрок видит все пять.\n• Крупные фигуры стоят на своих сетках и не спорят с лендмарками и жаровнями: медальон уступает дорогу лендмарку, лужа и обломок — и лендмарку, и жаровне. Печати на полу теперь выбираются маской варианта, поэтому на «Ритуале» их ровно вдвое больше, а на «Мозаике» вдвое меньше.\n• Название карты видно словами: в паузе строка «КАРТА: КРИПТА • РИТУАЛ», в панели F3 — строка «КАРТА». По картинке вариант угадывается, но название не должно угадываться.\n• Цена кадра (стенд perf_bench, 160 мобов, 1280×720, один поток, ступень «высокое», максимум из трёх прогонов): ПЛИТЫ 5,9 мс против 5,7 до правки, РИТУАЛ 6,2, РАЗЛИВ 6,2, ОСЫПЬ 6,2, МОЗАИКА 6,5. Самый дорогой вариант — мозаика: её ромбы это линии через весь экран; запас до 16,7 мс остаётся.\n• Стенды: screen_check печатает теперь девятнадцать экранов — к «бою» добавились пять вариантов пола со своими хешами (бой плиты a10a052c — прежний бой, остальные четыре новые). screen_shot получил аргументы layoutN (прибить рисунок) и timeSEC (прибить время забега, то есть место), perf_bench — layoutN. Стенды больше не читают сейв и настройки с диска: файл, оставленный соседним прогоном, подменял золото в HUD, и один и тот же экран давал разные хеши — это выглядело как «кадр зависит от числа потоков», хотя потоков он не касался.\n• Честно: варианты проверены снимками в четырёх местах из пяти и на 1280×720; на телефоне в портрете смотрел только экран паузы, а в бою — нет.",
+            "Пол-2: на полу теперь лежат предметы, и обе стороны с ними взаимодействуют.\n• Пять рисунков пола из 2.11.3 получили не только вид, но и поведение: на полу появляются три предмета — ПЛИТА, ШИПЫ и ЗНАК. Взаимодействие не кнопкой, а ногами: на плиту надо наступить, шипы обойти или навести на них врагов, в знаке постоять. Раскладка привязана к рисунку: «Плиты» и «Разлив» выставляют в основном плиты (по воде разряд идёт охотнее), «Мозаика» и «Ритуал» — знаки, «Осыпь» — шипы; при этом все три вида встречаются на любом полу, иначе пол диктовал бы билд.\n• Плита: шаг в 44 px — разряд по кругу 138 px, урон ×2,2 от обычного (79–202 по актам), отброс 52 px, надпись «ПЛИТА СРАБОТАЛА». Одноразовая: второй раз на неё не встать. Враги получают втрое больше, чем герой на шипах, — иначе искать плиту незачем.\n• Шипы: 1,1 с трещины с разгорающимся огнём (телеграф видно издалека), потом 0,7 с торчащих шипов. Первый выброс бьёт и героя (14–30 по актам), и врагов; рывок проносит над шипами без урона. Дальше шипы бьют врагов шагами по 0,22 с, поэтому врага можно на них навести.\n• Знак: постоять в круге 50 px ровно 1,4 с — +12 % здоровья, опыт 6+2×акт и +4 к суперу. Вышел из круга — заряд тает со скоростью 0,6, а не обнуляется: шаг назад и обратно не должен отнимать полторы секунды стояния. Стоять на месте в бою дорого — это и есть цена.\n• Спавн: не больше пяти предметов, первый через 4 с, дальше каждые 6,5 с, жизнь 19 с, дистанция 120–380 px от героя, зазор ≥110 px друг от друга. Позиция считается хешем от номера предмета, без rand(): лишний вызов rand() сдвигал общий поток случайности и менял сцену боя целиком — стенд проверяет это отдельной строкой.\n• Спрайты нарисованы, поправлены и запечены в атлас 96 px: плита (камень с янтарной рунной полосой), трещины-телеграф, стальные шипы и знак с письменами. Рисуются один к одному — дробное растяжение съедало прожилки на трещинах. У плиты появились обод, светящаяся кнопка по центру и ореол; когда рядом враг, ореол зовёт вдвое ярче и чаще, и не надо угадывать, стоит ли жать.\n• Это не пассивные бонусы: и плита, и шипы бьют обе стороны. Три привычки — «наведи и нажми», «замани на шипы», «найди окно, чтобы постоять» — и есть вся интеракция; кнопок для неё не понадобилось.\n• Пайплайн текстур: design/floor/<имя>_src.png → python3 tools/bake_floor_art.py → src/floor_art.h (четыре спрайта 96×96, палитра 48 цветов) и design/floor_preview.png; --check сверяет запечённое с исходниками.\n• Стенд tools/floor_probe.cpp — 38 проверок: спавн (предел, дистанция, зазор на пустом и на занятом кольце, детерминизм, «не тратит rand()», пауза), плита (не срабатывает в шаге, бьёт рядом, не бьёт далеко, одноразовость), шипы (замах не бьёт, выброс бьёт героя и врага, рывок и отход спасают, уходят в пол), знак (не лечит раньше срока, лечит ровно раз, заряд копится и тает), срок жизни и чистый пол на новый забег, раскладка по пяти рисункам. Мутации (замах 0,05 с, спавн через rand(), без зазора) стенд ловит.\n• F3 получил строку «ПОЛ»: сколько предметов лежит, по видам, сколько сработало и сколько знаков собрано. Без неё «плита не работает» и «плита не появилась» выглядят одинаково.\n• Хеши экранов (screen_check, 1280×720): добавился двадцатый экран «бой пол» (46f24a53) — плита, замах шипов и знак вокруг героя. Поменялось только меню (a96b2e6f) — в подвале номер версии; патчноуты в список не входят, их картинка меняется от самой заметки. Остальные не сдвинулись ни на пиксель: бой a52f9f57, бой плиты a10a052c, бой мозаика 1a7883a8, бой ритуал a52f9f57, бой разлив 46bb1f01, бой осыпь d91b0595.\n• Цена кадра (perf_bench, 400 кадров, 1280×720, один поток, ступень «высокое», максимум из трёх прогонов): ПЛИТЫ 5,8 мс, ОСЫПЬ 6,0, РАЗЛИВ 6,1, РИТУАЛ 6,1, МОЗАИКА 6,8 — при пределе 16,7 мс.\n• Честно: предметы смотрел стендом и снимками на 1280×720; на телефоне в портрете и вживую «успел или не успел» не проверял — стенд мерит правила, а не ощущение.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");

@@ -12,6 +12,7 @@
 //     build/shot play 960x720 play.bmp 1 3
 //     build/shot play 1280x720 mosaic.bmp 1 1 layout1   # прибить вариант пола
 //     build/shot play 1280x720 ash.bmp 1 2 time480       # место: 4-й акт (пепел)
+//     build/shot play 1280x720 floor.bmp 1 1 floor       # три напольных устройства
 //
 // Мыши в стенде нет: игра рисует курсор-«◎» в точке указателя, и по умолчанию
 // он приходился ровно на середину кадра — поверх текста. Стенд уводит курсор за
@@ -70,7 +71,8 @@ int main(int argc, char** argv) {
     int buttonScale = TOUCH_SIZE_DEFAULT;
     int iconStyle = -1; // -1: как в настройках (по умолчанию вектор)
     int pinYear = 0, pinMonth = 1, pinDay = 1;   // «сегодня» для снимка, если задано
-    int forcedLayout = -1;                       // рисунок пола, если задан
+    int forcedLayout = -1;
+    bool floorProps = false;                     // поставить три напольных устройства                       // рисунок пола, если задан
     float runTimeArg = 240.0f;                   // время забега: от него место (палитра)
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "touch") == 0) touchUi = true;
@@ -91,6 +93,7 @@ int main(int argc, char** argv) {
             forcedLayout = argv[i][6] - '0';
         // time480 — время забега в секундах: место меняется каждые 150 с, и без
         // этого снимок всегда показывал бы второй акт.
+        else if (strcmp(argv[i], "floor") == 0) floorProps = true;
         else if (strncmp(argv[i], "time", 4) == 0 && atoi(argv[i] + 4) > 0)
             runTimeArg = (float)atoi(argv[i] + 4);
         else if (strncmp(argv[i], "date", 4) == 0 && strlen(argv[i]) == 12) {
@@ -151,6 +154,12 @@ int main(int argc, char** argv) {
     }
     // «debug» — та же сцена боя с открытой панелью F3: там видна строка
     // «ГРАФИКА» (уровень, ступень, цена кадра, потоки).
+    if (floorProps) {
+        g.playerX = 0.0f; g.playerY = 0.0f;
+        g.spawnFloorDeviceAt(FLOOR_DEVICE_PLATE, -160.0f, 30.0f);
+        g.spawnFloorDeviceAt(FLOOR_DEVICE_SPIKES, 140.0f, -60.0f);
+        g.spawnFloorDeviceAt(FLOOR_DEVICE_SIGIL, 20.0f, 160.0f);
+    }
     if (strcmp(screen, "debug") == 0) g.debugOverlay = true;
     // «trail» — бой с тлеющей тропой (предмет 40). Сцена двигает героя по дуге,
     // а не ставит метки вручную: на снимке должен быть след, который игра
