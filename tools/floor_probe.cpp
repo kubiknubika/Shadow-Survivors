@@ -213,6 +213,7 @@ int main() {
         check(p.g.monsters[0].hp < nearHp - 0.5f, "разряд плиты бьёт врагов рядом");
         check(fabsf(p.g.monsters[1].hp - farHp) < 0.5f, "и не задевает тех, кто далеко");
         check(p.g.floorDevicesTriggered == 1, "срабатывание посчитано один раз");
+        check(p.g.sound.activeVoiceCount(SFX_FLOOR_PLATE) > 0, "нажатие плиты звучит");
 
         const float hpAfter = p.g.monsters[0].hp;
         p.tick(0.5f);
