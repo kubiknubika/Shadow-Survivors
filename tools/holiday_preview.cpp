@@ -12,7 +12,12 @@
 //   • в клетке нет ярких пикселей (символ нарисован «в никуда»);
 //   • два разных рисунка совпали пиксель в пиксель (скопированная заготовка);
 //   • символ не читается на 26 px (меньше 18 ярких пикселей) — в игре он
-//     встречается именно таким, в слоте инвентаря и в строке календаря.
+//     встречается именно таким, в слоте инвентаря и в строке календаря;
+//   • у симметричного рисунка половины не совпали (перекос): ось — центр
+//     клетки, сравнение попиксельное, допуска нет. Ровно ради этой проверки
+//     примитивы в holiday_art.h зеркалят сами себя;
+//   • односторонний рисунок уехал от центра больше чем на 7 px — тогда он
+//     висит в клетке и в бою не по центру.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -65,8 +70,14 @@ int main(int argc, char** argv) {
     // вариант (26 px). Поля по краям обязательны: в первой версии клетка
     // начиналась с x=24 при полуразмере 46, и левый столбец срезало краем листа —
     // ровно тот дефект, который стенд и должен ловить, но сначала поймал его глаз.
-    const int cellW = 150, cellH = 152, head = 52, marginX = 20;
-    SCREEN_W = cellW * 6 + marginX * 2;
+    // Клетка шире рисунка: некоторые фигуры выходят за ±1 единицу (тыква,
+    // дракон), и в клетке 150 px сосед залезал в проверяемый квадрат 86 px,
+    // из-за чего «перекос» находился там, где его нет.
+    // Слева — колонка с названием праздника: раньше имя рисовалось поверх
+    // верхней части первой клетки, и проверка симметрии «находила перекос»
+    // там, где его не было (буквы не отражаются).
+    const int cellW = 200, cellH = 152, head = 52, marginX = 20, gutterW = 170;
+    SCREEN_W = marginX * 2 + gutterW + cellW * 6;
     SCREEN_H = head + cellH * HOLIDAY_COUNT + 8;
     Renderer r;
     r.resize(SCREEN_W, SCREEN_H);
@@ -80,15 +91,15 @@ int main(int argc, char** argv) {
     for (int i = 0; i < HOLIDAY_COUNT; ++i) names.push_back(HOLIDAY_DEFS[i].name);
 
     // Куда попала каждая клетка: нужно самопроверке и не зависит от вёрстки.
-    struct Cell { int litX, litY, smallX, smallY; const char* holiday; int index; };
+    struct Cell { int litX, litY, smallX, smallY; const char* holiday; int holidayId; int index; };
     std::vector<Cell> cells;
     for (int h = 0; h < HOLIDAY_COUNT; ++h) {
         const int y = head + h * cellH;
         r.fillRect(0, y, SCREEN_W, cellH - 2, 0xFF1B1526, 255);
         r.fillRect(0, y, 6, cellH - 2, HOLIDAY_DEFS[h].c1, 255);
-        r.drawText(FONT_SMALL, marginX, y + 4, names[h], HOLIDAY_DEFS[h].glow);
+        r.drawText(FONT_SMALL, marginX, y + cellH / 2 - 7, names[h], HOLIDAY_DEFS[h].glow);
         for (int i = 0; i < 6; ++i) {
-            const int cx = marginX + cellW / 2 + i * cellW;
+            const int cx = marginX + gutterW + cellW / 2 + i * cellW;
             const int bigY = y + 54, smallY = y + 130;
             const bool isChar = i >= 4;
             const int idx = isChar ? i - 4 : i;
@@ -101,7 +112,7 @@ int main(int argc, char** argv) {
                                                    : idx == 2 ? "символ 3" : "символ 4");
             r.drawTextCentered(FONT_SMALL, cx, y + 104, label,
                                isChar ? 0xFFC8A8E8 : 0xFF8A82A8);
-            cells.push_back({cx - 43, bigY - 43, cx - 13, smallY - 13, names[h], i});
+            cells.push_back({cx - 43, bigY - 43, cx - 13, smallY - 13, names[h], h, i});
         }
     }
     saveBmp(out, SCREEN_W, SCREEN_H, r.pixels);
@@ -122,10 +133,34 @@ int main(int argc, char** argv) {
         // Края листа: обрезанный рисунок — это дефект вёрстки, а не приём.
         const bool clipped = c.litX < 2 || c.litY < 2 ||
                              c.litX + 86 > SCREEN_W - 2 || c.litY + 86 > SCREEN_H - 2;
+        // ── Геометрия: симметрия и центровка ─────────────────────────────────
+        const int axis = c.litX + 43;             // центр клетки по оси рисунка
+        const bool isChar = c.index >= 4;
+        const int idx = isChar ? c.index - 4 : c.index;
+        const bool symmetric = holidayArtMirrored(isChar, (HolidayId)c.holidayId, idx);
+        int asym = 0, ink = 0;
+        long sumX = 0;
+        for (int y = c.litY; y < c.litY + 86; ++y) {
+            for (int x = c.litX; x < c.litX + 86; ++x) {
+                const uint32_t a = r.pixels[y * SCREEN_W + x];
+                const uint32_t b = r.pixels[y * SCREEN_W + (2 * axis - x)];
+                const int sa = ((a >> 16) & 0xFF) + ((a >> 8) & 0xFF) + (a & 0xFF);
+                const int sb = ((b >> 16) & 0xFF) + ((b >> 8) & 0xFF) + (b & 0xFF);
+                if (sa > 210) { ++ink; sumX += x; }
+                if (a != b && (sa > 210 || sb > 210)) ++asym;
+            }
+        }
+        const double dx = ink ? (double)sumX / ink - axis : 0.0;
+        const bool crooked = symmetric && asym != 0;
+        const bool offCenter = !symmetric && fabs(dx) > 7.0;
         if (lit == 0) { printf("ПУСТО: %s символ %d\n", c.holiday, c.index + 1); ++bad; }
         else if (dup) { printf("ДУБЛЬ: %s символ %d\n", c.holiday, c.index + 1); ++bad; }
         else if (clipped) { printf("ОБРЕЗАН: %s символ %d\n", c.holiday, c.index + 1); ++bad; }
         else if (smallLit < 18) { printf("МЕЛКО: %s символ %d — %d px на 26\n", c.holiday, c.index + 1, smallLit); ++bad; }
+        else if (crooked) { printf("ПЕРЕКОС: %s символ %d — %d px не совпали с отражением\n",
+                                   c.holiday, c.index + 1, asym); ++bad; }
+        else if (offCenter) { printf("СМЕЩЁН: %s символ %d — на %.1f px от оси\n",
+                                     c.holiday, c.index + 1, dx); ++bad; }
     }
     printf("%s: 48 рисунков, пустых/дублей/мелких — %d\n", bad ? "ПРОВАЛ" : "ОК", bad);
     return bad ? 1 : 0;

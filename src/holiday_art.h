@@ -14,6 +14,38 @@
 #include "renderer.h"
 #include "holidays.h"
 
+// ── Математика формы ─────────────────────────────────────────────────────────
+// Каждый рисунок рисуется примитивами в единичных координатах (см. ниже), но
+// «на глаз» координаты всё равно дают кривизну: у фигуры, нарисованной одной
+// рукой, левая и правая половины расходятся на пиксель-другой, а глаз это
+// видит как перекос. Поэтому ось есть у самой отрисовки: симметричный рисунок
+// рисуется дважды — как нарисован и отражённым (flip = −1). Объединение двух
+// проходов симметрично по построению, независимо от того, где автор поставил
+// точки. Примитивы считают x как sign·|u|, поэтому округление одинаково с двух
+// сторон и половинки совпадают попиксельно, а не «примерно».
+//
+// Здесь перечислены рисунки, которые симметричными быть НЕ должны: профиль
+// (ведьма, дракон, русалка), диагональ (стрела, конфета) и боковая деталь
+// (ручка кружки, фитиль хлопушки, завиток папоротника).
+inline bool holidayArtMirrored(bool isCharacter, HolidayId id, int index) {
+    if (isCharacter) {
+        switch (id) {
+        case HOLIDAY_HALLOWEEN: return index != 0;   // ведьма на метле — в профиль
+        case HOLIDAY_LUNAR:     return index != 0;   // дракон — в профиль
+        case HOLIDAY_KUPALA:    return index != 0;   // русалка — хвост набок
+        default: return true;
+        }
+    }
+    switch (id) {
+    case HOLIDAY_HALLOWEEN: return index != 3;   // конфета в косой обёртке
+    case HOLIDAY_LOVE:      return index != 1;   // стрела Купидона по диагонали
+    case HOLIDAY_PATRICK:   return index != 3;   // кружка: ручка с одного бока
+    case HOLIDAY_LUNAR:     return index != 3;   // хлопушка: фитиль сбоку
+    case HOLIDAY_KUPALA:    return index != 1;   // папоротник завитком
+    default: return true;
+    }
+}
+
 struct HolidayArt {
     Renderer& r;
     float t = 0.0f;      // время для анимации
@@ -35,42 +67,98 @@ struct HolidayArt {
     int R(float u) const { return std::max(1, (int)lroundf(u * (float)S)); }
     int A(int a) const { return std::max(0, std::min(255, a * alpha / 255)); }
 
+    // ── Зеркальность на уровне примитива ─────────────────────────────────────
+    // Мало нарисовать фигуру дважды — важен ещё и порядок: если деталь слева
+    // нарисована раньше детали справа, отражённый проход кладёт их в обратном
+    // порядке, и половинки всё равно расходятся цветом. Поэтому зеркалит сам
+    // примитив: круг, линия, прямоугольник и треугольник сразу рисуются
+    // парой (x и −x) на одном уровне z-порядка. Тогда симметрия точная, а не
+    // «почти», и её видно на любом размере.
+    bool mirror = true;
+
     void d(float x, float y, float rad, uint32_t c, int a = 255) {
-        r.fillCircle(cx + P(x), cy + P(y), R(rad), tint(c), A(a));
+        const int px = P(x), py = P(y), rr = R(rad);
+        const uint32_t col = tint(c); const int al = A(a);
+        r.fillCircle(cx + px, cy + py, rr, col, al);
+        if (mirror && px != 0) r.fillCircle(cx - px, cy + py, rr, col, al);
     }
     void ring(float x, float y, float rad, float thick, uint32_t c, int a = 235) {
-        r.drawCircleRing(cx + P(x), cy + P(y), R(rad), std::max(1, R(thick)), tint(c), A(a), false);
+        const int px = P(x), py = P(y), rr = R(rad), th = std::max(1, R(thick));
+        const uint32_t col = tint(c); const int al = A(a);
+        r.drawCircleRing(cx + px, cy + py, rr, th, col, al, false);
+        if (mirror && px != 0) r.drawCircleRing(cx - px, cy + py, rr, th, col, al, false);
     }
     void l(float x1, float y1, float x2, float y2, uint32_t c, float w = 0.12f, int a = 255) {
-        r.drawLine(cx + P(x1), cy + P(y1), cx + P(x2), cy + P(y2), tint(c), std::max(1, R(w)), A(a));
+        const int p1 = P(x1), p2 = P(x2), y1p = P(y1), y2p = P(y2);
+        const int ww = std::max(1, R(w));
+        const uint32_t col = tint(c); const int al = A(a);
+        r.drawLine(cx + p1, cy + y1p, cx + p2, cy + y2p, col, ww, al);
+        // Линия совпадает со своим отражением только если она горизонтальна и
+        // висит на оси (или вертикальна на оси). Раньше условие было
+        // «p1 == −p2», и косые линии с равными по модулю концами не зеркалились
+        // вовсе — отсюда перекос у снежинки и солнца.
+        const bool selfMirrored = (p1 == 0 && p2 == 0) || (y1p == y2p && p1 == -p2);
+        if (mirror && !selfMirrored) r.drawLine(cx - p1, cy + y1p, cx - p2, cy + y2p, col, ww, al);
     }
     void box(float x, float y, float w, float h, uint32_t c, int a = 255) {
-        const int px = cx + P(x - w), py = cy + P(y - h);
-        r.fillRect(px, py, std::max(1, P(w * 2)), std::max(1, P(h * 2)), tint(c), A(a));
+        // Границы включительно (fillRect закрашивает x..x+w−1): иначе
+        // отражённый прямоугольник съезжал на столбец и давал ровно ту
+        // «кривизну», ради которой всё это и делается.
+        const int xa = P(x - w), xb = P(x + w), ya = P(y - h), yb = P(y + h);
+        const int ww = std::max(1, xb - xa + 1), hh = std::max(1, yb - ya + 1);
+        const uint32_t col = tint(c); const int al = A(a);
+        r.fillRect(cx + xa, cy + ya, ww, hh, col, al);
+        if (mirror && xa != -xb) r.fillRect(cx - xb, cy + ya, ww, hh, col, al);
     }
-    // Треугольник через три линии плюс заливка по строкам: у Renderer нет
-    // полигона, а для символов хватает этой формы.
-    void tri(float x1, float y1, float x2, float y2, float x3, float y3, uint32_t c, int a = 255) {
-        const int X1 = cx + P(x1), Y1 = cy + P(y1);
-        const int X2 = cx + P(x2), Y2 = cy + P(y2);
-        const int X3 = cx + P(x3), Y3 = cy + P(y3);
-        const int minY = std::min(Y1, std::min(Y2, Y3)), maxY = std::max(Y1, std::max(Y2, Y3));
+    // Треугольник: заливка по строкам (полигона у Renderer нет). Отражённую
+    // копию не рисуем, только если треугольник симметричен сам себе, — иначе
+    // на оси оставался бы двойной слой полупрозрачной краски.
+    void triFill(float x1, float y1, float x2, float y2, float x3, float y3, uint32_t c, int a) {
+        const int px1 = cx + P(x1), py1 = cy + P(y1);
+        const int px2 = cx + P(x2), py2 = cy + P(y2);
+        const int px3 = cx + P(x3), py3 = cy + P(y3);
+        const int minY = std::min(py1, std::min(py2, py3)), maxY = std::max(py1, std::max(py2, py3));
         for (int y = minY; y <= maxY; ++y) {
             float lo = 1e9f, hi = -1e9f;
-            const int xs[3] = {X1, X2, X3}, ys[3] = {Y1, Y2, Y3};
+            const int xs[3] = {px1, px2, px3}, ys[3] = {py1, py2, py3};
             for (int k = 0; k < 3; ++k) {
-                const int a2 = (k + 1) % 3;
+                const int k2 = (k + 1) % 3;
                 const float ax = (float)xs[k], ay = (float)ys[k];
-                const float bx = (float)xs[a2], by = (float)ys[a2];
+                const float bx = (float)xs[k2], by = (float)ys[k2];
                 if ((ay <= y && by >= y) || (by <= y && ay >= y)) {
-                    const float ax2 = (fabsf(by - ay) < 0.001f) ? ax : ax + (bx - ax) * ((float)y - ay) / (by - ay);
-                    lo = std::min(lo, ax2);
-                    hi = std::max(hi, ax2);
+                    const float lx = (fabsf(by - ay) < 0.001f)
+                                         ? ax : ax + (bx - ax) * ((float)y - ay) / (by - ay);
+                    lo = std::min(lo, lx);
+                    hi = std::max(hi, lx);
                 }
             }
-            if (hi >= lo) r.blendSpan(y, (int)lroundf(lo), (int)lroundf(hi), tint(c), A(a));
+            // Границы по правилу «центр пикселя внутри полигона»: ceil/floor
+            // симметричны относительно оси (в отличие от lround, который для
+            // чётной ширины уводит заливку на столбец в одну сторону).
+            if (hi >= lo) {
+                const int x0 = (int)ceilf(lo), x1 = (int)floorf(hi);
+                if (x1 >= x0) r.blendSpan(y, x0, x1, tint(c), A(a));
+            }
         }
     }
+    void tri(float x1, float y1, float x2, float y2, float x3, float y3, uint32_t c, int a = 255) {
+        triFill(x1, y1, x2, y2, x3, y3, c, a);
+        if (!mirror) return;
+        // Треугольник совпадает со своим отражением только если множество его
+        // вершин переходит в себя при x → −x. Проверяем именно это, а не
+        // «концы равны по модулю»: у косой вершины модуль тот же, а форма нет.
+        const int pxs[3] = {P(x1), P(x2), P(x3)};
+        const int pys[3] = {P(y1), P(y2), P(y3)};
+        bool selfMirrored = true;
+        for (int i = 0; i < 3 && selfMirrored; ++i) {
+            bool found = false;
+            for (int j = 0; j < 3; ++j)
+                if (pxs[j] == -pxs[i] && pys[j] == pys[i]) { found = true; break; }
+            selfMirrored = found;
+        }
+        if (!selfMirrored) triFill(-x1, y1, -x2, y2, -x3, y3, c, a);
+    }
+
     // Сердце: два круга и клин. Нужно трём праздникам, поэтому в хелперах.
     void heart(float x, float y, float s, uint32_t c, int a = 255) {
         d(x - s * 0.38f, y - s * 0.30f, s * 0.52f, c, a);
@@ -90,6 +178,12 @@ struct HolidayArt {
 
     // ── Символы ────────────────────────────────────────────────────────────────
     void symbol(HolidayId id, int index, int sizeHint = 0) {
+        mirror = holidayArtMirrored(false, id, index);
+        symbolOnce(id, index, sizeHint);
+        mirror = true;
+    }
+
+    void symbolOnce(HolidayId id, int index, int sizeHint = 0) {
         (void)sizeHint;
         switch (id) {
         case HOLIDAY_HALLOWEEN:
@@ -489,6 +583,12 @@ struct HolidayArt {
     // ── Персонажи ──────────────────────────────────────────────────────────────
     // bob — общий для всех: фигуры дышат, иначе толпа выглядит наклейками.
     void character(HolidayId id, int index, float bob = 0.0f) {
+        mirror = holidayArtMirrored(true, id, index);
+        characterOnce(id, index, bob);
+        mirror = true;
+    }
+
+    void characterOnce(HolidayId id, int index, float bob = 0.0f) {
         cy += P(bob);
         switch (id) {
         case HOLIDAY_HALLOWEEN:
