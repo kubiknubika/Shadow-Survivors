@@ -203,13 +203,18 @@ static void checkCorruptSave() {
     g.simulationMode = true;
     g.initRun(0, false);
 
-    // Цена кузницы при абсурдном ранге: (int)roundf(baseCost * 1.55^rank) раньше
-    // переполнялся в INT_MIN, и покупка ПРИБАВЛЯЛА золото.
+    // Цена договора при абсурдном ранге: (int)roundf(baseCost * 1.55^rank) раньше
+    // переполнялся в INT_MIN, и покупка ПРИБАВЛЯЛА золото. Кривая стала линейной,
+    // поэтому «упрётся в потолок 2e9» больше не свойство игры — проверяем то, что
+    // важно: цена положительна, влезает в int и растёт вместе с рангом.
+    const int rankMax = ENEMY_OATHS[0].maxRank;
+    g.save.enemyOathRanks[0] = rankMax;
+    const int costAtMax = g.getEnemyOathCost(0);
     g.save.enemyOathRanks[0] = 200;
     const int cost = g.getEnemyOathCost(0);
     check(cost > 0, "цена договора при ранге 200 стала %d — покупка прибавит золото вместо списания", cost);
-    check(cost <= 2000000000, "цена договора вылезла за разумный предел: %d", cost);
-    check((long long)cost == 2000000000LL, "цена не упёрлась в потолок 2e9, а стала %d", cost);
+    check(cost <= MAX_SHOP_PRICE, "цена договора вылезла за потолок магазина: %d", cost);
+    check(cost > costAtMax, "цена не растёт с рангом: 200-й %d, а последний %d", cost, costAtMax);
 
     // Золото: awardGold складывал int и на пределе переполнялся в отрицательное
     // число — казна становилась минус двумя миллиардами.
