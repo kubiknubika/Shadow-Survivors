@@ -226,7 +226,7 @@ static inline int holidayMonsterSlot(int type) {
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 170;
+static constexpr int PATCH_NOTES_COUNT = 171;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -7875,6 +7875,11 @@ struct Game {
     // =========================================================================
 
     void renderWorld(Renderer& r, float camX, float camY) {
+        // Слой мира: подписи над существами, числа урона и всплывающий текст
+        // перекрываются по природе. Стенд вёрстки (tools/ui_probe.cpp) читает
+        // этот тег и не считает их наложением.
+        const int prevTextTag = r.textTag;
+        r.textTag = 1;
         const int themeIndex = currentArenaTheme();
         const int layoutIndex = currentArenaLayout();
         const ArenaLayoutDef& layout = ARENA_LAYOUTS[std::max(0, std::min(ARENA_LAYOUT_COUNT - 1, layoutIndex))];
@@ -8946,6 +8951,7 @@ struct Game {
             int alpha = std::min(255, (int)((ft.life / ft.maxLife) * 320.0f));
             r.drawTextCentered(ft.big ? FONT_MED : FONT_SMALL, sx, sy, ft.text.c_str(), ft.color, true, alpha);
         }
+        r.textTag = prevTextTag;
     }
 
     void drawUIFrame(Renderer& r, int x, int y, int w, int h, uint32_t accent, bool selected = false, int alpha = 238) const {
@@ -9392,9 +9398,13 @@ struct Game {
             ++bossBars;
         }
         drawCombatNotices(r);
+        // Полоса 32 px, а в ней две строки по 15 px (13 чернил + 2 на подъём):
+        // при смещениях −27/−13 хвост «У» во второй строке срезался о нижний
+        // край кадра. Смещения пересчитаны так, чтобы обе строки целиком
+        // лежали внутри полосы.
         r.fillRect(0, SCREEN_H - 32, SCREEN_W, 32, 0xFF0E0A18, 218);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 27, keyHint("WASD • ДВИЖЕНИЕ   SPACE • РЫВОК   Q • СУПЕР"), 0xFFDDD5EF);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 13, keyHint("ПКМ • КУРСОР   M/N • ЗВУК   F11 • ЭКРАН   ESC • ПАУЗА"), 0xFFB8B0D0);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 29, keyHint("WASD • ДВИЖЕНИЕ   SPACE • РЫВОК   Q • СУПЕР"), 0xFFDDD5EF);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 16, keyHint("ПКМ • КУРСОР   M/N • ЗВУК   F11 • ЭКРАН   ESC • ПАУЗА"), 0xFFB8B0D0);
     }
 
     void renderHUD(Renderer& r, float camX, float camY) {
@@ -10273,20 +10283,37 @@ struct Game {
         char buf[160];
         snprintf(buf, sizeof(buf), "ВРЕМЯ %02d:%02d   •   УБИЙСТВ %d   •   БОССОВ В ЭТОМ ЗАБЕГЕ %d   •   ЗОЛОТО В КАЗНЕ %d",
                  (int)runTime / 60, (int)runTime % 60, kills, runBossKills, save.gold);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, y + 18, buf, 0xFFFFD858, false);
+        int statsY = y + 18;
+        if (r.textWidth(FONT_SMALL, buf) > SCREEN_W - 32) {
+            // В кадре 720 px строка итогов — 738 px: делим по смыслу.
+            snprintf(buf, sizeof(buf), "ВРЕМЯ %02d:%02d   •   УБИЙСТВ %d   •   БОССОВ %d",
+                     (int)runTime / 60, (int)runTime % 60, kills, runBossKills);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, statsY, buf, 0xFFFFD858, false);
+            snprintf(buf, sizeof(buf), "ЗОЛОТО В КАЗНЕ %d", save.gold);
+            statsY += FONT_SMALL.lineHeight;
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, statsY, buf, 0xFFFFD858, false);
+        } else {
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, statsY, buf, 0xFFFFD858, false);
+        }
         const int nextMultiplier = std::min(4, 1 + std::min(3, save.campaignCycle) + 1);
         snprintf(buf, sizeof(buf), "НОВАЯ НОЧЬ: все дела заново, другой след, золото в делах ×%d", nextMultiplier);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, y + 40, buf, 0xFFB9E7FF, false);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, statsY + 22, buf, 0xFFB9E7FF, false);
 
-        const int bw = portraitEnding ? std::min(320, (SCREEN_W - 60) / 2) : 300, bh = 56;
-        const int gap = 18, by = portraitEnding ? SCREEN_H - 96 : 470;
+        // В портрете три кнопки в ряд не влезают (3×320 + 36 при кадре 720 px), и
+        // «БЕСКОНЕЧНЫЙ РЕЖИМ» уезжал за правый край. Столбик из трёх кнопок
+        // держится у нижнего края и не задевает текст.
+        const int gap = portraitEnding ? 12 : 18;
+        const int bw = portraitEnding ? std::min(340, SCREEN_W - 48) : 300;
+        const int bh = portraitEnding ? 48 : 56;
+        const int by0 = portraitEnding ? std::max(statsY + 66, SCREEN_H - 24 - (3 * bh + 2 * gap)) : 470;
         const int totalW = 3 * bw + 2 * gap;
-        const int bx = (SCREEN_W - totalW) / 2;
+        const int bx = portraitEnding ? (SCREEN_W - bw) / 2 : (SCREEN_W - totalW) / 2;
         struct { const char* label; int id; } buttons[3] = {
             {"НОВАЯ НОЧЬ", 0}, {"В МЕНЮ", 1}, {"БЕСКОНЕЧНЫЙ РЕЖИМ", 2}
         };
         for (int i = 0; i < 3; ++i) {
-            const int x = bx + i * (bw + gap);
+            const int x = portraitEnding ? bx : bx + i * (bw + gap);
+            const int by = portraitEnding ? by0 + i * (bh + gap) : by0;
             const bool hov = mouseX >= x && mouseX <= x + bw && mouseY >= by && mouseY <= by + bh;
             const uint32_t fill = i == 0 ? (hov ? 0xFF4B3672 : 0xFF2E2350) : (i == 1 ? (hov ? 0xFF385B40 : 0xFF23402D) : (hov ? 0xFF286B82 : 0xFF1D455C));
             const uint32_t edge = i == 0 ? 0xFFFFD858 : (i == 1 ? 0xFF9FE5A4 : 0xFF8DEEFF);
@@ -10309,7 +10336,15 @@ struct Game {
         snprintf(buf, sizeof(buf), "ВРЕМЯ %02d:%02d   •   УБИЙСТВ %d   •   БОССОВ %d", (int)runTime / 60, (int)runTime % 60, kills, runBossKills);
         r.drawTextCentered(FONT_MED, SCREEN_W / 2, 300, buf, 0xFFFFE078);
         snprintf(buf, sizeof(buf), "СОБРАНО ЗОЛОТА: %d   •   ПОРТАЛ ДОБАВИЛ +50%%   •   В КАЗНЕ: %d", runGold, save.gold);
-        r.drawTextCentered(FONT_MED, SCREEN_W / 2, 344, buf, 0xFFFFD858);
+        if (r.textWidth(FONT_MED, buf) > SCREEN_W - 32) {
+            // В кадре 720 px строка — 749 px: делим на две.
+            snprintf(buf, sizeof(buf), "СОБРАНО ЗОЛОТА: %d   •   ПОРТАЛ +50%%", runGold);
+            r.drawTextCentered(FONT_MED, SCREEN_W / 2, 344, buf, 0xFFFFD858);
+            snprintf(buf, sizeof(buf), "В КАЗНЕ: %d", save.gold);
+            r.drawTextCentered(FONT_MED, SCREEN_W / 2, 344 + FONT_MED.lineHeight + 4, buf, 0xFFFFD858);
+        } else {
+            r.drawTextCentered(FONT_MED, SCREEN_W / 2, 344, buf, 0xFFFFD858);
+        }
         const int bw = std::min(380, SCREEN_W - 48), bh = 56;
         const int bx = (SCREEN_W - bw) / 2, by = SCREEN_W < SCREEN_H ? SCREEN_H - 96 : 460;
         bool hov = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
@@ -12403,9 +12438,13 @@ struct Game {
                 const char* req = heroId == 3 ? "ПОБЕДИ МОРГАРА" : "ПОБЕДИ 3 БОССОВ";
                 r.drawTextCentered(FONT_MED, cx + cardW / 2, cardY + 143, "ГЕРОЙ ЗАПЕЧАТАН", 0xFFAAA0B5);
                 r.drawTextCentered(FONT_SMALL, cx + cardW / 2, cardY + 176, req, 0xFFFF9878);
-                r.drawTextWrapped(FONT_SMALL, cx + 26, cardY + 230, cardW - 52, "Побеждай боссов, открывай новые главы и героев. Твой прогресс кампании сохраняется между забегами.", 0xFFA9A0B6, true);
+                const int progressNoteY = r.drawTextWrapped(FONT_SMALL, cx + 26, cardY + 230, cardW - 52, "Побеждай боссов, открывай новые главы и героев. Твой прогресс кампании сохраняется между забегами.", 0xFFA9A0B6, true);
                 snprintf(buf, sizeof(buf), "ПОБЕДЫ НАД БОССАМИ: %d", save.bossesDefeated);
-                r.drawTextCentered(FONT_SMALL, cx + cardW / 2, cardY + 306, buf, 0xFFFFD878);
+                // Счётчик идёт за переносом: на узкой карточке (960×720 — 280 px)
+                // описание занимает четыре строки и раньше ложилось на него.
+                r.drawTextCentered(FONT_SMALL, cx + cardW / 2,
+                                   std::min(cardY + cardH - 20, std::max(cardY + 306, progressNoteY + 2)),
+                                   buf, 0xFFFFD878);
             }
         }
 
@@ -13334,15 +13373,18 @@ struct Game {
         snprintf(head, sizeof(head), "%d %s • ЗАБРАНО %d ИЗ %d • ЗАДАНИЯ ОБНОВЯТСЯ С НОВЫМ ДНЁМ",
                  today.day, holidayMonthName(today.month), dailyClaimedCount(), DAILY_MISSION_COUNT);
         renderMenuHeader(r, head);
-        // renderMenuHeader рисует бой под меню, а второй аргумент не печатает
-        // вовсе. Поэтому фон под телом экрана гасится наглухо: иначе сквозь
-        // карточки читались обрывки подписей меню.
-        const int headerH = SCREEN_W < 900 ? 68 : 46;
+        // Шапка меню — это не только полоса сверху: под ней лежит панель
+        // заголовка высотой 94 px (топ-бар + 4), и её низ и есть настоящий край.
+        // Здесь стояло 68/46, и в портрете карточки заданий начинались прямо
+        // поверх «ПЕПЕЛ ТЬМЫ: ВЫЖИВШИЕ». Фон под телом гасится наглухо:
+        // renderMenuHeader рисует бой, и без этого сквозь карточки читались
+        // обрывки подписей меню.
+        const int headerH = (SCREEN_W < 900 ? 68 : 44) + 4 + 94;
         r.fillRect(0, headerH, SCREEN_W, SCREEN_H - headerH, 0xFF0B0A12, 255);
         r.drawText(FONT_SMALL, 16, headerH + 2, fitText(r, FONT_SMALL, head, SCREEN_W - 32).c_str(), 0xFFB9A8E0);
 
         const int margin = 16;
-        const int topY = headerH + 20;
+        const int topY = headerH + 6;
         const int footerH = portrait ? 96 : 62;
         const int bodyBottom = SCREEN_H - footerH;
         const int cardW = SCREEN_W - margin * 2;
@@ -13575,7 +13617,13 @@ struct Game {
             // четыре строки. Размер превью ограничен и по ширине, и по высоте,
             // иначе в высоком портрете оно вытягивается в узкую щель.
             const int availW = SCREEN_W - 2 * margin;
-            const int availH = std::max(160, (bottom - top) * 62 / 100);
+            // Ниже превью живут четыре строки, под ними — кнопка «сбросить»:
+            // превью не имеет права занять их место, иначе подсказка последней
+            // строки ложилась на кнопку (720×960: 844 против 842).
+            const int rowsH = rowCount * (rowH + 8) - 8;
+            const int rowsBottomLimit = buttonY - 44 - 8;
+            const int rowsTopLimit = rowsBottomLimit - rowsH - gap - 18;
+            const int availH = std::max(120, std::min((bottom - top) * 62 / 100, rowsTopLimit - (top + 14)));
             previewH = std::min(availH, (int)(availW * (float)SCREEN_H / (float)SCREEN_W * 0.85f));
             previewW = (int)(previewH * screenAspect);
             previewX = (SCREEN_W - previewW) / 2;
@@ -13584,8 +13632,7 @@ struct Game {
             rowsW = SCREEN_W - 2 * margin;
             // Остаток высоты делится поровну: превью не липнет к шапке, а строки —
             // к кнопке «сбросить».
-            const int rowsH = rowCount * (rowH + 8) - 8;
-            const int freeH = std::max(0, bottom - (previewY + previewH + rowsH + 26));
+            const int freeH = std::max(0, rowsBottomLimit - (previewY + previewH + rowsH + 26));
             previewY += std::min(freeH / 3, 60);
             rowsY = previewY + previewH + gap + 18;
         } else {
@@ -13750,22 +13797,11 @@ struct Game {
                 r.drawTextCentered(FONT_MED, x + cardW / 2, cardY + previewH + 30,
                                    touchSchemeName(i), active ? 0xFFFFE28A : 0xFFEAE4F8);
                 const int textX = x + 20, textW = cardW - 40;
-                int ty = cardY + previewH + 66;
-                const char* desc = descriptions[i];
-                // Описание рисуется как две строки: так карточка не зависит от
-                // ширины шрифта и не режет слова.
-                char line[128];
-                size_t pos = 0;
-                while (desc[pos] && ty < cardY + cardH - 56) {
-                    size_t end = pos;
-                    while (desc[end] && desc[end] != '\n') ++end;
-                    const size_t len = std::min(sizeof(line) - 1, end - pos);
-                    memcpy(line, desc + pos, len);
-                    line[len] = 0;
-                    r.drawTextCentered(FONT_SMALL, x + cardW / 2, ty, line, 0xFFC8BFDC);
-                    ty += FONT_SMALL.lineHeight + 4;
-                    pos = desc[end] ? end + 1 : end;
-                }
+                const int ty = cardY + previewH + 66;
+                // Описание переносится по ширине карточки: строка «Левый большой
+                // палец ведёт стик в нижней части экрана,» — 480 px, а карточка
+                // на 1152–1280 px даёт 322–365 px, и текст срезался левым краем.
+                r.drawTextWrapped(FONT_SMALL, textX, ty, textW, descriptions[i], 0xFFC8BFDC, true);
                 if (active) {
                     const int badgeW = 128, badgeH = 26;
                     const int bx = x + (cardW - badgeW) / 2, by = cardY + cardH - 40;
@@ -14033,6 +14069,7 @@ struct Game {
             "2.12.13 • КУЗНИЦА БЕЗ ОБЕЩАНИЙ: ДВЕНАДЦАТЬ РАНГОВ",
             "2.12.14 • ТЕМП НАГРАД: РОВНО, БЕЗ ЗАЛПОВ",
             "2.12.15 • ДАРЫ ДНЯ: ЗАДАНИЯ, КРУТКА, ЖЕТОНЫ",
+            "2.12.16 • ВЁРСТКА: НИ ВЫЛЕТОВ, НИ НАЛОЖЕНИЙ",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -14204,6 +14241,7 @@ struct Game {
             "Хаос-аудит: вопросы, которых игра не ждёт. Стенд tools/chaos_probe.cpp — случайный ввод, испорченный сейв, витрина магазина, повторяемость.\n• Портал обещал +50 %, а давал до +200 %: бонус считался от золота, уже умноженного множителем кампании, и отдавался обратно в awardGold — множитель применялся второй раз. На третьей ночи экран писал «портал добавил +50 %», а казна получала +200 % собранного. Теперь половина собранного добавляется напрямую, множитель — один раз, там, где золото реально собрано.\n• Переполнение int в ценах и казне: цена договора baseCost×1,55^ранг на 34-м ранге превращалась в −2 147 483 648 (магазин показал бы отрицательную цену, и покупка прибавляла бы золото), а awardGold на пределе казны делал её минус двумя миллиардами. Оба места считаются в 64 битах и упираются в потолок 2e9.\n• Календарь обещал больше, чем делал. «Мёртвых месяцев дольше двух недель нет» — неправда: между Купалой (8 июля) и Хэллоуином (20 октября) 103 дня без праздника. «Дата примерная прямо написана в календаре» — тоже: holidayLunarYearKnown() не вызывалась ни разу, и после 2040 года лунный новый год молча съезжал на 1 февраля. Комментарий теперь говорит правду, а календарь печатает «(ДАТА ПРИМЕРНАЯ: ГОД ВНЕ ТАБЛИЦЫ)».\n• Ловушка формата сейва: договоры лежат двумя половинами по три, а договоров шесть — прямая запись enemyOathRanks[id] для id = 3…5 пишет за границу и портит маску печатей. Пломбы в стенде: смещения 68/88/116, размер 120 байт, ранг одного договора не трогает соседний.\n• Граница массива в закрытии дела (CAMPAIGN_MISSIONS[selectedStoryMission] без проверки диапазона, -Warray-bounds) — добавлена явная граница.\n• Проверено и чисто: 28 800 кадров случайного ввода (все клавиши, рывки, суперы, сундуки, смерть, перезапуск, кадры от 240 до 10 в секунду) — ни одного NaN, здоровье в границах, потолки не пробиты; тот же seed даёт побитово тот же забег; между забегами не течёт ни запас HP, ни предметы, ни счётчики; ни одна отрисовываемая строка не содержит глифа вне атласа шрифта.\n• Праздники: три новые пломбы в holiday_probe — промежуток 103 дня, покрытие года 25 % (1611 из 6210 дней), 13 дней-ничьих по фокусу и ни одной ничьей на чужой «свой день»; таблица лунного нового года кончается 2040 годом, и календарь обязан называть дату примерной.\n• Что осталось дизайну: кузница обещает 50 рангов, но цена растёт в 1,55 за ранг — при замеренной добыче 19–30 тыс. золота за 20 минут 12-й ранг стоит ~9 забегов, 20-й ~170, 50-й порядка 10 в восьмой. Решение (сгладить кривую или назвать XII потолком) записано в design/chaos_audit.md.\n• Честно: это стенды, а не живые забеги; и два предупреждения по пути оказались артефактами инструментов (stdbuf -o0 и мой собственный выход за массив в тестовом коде) — описаны в документе, чтобы их не «нашли» второй раз.",
             "Кузница без обещаний: двенадцать рангов вместо пятидесяти.\n• Раньше витрина показывала 50 рангов, а цена растёт в 1,58 раза за ранг: 12-й стоил ~157 тыс. золота (шесть забегов), 20-й — сотни тысяч, 50-й — миллионы. Тридцать восемь рангов были декорацией: их не покупал никто. Теперь рангов двенадцать, и все покупаемы. Вся строка до максимума — 270 131 золота (примерно 11 забегов по 25 тыс.), вся кузница — 1 828 572 (примерно 73 забега).\n• Вклад ранга — просто его номер. Ушёл костыль «после XII вклад снижен»: он существовал только чтобы оправдать недостижимый хвост. XII ранг «Силы клинка» даёт +48 % урона, и это последний ранг, а не середина списка.\n• Шкала на карточке — по отрезку на ранг вместо десяти отрезков по пять рангов: раньше при двенадцати рангах закрашенная доля врала почти вдвое.\n• Сейв: ранг выше двенадцати подрезается при загрузке (иначе карточка нарисовала бы «Ранг 20 / 12»), и миграция помечает сейв изменённым. У того, кто играл, ранги не меняются — выше XII их не покупали.\n• Цены и казна получили общий потолок 2e9 и одну точку входа — creditTreasury(). Множитель кампании применяется там, где золото реально собрано, портал добавляет половину собранного уже без него, а цена договора растёт по одной константе и не бывает меньше 1.\n• Формат сейва стерегут static_assert'ы: размеры половин договоров и смещения 68/88/116 проверяет компилятор. Перестановка полей ломает сборку, а не сейвы игроков; раньше это ловил стенд, то есть после того, как файл уже записан.\n• Календарь: «дата примерная» больше не фраза про один лунный новый год — holidayDateCertain() отвечает за все праздники, а строки списка с неточной датой помечены «≈ ».\n• Сверка кадров получила кузницу: её правки проходили мимо всех пломб, потому что экрана не было в списке. Хеш кузницы 097895c1 — он же в два потока, а смена рангов кадр меняет. Остальные экраны не изменились ни на пиксель: настройки 6bf6a2bf, справка 294fc2ed, зал славы cd114aa4, выбор героя 6191f1d3, бой cabba43c, управление acb8e81c, вид кнопок eb1092b6, праздники 39049f60, бой праздник 66a3553e. Меню c80f8745 сменилось только номером версии в шапке: та же сборка с прежним номером даёт da4eaa36. Патчноуты, естественно, изменились — в них появилась эта запись.\n• Честно: экономика кузницы проверена стендом, а не живыми забегами; 73 забега на всю кузницу — расчёт по замеренной добыче 19–30 тыс. золота за 20 минут «Бесконечной ночи», а не пройденный путь.",
             "Темп наград: ровно, без залпов и без провисаний.\n• Новый стенд tools/pacing_probe.cpp отвечает не «сколько», а «когда»: награды по минутам, промежутки между уровнями, худшие засухи, разброс золота между забегами и таблица «сколько забегов ждать следующий ранг».\n• Кузница: цена ранга росла в 1,58 раза, а добыча за забег — нет. Первые шесть рангов покупались пачкой в первом же забеге (0,03 забега на ранг), а двенадцатый ждали 4,4 забега. Теперь цена линейная: ожидание 0,4 → 1,9 забега, ни один ранг не ждёт больше чем в 1,15 раза дольше предыдущего, а весь магазин стоит столько же (около 1,81 млн золота). Договоры так же: 0,1 → 0,5 забега.\n• Драфт прокачки мог не предложить ни одного оружия: вес карточки зависит от тира, а не от типа. Забег, где первые три уровня выпали «Магнит», «Сапоги ветра» и «Книга мудрости», не наносил урона — на стенде у него к первой минуте 188 мобов на арене и 51 убийство против 94 у соседнего зерна. Без урона нет убийств, без убийств нет опыта, без опыта нет следующего уровня: награды не редеют, а прекращаются. Теперь среди четырёх карточек всегда есть оружие, пока оружие можно взять.\n• Замер (15 минут, шесть зёрен): 32–33 уровня, 9 сундуков, 24,8–26,6 тыс. золота, медиана 3,17 награды в минуту, худшая минута 1,5, худшая засуха 60 с. Было: 12–38 уровней, 2,5–37,8 тыс. золота, засуха до 267 с — но там же изменилась и модель игрока, поэтому вклад самих правок измерен отдельно: ожидание ранга 0,03…4,4 → 0,4…1,9, а разброс золота между забегами от гарантии оружия 1,83 → 1,07 раза.\n• Разброс золота между забегами упал с 15,4 раза до 1,07 — это и есть «скачки»: когда одно зерно даёт 2,5 тыс., а другое 37,8 тыс., следующий вечер непредсказуем.\n• Пул драфта растёт ровно: 16 предметов на старте, дальше по одному-два в минуту до 41 к двенадцатой. «Новые игрушки» — тоже награда, и они не приходят пачкой на третьей минуте.\n• Честно: бот не уклоняется. В смертном режиме он погибает на 3–4-й минуте (10–12 уровней, 1,8–2,8 тыс. золота) — это нижняя граница, вердикт ставится по бессмертному прогону, где награды видно до пятнадцатой минуты. Пороги и полный разбор — design/pacing.md.",
+            "Вёрстка проверена стендом, а не глазами.\n• Новый стенд tools/ui_probe.cpp читает журнал рендерера: каждая нарисованная строка попадает в него тем же вызовом, что и на экран, поэтому стенд не может разойтись с игрой — текст, который игра не нарисовала, в проверку не попадёт. Считаются чернила глифов из атласа, а не lineHeight: номинальная рамка объявляла вылетом строку, которая на самом деле влезает. Журнал выключен в игре и включается только стендом, так что кадр не подорожал.\n• Проверка идёт по достижимым логическим кадрам, а не по размерам окон. Игра рисует в логические пиксели (logicalScreenSize: в альбоме высота 720, в портрете ширина 720), и 21 окно от 640×480 до 3440×1440 схлопывается в 11 кадров: 960×720, 1152×720, 1200×720, 1280×720, 1728×720 и портреты 720×960, 720×1024, 720×1152, 720×1280, 720×1568, 720×1600. Прежние проверки на 640×480, 800×480, 1024×600 и 1080×1920 мерели кадры, которых в игре не бывает.\n• Дары дня: карточки заданий начинались поверх панели заголовка — край шапки считался как топ-бар (68/46), а под ним лежит панель 94 px. Теперь 68/44 + 4 + 94.\n• Арена прослушивания: панель была жёстко 250/48/780, при кадре 720 px вылезала за правый край и накрывала «РЫВОК ГОТОВ» и строку резонаторов. Теперь она по ширине кадра и ниже полос боссов (342 в портрете, 200 в альбоме), панель трека — тоже в ширину кадра.\n• Справка: восемь строк арсенала — это 1054 px, на кадре 720×960 список уходил под нижний край и ложился на кнопки «ВЕРНУТЬСЯ В МЕНЮ» и «СЛОВАРЬ». Число строк теперь считается по высоте кадра. Третья подсказка (723 px) на узком кадре заменяется короткой. Название предмета ужимается под подпись тира: «Клятва Последнего Рассвета» наезжала на «АРТЕФАКТ • ТИР 5» на 11 px. Две кнопки футера делят одну строку вместо наезда на 34 px при кадре 720.\n• Управление: описание схемы «Левый большой палец ведёт стик…» — 480 px, а карточка на кадре 1152–1280 даёт 322–365 px: строка срезалась левым краем. Переносится по ширине карточки.\n• Финал кампании: строка итогов 738 px при кадре 720 — делится по смыслу на две; три кнопки в ряд (3×320 + 36) не влезали, «БЕСКОНЕЧНЫЙ РЕЖИМ» уезжал за край — в портрете они встают столбиком.\n• Выход с добычей: «СОБРАНО ЗОЛОТА…» — 749 px при кадре 720, делится на две строки.\n• Внешний вид кнопок: подсказка последней строки (844) ложилась на «СБРОСИТЬ ВНЕШНИЙ ВИД» (842) — превью больше не занимает их место.\n• Выбор героя: на узкой карточке (960×720 — 280 px) описание занимает четыре строки, и «ПОБЕДЫ НАД БОССАМИ» ложилось на «между забегами»; счётчик идёт за переносом.\n• HUD не рисуется под полноэкранными окнами (прокачка, сундук, конец забега): их баннеры ложились на верхнюю полосу. Пауза оставлена как была — там HUD виден за окном, и это правильно. В портретном HUD подсказки пересчитаны (−29/−16): хвост второй строки срезался о нижний край.\n• Итог: 23 экрана × 11 кадров — 0 вылетов, 0 наложений, 0 обрезок, код возврата 0. Стенд проверен мутацией: возврат панели арены на y=48 даёт 21 наложение, то есть он ловит именно то, что должен.\n• Хеши экранов (1280×720) сменились там, где правилась геометрия: справка d0e03f1c → cdd12cea, управление b0beafd1 → 922ee70b, выбор героя 1b4acf2e → 3b09a2fa, сундук 2e19657e → 924339d5, прокачка c3563983 → b82e0a7f, дары дня c8f29886 → 645600bd. Остальные не изменились ни на пиксель.\n• Честно: проверено на стенде, а не на живых устройствах. Как это читается на реальном телефоне с его плотностью и вырезом, стенд не знает.",
             "Дары дня: ежедневные задания, крутка и жетоны на один бой.\n• Девятый пункт меню «ДАРЫ ДНЯ» и клавиша G: три задания, крутка и четыре жетона на бой. Задания меняются в полночь по местным часам — это единственное место в игре, где важен календарь.\n• Всё дневное выводится из номера дня арифметикой, а не из rand(): один день даёт одни и те же задания и ту же последовательность круток в любом забеге, после перезапуска и на любом устройстве. «Перекрутить, пока не выпадет хорошее» нельзя без правки файла сейва, а сервер игре не нужен — она офлайн.\n• Задания: убить врагов, собрать золото, продержаться, открыть сундуки, взять уровней за бой, победить стражей. Время и уровни считаются по лучшему бою — задание «продержаться 5 минут» суммой трёх коротких смертей было бы бухгалтерией, а не заданием; остальные копятся между забегами.\n• Награда за задание — золото, жетон крутки или жетон на бой. Награда забирается один раз: у кнопки три состояния (не готово, забрать, забрано), повторный клик и перезапуск её не удваивают.\n• Крутка: одна бесплатная в день плюс дополнительные за задания. Шансы написаны на экране до нажатия: золото 55%, жетон на бой 30%, жетон крутки 10%, крупное золото 5%. Пятая крутка дня всегда даёт жетон на бой — полоса из пяти золотых круток подряд читается как сломанная крутилка, даже когда она честная.\n• Жетоны на один бой: нажива (+25% золота), стойкость (+25% здоровья), ярость (+12% урона), удача (+1 замена прокачки на каждом уровне и +4% элит). Жетон сгорает на старте и действует ровно этот бой — второй забег идёт без него, что видно и по счётчику, и по множителю.\n• Аномалии забега: один из шести правил на бой (тихая ночь, кровавая луна, тёплый пепел, густая тьма, ранний прорыв, щедрое эхо). Правило объявляется на старте и видно в паузе — аномалия, о которой игрок узнаёт по факту смерти, это не правило, а слух. Поправки в пределах ±10%, чтобы не ломать ровный темп из 2.12.14.\n• Замена прокачки стала счётчиком, а не флагом: без жетона удачи по-прежнему одна замена на уровень.\n• Найдено и починено по пути: в радиальном меню у пунктов не было заливки — сектора рисовались на фоне арены, лишь бы попали в таблицу заливок. «Безопасные эхо» тоже читались как список.\n• Сейв вырос с 120 до 204 байт, версия 10. Старый файл читается как есть: ранги кузницы, печати, развилки и рекорды на месте, дневные счётчики начинаются с нуля и задания выдаются в первый же запуск.\n• Новый стенд tools/daily_probe.cpp проверяет обещания, а не числа: стабильность дня, различие дней, однократность награды, гарантию пятой крутки, расход жетонов, «жетон — один бой», учёт прогресса (сумма против лучшего боя), все шесть аномалий за 400 забегов и чтение старых сейвов трёх размеров.\n• Замер: темп не поехал. 15 минут, 12 зёрен: 32,2 уровня, золото 24,3–31,4 тыс. (1,29 раза), медиана 3,0 награды в минуту, худшая минута 1,5 — «ОК: темп ровный». Разброс золота между забегами вырос с 1,07 до 1,29 раза: это и есть добавленная случайность, и она осталась внутри порога 2,0.\n• Честно: дневные задания проверены стендом, а не живой неделей игры. Сколько дней подряд игрок захочет их закрывать — вопрос к людям, а не к арифметике.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
@@ -15198,14 +15236,28 @@ struct Game {
         r.drawRoundedRect(helpPad, 82, helpW, 82, 10, 0xFF6852A0, 2);
         r.drawText(FONT_SMALL, helpPad + 18, 92, keyHint("WASD / СТРЕЛКИ — движение  •  ПРОБЕЛ / SHIFT — рывок  •  Q — суперумение"), 0xFFE0D8F8);
         r.drawText(FONT_SMALL, helpPad + 18, 113, keyHint("1–4 / ЛКМ — улучшение  •  R — замена  •  ПКМ — бег за курсором  •  M / N — звук"), 0xFFE0D8F8);
-        r.drawText(FONT_SMALL, helpPad + 18, 134, keyHint("O — настройки  •  ESC — назад  •  1% врагов применяет тактики перехвата и уклонения"), 0xFFBEEAFF);
+        // Третья подсказка — 723 px: в кадре 720 px она срезалась правым краем.
+        // Короткий вариант той же мысли укладывается в 682 px.
+        char setupLine[160];
+        snprintf(setupLine, sizeof(setupLine), "%s",
+                 keyHint("O — настройки  •  ESC — назад  •  1% врагов применяет тактики перехвата и уклонения"));
+        if (r.textWidth(FONT_SMALL, setupLine) > helpW - 36)
+            snprintf(setupLine, sizeof(setupLine), "%s",
+                     keyHint("O — настройки  •  ESC — назад  •  1% врагов — тактики ИИ"));
+        r.drawText(FONT_SMALL, helpPad + 18, 134, setupLine, 0xFFBEEAFF);
 
-        const int visibleRows = portraitHelp ? 8 : 4;
+        const int listTop = 174, cardH = 104, rowStep = 111;
+        // Сколько строк помещается по высоте кадра. Восемь строк — это 1054 px:
+        // на 720×960 список уходил под нижний край и ложился на кнопки
+        // «В МЕНЮ» / «СЛОВАРЬ». Футер — две строки подсказок и кнопка 48 px.
+        const int footerTop = SCREEN_H - 56;
+        const int hintSpace = 2 * FONT_SMALL.lineHeight + 10;
+        const int fitRows = std::max(1, (footerTop - hintSpace - 6 - listTop + 8) / rowStep);
+        const int visibleRows = std::min(portraitHelp ? 8 : 4, fitRows);
         const int totalRows = (ITEM_COUNT + 1) / 2;
         const int maxScroll = std::max(0, totalRows - visibleRows);
         const std::vector<int> arsenalOrder = getArsenalItemOrder();
         arsenalScrollRow = std::max(0, std::min(maxScroll, arsenalScrollRow));
-        const int listTop = 174, cardH = 104, rowStep = 111;
         const int colGap = compactHelp ? 20 : 24;
         const int cardW = compactHelp
             ? (SCREEN_W - 3 * helpPad - colGap) / 2
@@ -15230,9 +15282,16 @@ struct Game {
                 r.fillRoundedRect(x, y, cardW, cardH, 9, 0xFF18122E, 247);
                 r.drawRoundedRect(x, y, cardW, cardH, 9, edge, 2);
                 r.drawWeaponIcon(x + 24, y + 26, item, 17);
-                r.drawText(compactHelp ? FONT_SMALL : FONT_MED, x + 50, y + 9, ITEM_DEFS[item].name, 0xFFFFE068);
                 char tier[32];
                 snprintf(tier, sizeof(tier), "%s • ТИР %d", ITEM_DEFS[item].isWeapon ? "ОРУЖИЕ" : "АРТЕФАКТ", getItemTier(item));
+                // Название ужимается под подпись тира: «Клятва Последнего
+                // Рассвета» — 300 px, а на 1152×720 карточка даёт 536 px, и
+                // строка наезжала на «АРТЕФАКТ • ТИР 5» на 11 px.
+                const BakedFont& nameFont = compactHelp ? FONT_SMALL : FONT_MED;
+                const int tierW = r.textWidth(FONT_SMALL, tier);
+                r.drawText(nameFont, x + 50, y + 9,
+                           fitText(r, nameFont, ITEM_DEFS[item].name, cardW - 70 - tierW - 10).c_str(),
+                           0xFFFFE068);
                 r.drawTextRight(FONT_SMALL, x + cardW - 18, y + (compactHelp ? 23 : 13), tier, edge);
                 r.drawTextWrapped(FONT_SMALL, x + 50, y + 37, cardW - 70,
                                   ITEM_DEFS[item].desc, 0xFFD0C8E8, false);
@@ -15264,19 +15323,24 @@ struct Game {
         r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, hintY + FONT_SMALL.lineHeight,
             keyHint("КОЛЁСО МЫШИ  •  ↑ / ↓ — СТРОКА  •  PGUP / PGDN — ЭКРАН"), 0xFFBEB3D4);
 
-        const int bw = std::min(320, SCREEN_W - 48), bh = 48;
-        const int bx = (SCREEN_W - bw) / 2, by = SCREEN_H - 56;
+        // Две кнопки в футере делят одну строку: «ВЕРНУТЬСЯ В МЕНЮ [ESC]» —
+        // 273 px, «СЛОВАРЬ [G]» — 135, и при кадре 720 px правая наезжала на
+        // левую на 34 px. Ширины считаются от кадра, а не берутся фиксированными.
+        const int footerW = SCREEN_W - 48, footerGap = 16;
+        const int gw = std::min(300, footerW * 45 / 100), gh = 48;
+        const int bw = std::min(320, footerW - gw - footerGap), bh = 48;
+        const int footerTotal = bw + gw + footerGap;
+        const int bx = (SCREEN_W - footerTotal) / 2, by = SCREEN_H - 56;
         const bool hov = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
         r.fillRoundedRect(bx, by, bw, bh, 10, hov ? 0xFF483480 : 0xFF281C48);
         r.drawRoundedRect(bx, by, bw, bh, 10, 0xFFFFD858, 2);
-        r.drawTextCentered(FONT_MED, SCREEN_W / 2, by + 12, keyHint("ВЕРНУТЬСЯ В МЕНЮ [ESC]"), 0xFFFFFFFF);
+        r.drawTextCentered(FONT_MED, bx + bw / 2, by + 12, keyHint("ВЕРНУТЬСЯ В МЕНЮ [ESC]"), 0xFFFFFFFF);
         if (mouseClicked && hov) {
             sound.play(SFX_CLICK, 0.02f);
             state = STATE_MENU;
         }
         // Glossary lives next to the arsenal: the same screen explains the vocabulary.
-        const int gw = std::min(300, SCREEN_W - 48), gh = 48;
-        const int gx = SCREEN_W - gw - (SCREEN_W - 48 - gw > 40 ? 40 : 12), gy = by;
+        const int gx = bx + bw + footerGap, gy = by;
         const bool ghov = mouseX >= gx && mouseX <= gx + gw && mouseY >= gy && mouseY <= gy + gh;
         r.fillRoundedRect(gx, gy, gw, gh, 10, ghov ? 0xFF2F5A46 : 0xFF1D3A30);
         r.drawRoundedRect(gx, gy, gw, gh, 10, 0xFF9FE5A4, 2);
@@ -15764,15 +15828,26 @@ struct Game {
         const float camY = playerY - SCREEN_H * 0.5f;
         renderWorld(r, camX, camY);
         renderHUD(r, camX, camY);
-        r.fillRoundedRect(250, 48, 780, 78, 10, 0xEF100B1C);
-        r.drawRoundedRect(250, 48, 780, 78, 10, 0xFFFFD878, 2);
-        r.drawTextCentered(FONT_MED, SCREEN_W / 2, 57, "АРЕНА ПРОСЛУШИВАНИЯ БОССА", 0xFFFFE078);
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, 86, "1–4: босс/тема   •   H: орда   •   ESC: меню", 0xFFE4D8C8);
+        // Панель арены — поверх свободной полосы, а не поверх HUD: в портрете
+        // верхние 330 px заняты полосами боссов, в ландшафте центральная
+        // колонка тянется до 194 px (три полосы боссов). Прежние жёсткие
+        // 250/48/780 при кадре 720 px вылезали за правый край и накрывали
+        // «РЫВОК ГОТОВ» и строку резонаторов.
+        const bool arenaPortraitHud = SCREEN_W < 1100;
+        const int arenaPanelW = std::min(780, SCREEN_W - 24);
+        const int arenaPanelX = (SCREEN_W - arenaPanelW) / 2;
+        const int arenaPanelY = arenaPortraitHud ? 342 : 200;
+        r.fillRoundedRect(arenaPanelX, arenaPanelY, arenaPanelW, 78, 10, 0xEF100B1C);
+        r.drawRoundedRect(arenaPanelX, arenaPanelY, arenaPanelW, 78, 10, 0xFFFFD878, 2);
+        r.drawTextCentered(FONT_MED, SCREEN_W / 2, arenaPanelY + 9, "АРЕНА ПРОСЛУШИВАНИЯ БОССА", 0xFFFFE078);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, arenaPanelY + 38, "1–4: босс/тема   •   H: орда   •   ESC: меню", 0xFFE4D8C8);
         if (sound.externalMusicActive()) {
-            // Bottom edge is free here; the panel above already sits over the boss phase bar.
-            r.fillRoundedRect(SCREEN_W / 2 - 330, SCREEN_H - 92, 660, 26, 7, 0xEF100B1C);
-            r.drawRoundedRect(SCREEN_W / 2 - 330, SCREEN_H - 92, 660, 26, 7, 0xFFB78AFF, 1);
-            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 86, "ИГРАЕТ ТРЕК ИЗ audio/  •  ВСТРОЕННАЯ ТЕМА В РЕЗЕРВЕ", 0xFFB78AFF);
+            // Нижняя полоса HUD — 32 px; панель трека встаёт над ней и в ширину
+            // кадра, иначе на 720 px она срезалась.
+            const int trackPanelW = std::min(660, SCREEN_W - 24);
+            r.fillRoundedRect((SCREEN_W - trackPanelW) / 2, SCREEN_H - 96, trackPanelW, 26, 7, 0xEF100B1C);
+            r.drawRoundedRect((SCREEN_W - trackPanelW) / 2, SCREEN_H - 96, trackPanelW, 26, 7, 0xFFB78AFF, 1);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, SCREEN_H - 90, "ИГРАЕТ ТРЕК ИЗ audio/  •  ВСТРОЕННАЯ ТЕМА В РЕЗЕРВЕ", 0xFFB78AFF);
         }
     }
 
@@ -16056,7 +16131,13 @@ struct Game {
             if (!renderBands(r, camX, camY)) {
                 renderWorld(r, camX, camY);
                 renderMusicTempoEffects(r);
-                renderHUD(r, camX, camY);
+                // Под модальным окном HUD не рисуется вовсе: прокачка, сундук и
+                // смерть закрывают экран целиком, и их баннеры ложились на
+                // верхнюю полосу HUD. Пауза — не в списке: там HUD виден за
+                // окном, и это правильно.
+                const bool fullScreenModal = state == STATE_LEVELUP || state == STATE_CHEST ||
+                                             state == STATE_GAMEOVER;
+                if (!fullScreenModal) renderHUD(r, camX, camY);
             }
             if (state == STATE_PLAYING && bossPhaseEventTimer > 0.0f) renderBossPhaseTransition(r);
 

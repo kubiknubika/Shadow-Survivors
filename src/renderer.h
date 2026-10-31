@@ -1185,7 +1185,46 @@ struct Renderer {
         }
     }
 
+    // Журнал нарисованного текста. Стенд вёрстки (tools/ui_probe.cpp) читает
+    // его вместо пикселей: строка попадает в журнал тем же вызовом, что и на
+    // экран, поэтому стенд не может разойтись с игрой — текст, который игра не
+    // нарисовала, не появится и в проверке. Тег слоя ставит вызывающий код:
+    // 0 — интерфейс, 1 — мир (там подписи перекрываются по природе).
+    struct TextLayout {
+        int x = 0, y = 0, w = 0, h = 0;
+        int clipX0 = 0, clipY0 = 0, clipX1 = 0, clipY1 = 0;
+        bool clipped = false;
+        int tag = 0;
+        const BakedFont* font = nullptr;
+        std::string text;
+    };
+    std::vector<TextLayout> textLayouts;
+    // Журнал выключен по умолчанию: в игре он не нужен и не должен стоить
+    // ни одной аллокации на строку. Включает его только стенд вёрстки.
+    bool textJournalEnabled = false;
+    int textTag = 0;
+
+    void clearTextLayouts() { textLayouts.clear(); }
+
+    void recordTextLayout(const BakedFont& font, int x, int y, const char* text, int alpha) {
+        if (!textJournalEnabled || !text || alpha <= 0) return;
+        TextLayout tl;
+        tl.x = x;
+        tl.y = y;
+        tl.w = textWidth(font, text);
+        tl.h = font.lineHeight;
+        tl.clipped = clipActive;
+        const int bx0 = clipActive ? clipX0 : 0, by0 = clipActive ? clipY0 : bandY0;
+        const int bx1 = clipActive ? clipX1 : SCREEN_W, by1 = clipActive ? clipY1 : bandY1;
+        tl.clipX0 = bx0; tl.clipY0 = by0; tl.clipX1 = bx1; tl.clipY1 = by1;
+        tl.tag = textTag;
+        tl.font = &font;
+        tl.text = text;
+        textLayouts.push_back(tl);
+    }
+
     void drawText(const BakedFont& font, int x, int y, const char* text, uint32_t col, bool shadow = true, int alpha = 255) {
+        recordTextLayout(font, x, y, text, alpha);
         if (shadow) drawTextRaw(font, x + 2, y + 2, text, 0xFF040208, (alpha * 225) >> 8);
         drawTextRaw(font, x, y, text, col, alpha);
     }
