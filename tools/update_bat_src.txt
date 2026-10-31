@@ -24,8 +24,8 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 rem Своя версия: по ней видно, свежий файл запущен или закешированный.
-set "SELF=2.10.31"
-set SELF_VER=2.12.3
+set "SELF=2.10.32"
+set SELF_VER=2.12.4
 set "REMOTE=origin"
 set "WANT=%~1"
 set "FORCED="
@@ -116,6 +116,35 @@ echo Поэтому обновляться буду с другой ветки, 
 :branch_live
 >> "%LOG%" echo current: branch=!BRANCH! commit=!HEAD_BEFORE! version=!VER_BEFORE!
 echo.
+
+rem --- целостность самого апдейтера --------------------------------------------
+rem Копия на диске могла разойтись с веткой: скачана вручную, осталась из старого
+rem архива, вернулась из stash. Тогда cmd читает чужие строки и выполняет их
+rem обрывки - в консоли появляется "команда не найдена", а шаги выглядят
+rem необъяснимо. Сверяем файл с HEAD: если в ветке та же или более свежая версия,
+rem ставим её на место и просим перезапуск.
+set "SELF_HASH="
+set "SELF_HEAD="
+set "DISK_VER="
+set "HEAD_VER="
+for /f "delims=" %%h in ('git hash-object update.bat 2^>nul') do set "SELF_HASH=%%h"
+for /f "delims=" %%h in ('git rev-parse --verify --quiet HEAD:update.bat 2^>nul') do set "SELF_HEAD=%%h"
+if not defined SELF_HEAD goto self_check_ok
+if /i "!SELF_HASH!"=="!SELF_HEAD!" goto self_check_ok
+git show HEAD:update.bat > "%BUILD%\self.tmp" 2>nul
+for /f "tokens=2 delims==" %%v in ('findstr /b /c:"set SELF_VER=" "%BUILD%\self.tmp"') do set "HEAD_VER=%%v"
+for /f "tokens=2 delims==" %%v in ('findstr /b /c:"set SELF_VER=" update.bat') do set "DISK_VER=%%v"
+del "%BUILD%\self.tmp" >nul 2>&1
+if not defined HEAD_VER goto self_check_ok
+if defined DISK_VER call :vercmp "!HEAD_VER!" "!DISK_VER!"
+if defined DISK_VER if "!VERCMP!"=="-1" goto self_check_ok
+echo update.bat на диске отличается от версии в ветке !HEAD_VER! - ставлю версию из ветки.
+git checkout HEAD -- update.bat >nul 2>&1
+echo Закрой это окно и запусти update.bat снова: в памяти остался уже прочитанный файл.
+if defined CP_OLD chcp !CP_OLD! >nul 2>&1
+if "!HOLD!"=="1" pause
+exit /b 3
+:self_check_ok
 
 rem --- 1/5: свежие данные с GitHub --------------------------------------------
 echo [1/5] git fetch --all --prune
