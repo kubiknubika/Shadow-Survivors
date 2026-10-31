@@ -47,27 +47,34 @@ int main(int argc, char** argv) {
     // и меню менялись бы 20 октября, 31 декабря и в любой другой день, когда
     // календарь включает окно. -1 — праздников нет, 0..7 — принудительный
     // праздник, -2 — календарь на закреплённой дате 31 октября 2026.
-    struct Case { const char* name; int state; int holiday; };
+    // Пятый вариант карты — рисунок пола: 0..4 или -1 «как в режиме». У каждого
+    // рисунка свой хеш, иначе новый пол в одном варианте проходил бы мимо сверки.
+    struct Case { const char* name; int state; int holiday; int layout; };
     const Case cases[] = {
-        {"меню", STATE_MENU, -1},
-        {"настройки", STATE_SETTINGS, -1},
-        {"справка", STATE_HELP, -1},
-        {"патчноуты", STATE_PATCH_NOTES, -1},
-        {"зал славы", STATE_HALL, -1},
-        {"выбор героя", STATE_HERO_SELECT, -1},
-        {"бой", STATE_PLAYING, -1},
-        {"пауза", STATE_PAUSED, -1},
-        {"сундук", STATE_CHEST, -1},
-        {"прокачка", STATE_LEVELUP, -1},
-        {"управление", STATE_CONTROLS_SETUP, -1},
-        {"вид кнопок", STATE_BUTTON_LOOK, -1},
-        {"праздники", STATE_HOLIDAY, -2},
-        {"бой праздник", STATE_PLAYING, 0},
+        {"меню", STATE_MENU, -1, -1},
+        {"настройки", STATE_SETTINGS, -1, -1},
+        {"справка", STATE_HELP, -1, -1},
+        {"патчноуты", STATE_PATCH_NOTES, -1, -1},
+        {"зал славы", STATE_HALL, -1, -1},
+        {"выбор героя", STATE_HERO_SELECT, -1, -1},
+        {"бой", STATE_PLAYING, -1, -1},
+        {"бой плиты", STATE_PLAYING, -1, 0},
+        {"бой мозаика", STATE_PLAYING, -1, 1},
+        {"бой ритуал", STATE_PLAYING, -1, 2},
+        {"бой разлив", STATE_PLAYING, -1, 3},
+        {"бой осыпь", STATE_PLAYING, -1, 4},
+        {"пауза", STATE_PAUSED, -1, -1},
+        {"сундук", STATE_CHEST, -1, -1},
+        {"прокачка", STATE_LEVELUP, -1, -1},
+        {"управление", STATE_CONTROLS_SETUP, -1, -1},
+        {"вид кнопок", STATE_BUTTON_LOOK, -1, -1},
+        {"праздники", STATE_HOLIDAY, -2, -1},
+        {"бой праздник", STATE_PLAYING, 0, -1},
     };
     SCREEN_W = 1280; SCREEN_H = 720;
     for (const Case& c : cases) {
         Renderer r; r.resize(SCREEN_W, SCREEN_H);
-        Game g; g.simulationMode = true;
+        Game g; g.simulationMode = true; g.ignoreSavedState = true;   // кадр не зависит от сейва с диска
         g.touchControls = touchUi;      // до init(): от него зависит первый экран
         srand(4242); g.init();
         // Праздничная часть прибита гвоздями: выключена или выбрана вручную.
@@ -82,6 +89,7 @@ int main(int argc, char** argv) {
         g.holidayBannerShown = false;
         g.holidayWaveTimer = 40.0f;
         g.gameMode = MODE_ENDLESS;
+        g.arenaLayoutOverride = c.layout;
         g.runTime = 240.0f;
         for (int i = 0; i < 5; ++i) g.itemLevels[i] = 3;
         g.renderThreads = threads;

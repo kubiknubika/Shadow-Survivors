@@ -10,6 +10,8 @@
 //     build/shot settings 1280x720 settings.bmp
 //     build/shot settings 720x1280 settings_portrait.bmp 2
 //     build/shot play 960x720 play.bmp 1 3
+//     build/shot play 1280x720 mosaic.bmp 1 1 layout1   # прибить вариант пола
+//     build/shot play 1280x720 ash.bmp 1 2 time480       # место: 4-й акт (пепел)
 //
 // Мыши в стенде нет: игра рисует курсор-«◎» в точке указателя, и по умолчанию
 // он приходился ровно на середину кадра — поверх текста. Стенд уводит курсор за
@@ -68,6 +70,8 @@ int main(int argc, char** argv) {
     int buttonScale = TOUCH_SIZE_DEFAULT;
     int iconStyle = -1; // -1: как в настройках (по умолчанию вектор)
     int pinYear = 0, pinMonth = 1, pinDay = 1;   // «сегодня» для снимка, если задано
+    int forcedLayout = -1;                       // рисунок пола, если задан
+    float runTimeArg = 240.0f;                   // время забега: от него место (палитра)
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "touch") == 0) touchUi = true;
         // icons0/icons1/icons2 — стиль иконок: ВЕКТОР, ИИ-АРТ, ЦВЕТ. Арсенал
@@ -81,6 +85,14 @@ int main(int argc, char** argv) {
         // date20260217 — закрепить «сегодня» этим днём: пересечения окон
         // (Валентин + Лунный новый год) выпадают на конкретные годы, и без
         // этого снимок их не покажет.
+        // layoutN — прибить рисунок пола (0..4): на снимке видно, что именно
+        // добавил вариант карты, а не только «картинка другая».
+        else if (strncmp(argv[i], "layout", 6) == 0 && argv[i][6] >= '0' && argv[i][6] <= '4')
+            forcedLayout = argv[i][6] - '0';
+        // time480 — время забега в секундах: место меняется каждые 150 с, и без
+        // этого снимок всегда показывал бы второй акт.
+        else if (strncmp(argv[i], "time", 4) == 0 && atoi(argv[i] + 4) > 0)
+            runTimeArg = (float)atoi(argv[i] + 4);
         else if (strncmp(argv[i], "date", 4) == 0 && strlen(argv[i]) == 12) {
             pinYear = atoi(std::string(argv[i] + 4, 4).c_str());
             pinMonth = atoi(std::string(argv[i] + 8, 2).c_str());
@@ -103,11 +115,13 @@ int main(int argc, char** argv) {
     r.resize(w, h);
     Game g;
     g.simulationMode = true;
+    g.ignoreSavedState = true;   // кадр не зависит от сейва, оставленного соседним прогоном
     g.touchControls = touchUi;
     srand(4242);
     g.init();
     g.gameMode = MODE_ENDLESS;
-    g.runTime = 240.0f;
+    g.arenaLayoutOverride = forcedLayout;
+    g.runTime = runTimeArg;
     g.cheatGodMode = true;
     g.options.graphicsLevel = graphics;
     g.options.touchButtonScale = touchClampSize(buttonScale);

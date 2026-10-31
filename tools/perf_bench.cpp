@@ -23,6 +23,7 @@
 //     build/perf_bench 600 1280x720 1 loot   # сцена с тысячами самоцветов
 //     build/perf_bench 600 1280x720 2 trail  # с тлеющей тропой (предмет 40)
 //     build/perf_bench 600 1280x720 2 g3     # ступень графики: g1 высокое … g4 эконом
+//     build/perf_bench 600 1280x720 1 g1 layout1   # рисунок пола: 0 плиты … 4 осыпь
 //
 // Пятый аргумент (g0…g4) задаёт уровень графики из настроек: g0 — АВТО,
 // g1 — высокое (так рисует 2.10.47 и выше), g2 — среднее, g3 — быстрое,
@@ -83,16 +84,24 @@ int main(int argc, char** argv) {
     for (int i = argi + 2; i < argc; ++i)
         if (argv[i][0] == 'g' && argv[i][1] >= '0' && argv[i][1] <= '4')
             graphicsLevel = argv[i][1] - '0';
+    // Вариант карты задаётся явно: у мозаики на кадр приходится больше всего
+    // линий (сетка ромбов через весь экран), и её цена — верхняя граница.
+    int arenaLayout = -1;
+    for (int i = argi + 2; i < argc; ++i)
+        if (strncmp(argv[i], "layout", 6) == 0 && argv[i][6] >= '0' && argv[i][6] <= '4')
+            arenaLayout = argv[i][6] - '0';
 
     SCREEN_W = w; SCREEN_H = h;
     Renderer r;
     r.resize(w, h);
     Game g;
     g.simulationMode = true;
+    g.ignoreSavedState = true;   // сцена и хеш не зависят от сейва с диска
     g.init();
     g.state = STATE_PLAYING;
     g.gameMode = MODE_ENDLESS;
     g.cheatGodMode = true;
+    g.arenaLayoutOverride = arenaLayout;
     g.renderThreads = threads;
     g.options.graphicsLevel = graphicsLevel;
     g.runTime = 480.0f;

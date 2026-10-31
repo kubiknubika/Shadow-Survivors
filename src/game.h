@@ -221,7 +221,7 @@ static inline int holidayMonsterSlot(int type) {
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 153;
+static constexpr int PATCH_NOTES_COUNT = 154;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -237,28 +237,66 @@ struct ArenaTheme {
     float moteSpeed;       // px/s vertical drift (negative = rises)
     int moteCount;
     int propKind;
+    uint32_t pool;         // разлив на полу (вариант карты «РАЗЛИВ»)
+    uint32_t glint;        // блик на воде/расплаве
 };
 static const ArenaTheme ARENA_THEMES[5] = {
     // I — Руины: cold mossy stone, violet seals, slow dust falling through brazier light.
     {"РУИНЫ", 0xFF141120, 0xFF1A1529, 0xFF211B33, 0xFF0B0813,
      0xFF765BC0, 0xFFAE91FF, 0xFFFF7018, 0xFFFFE050,
-     0xFFC7BAFF, 0xFF2B2350, 34.0f, 26, 0},
+     0xFFC7BAFF, 0xFF2B2350, 34.0f, 26, 0, 0xFF2E4C6E, 0xFF8FC0E8},
     // II — Крипта: wet bone-stained brick, candlelight, dry ash sifting down.
     {"КРИПТА", 0xFF1A1018, 0xFF22131C, 0xFF301722, 0xFF0D070C,
      0xFFB54B62, 0xFFFF8290, 0xFF7CE4F0, 0xFFE8FFFF,
-     0xFFE8D6C4, 0xFF3A1722, 22.0f, 30, 1},
+     0xFFE8D6C4, 0xFF3A1722, 22.0f, 30, 1, 0xFF5E2A3E, 0xFFD890A4},
     // III — Собор: teal glass and light shafts, cold blue fire, motes rising.
     {"СОБОР", 0xFF0D1A22, 0xFF122330, 0xFF193444, 0xFF05111A,
      0xFF38A5B8, 0xFF80E8F2, 0xFF6AD8FF, 0xFFE0FBFF,
-     0xFF9FE8FF, 0xFF123A4E, -18.0f, 34, 2},
+     0xFF9FE8FF, 0xFF123A4E, -18.0f, 34, 2, 0xFF2A7C9A, 0xFFB8F0FF},
     // IV — Пепельный трон: charcoal and ember, fast rising sparks.
     {"ПЕПЕЛЬНЫЙ ТРОН", 0xFF1E120D, 0xFF27160E, 0xFF3C2112, 0xFF120A06,
      0xFFD48B3A, 0xFFFFC974, 0xFFFF6A18, 0xFFFFD070,
-     0xFFFFB070, 0xFF48200E, -46.0f, 40, 3},
+     0xFFFFB070, 0xFF48200E, -46.0f, 40, 3, 0xFF8E3212, 0xFFFFC080},
     // V — Сердце Архива: ink-blue stacks, pale glyph light, drifting pages.
     {"СЕРДЦЕ АРХИВА", 0xFF111027, 0xFF171439, 0xFF221D4C, 0xFF080617,
      0xFF6E7BE8, 0xFFB9C6FF, 0xFFA8C8FF, 0xFFFFFFFF,
-     0xFFDCE2FF, 0xFF1B1A46, -8.0f, 28, 4},
+     0xFFDCE2FF, 0xFF1B1A46, -8.0f, 28, 4, 0xFF3A38A0, 0xFFC0CCFF},
+};
+
+// ── Layout variants ────────────────────────────────────────────────────────────
+// Арена — бесконечный пол, и до сих пор у каждого места был ровно один рисунок:
+// кладка, печати раз в 32 плитки, жаровни раз в 384 px. Второй бой в том же акте
+// выглядел как первый, потому что он и был первым. Теперь у пола есть пять
+// рисунков, и они чередуются от дела к делу (в бесконечном режиме — каждые 90 с,
+// не совпадая с шагом смены палитры в 150 с).
+enum ArenaLayoutKind {
+    ARENA_SLABS = 0,   // кладка и печати — прежний рисунок
+    ARENA_MOSAIC,      // мозаичный медальон в центре арены и вставки в плитах
+    ARENA_RITUAL,      // крупный ритуальный круг, печати вдвое чаще
+    ARENA_POOLS,       // разливы с бликом по краю
+    ARENA_RUBBLE,      // осыпи, обломки колонн, битые плиты
+    ARENA_LAYOUT_COUNT
+};
+
+struct ArenaLayoutDef {
+    const char* name;
+    int centerpiece;   // 0 — нет, 1 — мозаичный медальон, 2 — ритуальный круг
+    bool pools;
+    bool rubble;
+    int sealMask;      // маска отбора плиток под печать: 31 редко, 15 часто, 63 совсем редко
+    // Общий налёт на весь пол: даже если крупных фигур в кадр не попало, вариант
+    // узнаётся по тону — тёплая пыль осыпи, холодная вода разлива, лиловый
+    // витраж мозаики. Альфа нарочно низкая: он подкрашивает, а не закрашивает.
+    uint32_t wash;
+    int washAlpha;
+};
+
+static const ArenaLayoutDef ARENA_LAYOUTS[ARENA_LAYOUT_COUNT] = {
+    {"ПЛИТЫ", 0, false, false, 31, 0x00000000, 0},
+    {"МОЗАИКА", 1, false, false, 63, 0xFF5C3E9E, 46},
+    {"РИТУАЛ", 2, false, false, 15, 0xFF1E6E7E, 44},
+    {"РАЗЛИВ", 0, true, false, 63, 0xFF123A60, 56},
+    {"ОСЫПЬ", 0, false, true, 31, 0xFF7A4A1E, 44},
 };
 
 // Monster rosters are per place, not global: the crypt sends shields and brutes, the
@@ -919,6 +957,12 @@ struct Game {
     GameOptions options;
     BalanceConfig balance;
     bool simulationMode = false; // Disables disk writes in the offline balance lab.
+    // Стендам кадра (screen_check, screen_shot, perf_bench) нечего читать с диска:
+    // файл сейва, оставленный соседним прогоном, подменял золото в HUD, и один и
+    // тот же экран давал разные хеши — это выглядело как «кадр зависит от числа
+    // потоков». Стенды, которые как раз проверяют чтение настроек (touch_probe),
+    // этот флаг не ставят и работают с файлами как игра.
+    bool ignoreSavedState = false;
 
     // Input state
     bool keyW = false, keyA = false, keyS = false, keyD = false;
@@ -982,6 +1026,7 @@ struct Game {
         messages.missingClips = voiceMissing;
     }
     bool debugOverlay = false;     // панель отладки (F3 / кнопка «ОТЛ»)
+    int arenaLayoutOverride = -1;  // -1 — по правилам режима; 0..4 — стенд/отладка
 
     // ── Касания (Android) ──────────────────────────────────────────────────
     // touchControls включает «телефонный» интерфейс: подсказки без названий
@@ -1317,6 +1362,7 @@ struct Game {
     }
 
     void loadOptions() {
+        if (ignoreSavedState) return;   // см. loadSave: стенд живёт на умолчаниях
         struct LegacyOptions27 { uint32_t magic; int sfx, music, hitFx, shake, advisor; };
         struct LegacyOptions28 { uint32_t magic; int sfx, music, hitFx, shake, advisor, abyss; uint32_t hiddenVersion; };
         struct LegacyOptions294 {
@@ -1544,6 +1590,9 @@ struct Game {
     }
 
     void loadSave() {
+        // Стенд кадра не читает сейв с диска: файл, оставленный соседним
+        // прогоном, подменял бы золото и прогресс в кадре (см. ignoreSavedState).
+        if (ignoreSavedState) return;
         struct LegacySaveV1 {
             uint32_t magic;
             int gold, bestTimeSec, bestKills, totalRuns;
@@ -2738,6 +2787,29 @@ struct Game {
             return std::max(0, std::min(4, act - 1));
         }
         return std::max(0, std::min(4, (int)(runTime / 150.0f)));
+    }
+
+    // Какой рисунок пола у этой арены. В кампании — от номера дела (соседние
+    // дела одного акта идут на разном полу), в бесконечном режиме — по времени,
+    // со своим шагом: палитра меняется каждые 150 с, рисунок — каждые 90 с,
+    // поэтому их сочетания не повторяются подряд.
+    // Камень обломков берётся не из палитры пола (она нарочно тёмная), а из
+    // отдельной светлой таблицы: обломок должен читаться на полу любого места.
+    uint32_t arenaStone(bool shaded) const {
+        static const uint32_t lit[5] = {0xFF6E6382, 0xFF8A6E7C, 0xFF5A8C9C, 0xFF9A7044, 0xFF5E62A8};
+        static const uint32_t shade[5] = {0xFF40384E, 0xFF523E48, 0xFF33505C, 0xFF5E4326, 0xFF3A3C6E};
+        const int t = std::max(0, std::min(4, currentArenaTheme()));
+        return shaded ? shade[t] : lit[t];
+    }
+
+    int currentArenaLayout() const {
+        if (arenaLayoutOverride >= 0)
+            return std::max(0, std::min(ARENA_LAYOUT_COUNT - 1, arenaLayoutOverride));
+        if (gameMode == MODE_STORY) {
+            const int mission = std::max(0, selectedStoryMission);
+            return (mission * 2 + 1) % ARENA_LAYOUT_COUNT;
+        }
+        return std::max(0, std::min(ARENA_LAYOUT_COUNT - 1, ((int)(runTime / 90.0f)) % ARENA_LAYOUT_COUNT));
     }
 
     int getDifficultySegment() const {
@@ -6677,6 +6749,9 @@ struct Game {
 
     void renderWorld(Renderer& r, float camX, float camY) {
         const int themeIndex = currentArenaTheme();
+        const int layoutIndex = currentArenaLayout();
+        const ArenaLayoutDef& layout = ARENA_LAYOUTS[std::max(0, std::min(ARENA_LAYOUT_COUNT - 1, layoutIndex))];
+        const int sealMask = layout.sealMask;
         // 1. Tiled Dark Fantasy Cobblestone Floor + Glowing Rune Circles & Torches
         int tileSize = 64;
         int startTileX = (int)floorf(camX / tileSize) - 1;
@@ -6702,6 +6777,20 @@ struct Game {
                 if (floorDecor && (h & 3) == 1) {
                     r.drawLine(sx + 2, sy + 2, sx + tileSize - 3, sy + 2, theme.floorDetail, 1, 130);
                     r.drawLine(sx + 2, sy + 2, sx + 2, sy + tileSize - 3, theme.floorDetail, 1, 110);
+                }
+                // Вариант карты правит кладку поверх палитры: мозаика режет плиты
+                // на четыре части, осыпь ломает угол и оставляет крошку, разлив
+                // оставляет тёмный шов сырости. Это видно с первого шага, ещё до
+                // того как на арене появится первый враг.
+                if (floorDecor && layoutIndex == ARENA_MOSAIC && (h & 3) == 0) {
+                    r.drawLine(sx + tileSize / 2, sy + 3, sx + tileSize / 2, sy + tileSize - 4, theme.floorDetail, 1, 120);
+                    r.drawLine(sx + 3, sy + tileSize / 2, sx + tileSize - 4, sy + tileSize / 2, theme.runeOuter, 1, 70);
+                } else if (floorDecor && layoutIndex == ARENA_RUBBLE && (h & 7) == 4) {
+                    r.drawLine(sx + 4, sy + tileSize - 12, sx + 22, sy + tileSize - 4, theme.mortar, 2, 200);
+                    r.fillCircle(sx + 30, sy + tileSize - 9, 2, theme.floorDetail);
+                    r.fillCircle(sx + 38, sy + tileSize - 14, 1, theme.mortar);
+                } else if (floorDecor && layoutIndex == ARENA_POOLS && (h & 15) == 6) {
+                    r.fillRect(sx + 2, sy + tileSize - 8, tileSize - 4, 6, theme.pool, 90);
                 }
                 // Each place paves its floor differently — this is the first thing that tells
                 // the player "new case, new place" before a single enemy appears.
@@ -6764,14 +6853,14 @@ struct Game {
                 // World props must never be stacked on each other. A seal keeps its tile only
                 // when it wins the hash against its right/bottom neighbours, so seals always
                 // sit at least two tiles apart instead of clumping into mush.
-                auto sealWins = [](int cx, int cy) {
+                auto sealWins = [sealMask](int cx, int cy) {
                     const uint32_t own = (uint32_t)(cx * 73856093 ^ cy * 19349663);
-                    if ((own & 31u) != 7u) return false;
+                    if ((own & (uint32_t)sealMask) != 7u) return false;
                     for (int oy = 0; oy <= 1; ++oy)
                         for (int ox = 0; ox <= 1; ++ox) {
                             if (!ox && !oy) continue;
                             const uint32_t other = (uint32_t)((cx + ox) * 73856093 ^ (cy + oy) * 19349663);
-                            if ((other & 31u) == 7u) return false;
+                            if ((other & (uint32_t)sealMask) == 7u) return false;
                         }
                     return true;
                 };
@@ -6840,6 +6929,178 @@ struct Game {
                 }
             return false;
         };
+
+        // Налёт варианта на весь пол. Рисуется после плиток и печатей, но до
+        // крупных фигур и тем более до сущностей: подкрашивается пол, а не бой.
+        if (layout.washAlpha > 0)
+            r.fillRect(0, 0, SCREEN_W, SCREEN_H, layout.wash, layout.washAlpha);
+
+        // МОЗАИКА: пол выложен крупной шахматкой из квадратов 128 px, в каждом
+        // светлом — ромб. Рисунок идёт через весь экран, поэтому вариант виден
+        // сразу и не зависит от того, попал ли в кадр медальон.
+        if (layoutIndex == ARENA_MOSAIC) {
+            // Шаг 192 px, а не 128: ромбы в каждом светлом квадрате — это
+            // единственный вариант, который стоит заметных миллисекунд кадра
+            // (линии через весь экран), и лишнюю четверть линий он не окупает.
+            const int cell = 192;
+            const int gx0 = (int)floorf(camX / cell) - 1, gy0 = (int)floorf(camY / cell) - 1;
+            for (int gy = gy0; gy <= gy0 + SCREEN_H / cell + 2; ++gy) {
+                for (int gx = gx0; gx <= gx0 + SCREEN_W / cell + 2; ++gx) {
+                    const int sx = gx * cell - (int)camX, sy = gy * cell - (int)camY;
+                    const ArenaTheme& theme = ARENA_THEMES[themeIndex];
+                    if (((gx + gy) & 1) == 0)
+                        r.fillRect(sx, sy, cell - 1, cell - 1, theme.floorDetail, 150);
+                    // Швы между квадратами: без них шахматка читается как случайные
+                    // пятна, а не как кладка.
+                    r.drawLine(sx, sy, sx + cell - 1, sy, theme.mortar, 1, 210);
+                    r.drawLine(sx, sy, sx, sy + cell - 1, theme.mortar, 1, 210);
+                    if (((gx + gy) & 1) != 0) continue;
+                    const int cx = sx + cell / 2, cy = sy + cell / 2;
+                    r.drawLine(cx, cy - 54, cx + 54, cy, theme.runeInner, 2, 105);
+                    r.drawLine(cx + 54, cy, cx, cy + 54, theme.runeInner, 2, 105);
+                    r.drawLine(cx, cy + 54, cx - 54, cy, theme.runeInner, 2, 105);
+                    r.drawLine(cx - 54, cy, cx, cy - 54, theme.runeInner, 2, 105);
+                }
+            }
+        }
+
+        // ── Вариант карты: крупные напольные фигуры ──────────────────────────
+        // Медальон и ритуальный круг втрое крупнее печатей и стоят на своей
+        // сетке 512 px: печать — это узор, а это уже место. Их не бывает по
+        // две в одной ячейке, и на месте лендмарка они уступают ему дорогу.
+        if (layout.centerpiece > 0) {
+            const int cell = 512;
+            const int gx0 = (int)floorf(camX / cell) - 1, gy0 = (int)floorf(camY / cell) - 1;
+            for (int gy = gy0; gy <= gy0 + SCREEN_H / cell + 2; ++gy) {
+                for (int gx = gx0; gx <= gx0 + SCREEN_W / cell + 2; ++gx) {
+                    const uint32_t seed = (uint32_t)(gx * 2654435761u) ^ (uint32_t)(gy * 40503u);
+                    const int wx = gx * cell + 136 + (int)((seed >> 7) % 240);
+                    const int wy = gy * cell + 136 + (int)((seed >> 15) % 240);
+                    if (landmarkNear(wx, wy, 190)) continue;
+                    const int cx = wx - (int)camX, cy = wy - (int)camY;
+                    if (cx < -140 || cx > SCREEN_W + 140 || cy < -140 || cy > SCREEN_H + 140) continue;
+                    const ArenaTheme& theme = ARENA_THEMES[themeIndex];
+                    if (layout.centerpiece == 1) {
+                        // МОЗАИКА: каменный медальон из чередующихся секторов.
+                        r.fillCircle(cx, cy, 86, theme.floorB, 190);
+                        r.drawCircleRing(cx, cy, 86, 2, theme.mortar, 210);
+                        for (int wedge = 0; wedge < 12; ++wedge) {
+                            const float a0 = wedge * 0.5235988f, a1 = a0 + 0.5235988f;
+                            if (wedge % 2 == 0) continue;
+                            const int mx = cx + (int)(cosf((a0 + a1) * 0.5f) * 58.0f);
+                            const int my = cy + (int)(sinf((a0 + a1) * 0.5f) * 58.0f);
+                            r.fillCircle(mx, my, 22, theme.floorDetail, 200);
+                            r.drawCircleRing(mx, my, 22, 1, theme.runeOuter, 70);
+                        }
+                        r.drawCircleRing(cx, cy, 56, 2, theme.runeOuter, 120);
+                        r.fillCircle(cx, cy, 26, theme.floorA, 220);
+                        r.drawCircleRing(cx, cy, 26, 2, theme.runeInner, 150);
+                        const int breathe = (int)(sinf(globalTime * 1.1f + (seed & 255u)) * 2.0f);
+                        r.addGlow(cx, cy, 30 + breathe, theme.runeInner, 26);
+                        r.drawCircleRing(cx, cy, 12, 1, theme.runeOuter, 150);
+                    } else {
+                        // РИТУАЛ: двойное кольцо с насечками и знаком внутри.
+                        r.addGlow(cx, cy, 96, theme.runeOuter, 26);
+                        r.drawCircleRing(cx, cy, 96, 2, theme.runeOuter, 110);
+                        r.drawCircleRing(cx, cy, 74, 1, theme.runeInner, 150);
+                        r.drawCircleRing(cx, cy, 30, 1, theme.runeOuter, 130);
+                        for (int tick = 0; tick < 16; ++tick) {
+                            const float a = tick * 0.3926991f + globalTime * 0.18f;
+                            r.drawLine(cx + (int)(cosf(a) * 76.0f), cy + (int)(sinf(a) * 76.0f),
+                                       cx + (int)(cosf(a) * 94.0f), cy + (int)(sinf(a) * 94.0f),
+                                       theme.runeInner, tick % 4 == 0 ? 2 : 1, tick % 4 == 0 ? 150 : 90);
+                        }
+                        int tri[3][2];
+                        for (int v = 0; v < 3; ++v) {
+                            const float a = -1.5707963f + v * 2.0943951f + globalTime * 0.09f;
+                            tri[v][0] = cx + (int)(cosf(a) * 52.0f);
+                            tri[v][1] = cy + (int)(sinf(a) * 52.0f);
+                        }
+                        for (int v = 0; v < 3; ++v)
+                            r.drawLine(tri[v][0], tri[v][1], tri[(v + 1) % 3][0], tri[(v + 1) % 3][1],
+                                       theme.runeInner, 2, 120, true);
+                        r.fillCircle(cx, cy, 6, theme.runeInner, 190);
+                    }
+                }
+            }
+        }
+
+        // ── РАЗЛИВ: лужи с бликом по краю ────────────────────────────────────
+        // Пять перекрывающихся кругов дают неровный край без отдельного примитива
+        // эллипса. Блик дрожит медленно, чтобы вода читалась как вода, а не как
+        // синяя плитка.
+        if (layout.pools) {
+            const int cell = 288;
+            const int gx0 = (int)floorf(camX / cell) - 1, gy0 = (int)floorf(camY / cell) - 1;
+            for (int gy = gy0; gy <= gy0 + SCREEN_H / cell + 2; ++gy) {
+                for (int gx = gx0; gx <= gx0 + SCREEN_W / cell + 2; ++gx) {
+                    const uint32_t seed = (uint32_t)(gx * 2246822519u) ^ (uint32_t)(gy * 3266489917u);
+                    if ((seed & 7u) > 2u) continue;
+                    const int wx = gx * cell + 40 + (int)((seed >> 6) % 200);
+                    const int wy = gy * cell + 40 + (int)((seed >> 14) % 200);
+                    if (landmarkNear(wx, wy, 96) || torchNear(wx, wy, 70)) continue;
+                    const int cx = wx - (int)camX, cy = wy - (int)camY;
+                    if (cx < -80 || cx > SCREEN_W + 80 || cy < -80 || cy > SCREEN_H + 80) continue;
+                    const ArenaTheme& theme = ARENA_THEMES[themeIndex];
+                    static const int blobX[5] = {0, -52, 46, -23, 32};
+                    static const int blobY[5] = {0, 23, 18, -32, -27};
+                    static const int blobR[5] = {66, 44, 46, 38, 35};
+                    for (int b = 0; b < 5; ++b)
+                        r.fillCircle(cx + blobX[b], cy + blobY[b], blobR[b], theme.pool, 205);
+                    const float shimmer = sinf(globalTime * 1.4f + (float)(seed & 511u)) * 0.5f + 0.5f;
+                    r.drawCircleRing(cx, cy, 66, 1, theme.glint, 45 + (int)(shimmer * 55.0f));
+                    r.drawLine(cx - 40, cy - 14, cx + 8, cy - 25, theme.glint, 2, 60 + (int)(shimmer * 60.0f), true);
+                    r.drawLine(cx - 6, cy + 26, cx + 42, cy + 13, theme.glint, 1, 34 + (int)(shimmer * 44.0f), true);
+                }
+            }
+        }
+
+        // ── ОСЫПЬ: обломки колонн и щебень ───────────────────────────────────
+        // Камень рисуется с тенью и стоит ПОСЛЕ луж, но ДО факелов: он лежит на
+        // полу, а не поверх огня.
+        if (layout.rubble) {
+            const int cell = 176;
+            const int gx0 = (int)floorf(camX / cell) - 1, gy0 = (int)floorf(camY / cell) - 1;
+            for (int gy = gy0; gy <= gy0 + SCREEN_H / cell + 2; ++gy) {
+                for (int gx = gx0; gx <= gx0 + SCREEN_W / cell + 2; ++gx) {
+                    const uint32_t seed = (uint32_t)(gx * 668265263u) ^ (uint32_t)(gy * 374761393u);
+                    if ((seed & 1u) != 0u) continue;
+                    const int wx = gx * cell + 30 + (int)((seed >> 5) % 120);
+                    const int wy = gy * cell + 30 + (int)((seed >> 13) % 120);
+                    if (landmarkNear(wx, wy, 110) || torchNear(wx, wy, 96)) continue;
+                    const int x = wx - (int)camX, y = wy - (int)camY;
+                    if (x < -60 || x > SCREEN_W + 60 || y < -60 || y > SCREEN_H + 60) continue;
+                    const ArenaTheme& theme = ARENA_THEMES[themeIndex];
+                    const int kind = (int)((seed >> 21) % 3u);
+                    const uint32_t stone = arenaStone(false), stoneDark = arenaStone(true);
+                    r.drawShadow(x, y + 9, 30, 9);
+                    if (kind == 0) {
+                        // Поваленный барабан колонны: два обломка на боку.
+                        r.fillRoundedRect(x - 38, y - 16, 62, 30, 12, stone);
+                        r.drawRoundedRect(x - 38, y - 16, 62, 30, 12, stoneDark, 2);
+                        r.fillRoundedRect(x + 26, y - 6, 22, 14, 6, stone);
+                        r.drawRoundedRect(x + 26, y - 6, 22, 14, 6, stoneDark, 1);
+                        for (int fl = -1; fl <= 1; ++fl)
+                            r.drawLine(x - 30, y + fl * 7, x + 18, y + fl * 7, stoneDark, 1, 170);
+                    } else if (kind == 1) {
+                        // Куча щебня: четыре камня и осколки помельче.
+                        r.fillCircle(x - 18, y, 15, stone);
+                        r.fillCircle(x + 13, y + 4, 12, stoneDark);
+                        r.fillCircle(x - 1, y - 14, 11, stone);
+                        r.fillCircle(x + 30, y - 6, 6, stoneDark);
+                        r.drawCircleRing(x - 18, y, 15, 2, stoneDark, 200);
+                        r.drawCircleRing(x - 1, y - 14, 11, 1, stoneDark, 190);
+                    } else {
+                        // Треснувшая плита, приподнятая с одного края.
+                        r.fillRoundedRect(x - 34, y - 12, 68, 26, 4, stone);
+                        r.fillRect(x - 34, y + 10, 68, 6, stoneDark);
+                        r.drawLine(x - 26, y - 12, x + 8, y + 12, stoneDark, 3, 230);
+                        r.drawLine(x + 8, y + 12, x + 28, y - 6, stoneDark, 2, 210);
+                        r.drawLine(x + 28, y - 6, x + 34, y + 8, stoneDark, 1, 180);
+                    }
+                }
+            }
+        }
 
         // Flickering Braziers / Torches on a larger grid (every 384 px)
         int torchGrid = 384;
@@ -7573,7 +7834,7 @@ struct Game {
         const Monster* debugBoss = nullptr;
         for (const Monster& m : monsters) if (m.isBoss && m.hp > 0.0f) { debugBoss = &m; break; }
         const bool hasBossRow = debugBoss != nullptr;
-        const int rows = 17 + (hasBossRow ? 1 : 0) + (hasMessage ? 2 : 0);
+        const int rows = 18 + (hasBossRow ? 1 : 0) + (hasMessage ? 2 : 0);
         const int labelW = 176;
         const int boxW = std::min(SCREEN_W - 16, 486), boxH = rows * lineH + pad * 2;
         const int bx = 8, by = 8;
@@ -7652,6 +7913,14 @@ struct Game {
             put(16, "ГРАФИКА", line,
                 frameMsSmooth > 20.0f ? 0xFFFF9B7E : (frameMsSmooth > 13.0f ? 0xFFFFD878 : 0xFF9BF0B0));
         }
+        // Карта: место (палитра) и рисунок пола (вариант) — в бесконечном режиме
+        // они меняются в разные моменты, и без этой строки неясно, что видишь.
+        {
+            const int mapTheme = currentArenaTheme();
+            const int mapLayout = std::max(0, std::min(ARENA_LAYOUT_COUNT - 1, currentArenaLayout()));
+            snprintf(line, sizeof(line), "%s  •  %s", ARENA_THEMES[mapTheme].name, ARENA_LAYOUTS[mapLayout].name);
+            put(17, "КАРТА", line, 0xFF9FE8FF);
+        }
         if (hasBossRow) {
             // Что страж делает прямо сейчас и сколько ждать приёма. Раньше это
             // приходилось вычитывать из боя: таймеров на экране не было.
@@ -7671,9 +7940,9 @@ struct Game {
                      stateWord, (int)bdist, std::max(0.0f, debugBoss->abilityTimer),
                      countBossRetinue(),
                      bossRetinueCap(debugBoss->bossType, debugBoss->bossPhase, debugBoss->bossReinforced));
-            put(17, "СТРАЖ", line, 0xFFFFC878);
+            put(18, "СТРАЖ", line, 0xFFFFC878);
         }
-        const int msgRow = 17 + (hasBossRow ? 1 : 0);
+        const int msgRow = 18 + (hasBossRow ? 1 : 0);
         if (hasMessage) {
             snprintf(line, sizeof(line), "%s  %.1f С", storySpeaker.c_str(), storyTimer);
             put(msgRow, "НА ЭКРАНЕ", line, 0xFFC9A6FF);
@@ -8725,10 +8994,20 @@ struct Game {
         for (int i = 0; i < ITEM_COUNT; ++i) shown += itemLevels[i] > 0;
         char loadoutTitle[96];
         snprintf(loadoutTitle, sizeof(loadoutTitle), "СБОРКА ГЕРОЯ  •  %d / %d ПРЕДМЕТОВ", shown, getBuildLimit());
-        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, my + 66, loadoutTitle, 0xFFC8C0E0);
+        r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, my + 58, loadoutTitle, 0xFFC8C0E0);
+        // Карта — часть забега, а не фона: место и рисунок пола называются здесь
+        // словами, иначе смену варианта замечаешь только глазами по картинке.
+        {
+            const int mapTheme = currentArenaTheme();
+            const int mapLayout = std::max(0, std::min(ARENA_LAYOUT_COUNT - 1, currentArenaLayout()));
+            char mapLine[128];
+            snprintf(mapLine, sizeof(mapLine), "КАРТА: %s  •  %s", ARENA_THEMES[mapTheme].name,
+                     ARENA_LAYOUTS[mapLayout].name);
+            r.drawTextCentered(FONT_SMALL, SCREEN_W / 2, my + 80, mapLine, 0xFF9FE8FF);
+        }
 
         // Two wide columns with one compact line per item keep every possible slot visible.
-        const int gx = mx + 36, gy = my + 102, itemW = 312, rowStep = 23;
+        const int gx = mx + 36, gy = my + 112, itemW = 312, rowStep = 23;
         int slot = 0;
         for (int i = 0; i < ITEM_COUNT; ++i) {
             if (itemLevels[i] <= 0) continue;
@@ -12205,6 +12484,7 @@ struct Game {
             "2.11.0 • ПРАЗДНИКИ: ВОСЕМЬ ОКОН В КАЛЕНДАРЕ",
             "2.11.1 • ПРАЗДНИКИ: КОГДА ОКНА ПЕРЕСЕКАЮТСЯ",
             "2.11.2 • ЭФФЕКТЫ: ГРОМКОСТЬ ПО ЗАМЕРУ",
+            "2.11.3 • КАРТА: ПЯТЬ РИСУНКОВ ПОЛА",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -12360,6 +12640,7 @@ struct Game {
                     "Праздники: игра сама смотрит на календарь и на две недели включает свой набор — не скачивая ничего.\n• Восемь праздников и их окна: ХЭЛЛОУИН 20 октября — 5 ноября, НОВЫЙ ГОД 20 декабря — 14 января (окно через год), ДЕНЬ ВЛЮБЛЁННЫХ 7—17 февраля, ДЕНЬ СВЯТОГО ПАТРИКА 12—20 марта, ПАСХА от −3 до +7 дней от православной Пасхи, МАСЛЕНИЦА от −55 до −49 дней от неё же, ЛУННЫЙ НОВЫЙ ГОД от −5 до +8 дней от лунного нового года, ИВАН КУПАЛА 1—8 июля. День мёртвых, Октоберфест, День благодарения и 1 апреля отброшены: у них нет своего механизма, и они повторяли бы Хэллоуин и осень.\n• Пасха считается александрийской пасхалией с поправкой +13 дней: 2024 — 5 мая, 2025 — 20 апреля, 2026 — 12 апреля, 2027 — 2 мая; стенд проверяет эти даты. Плавающие окна считаются по календарю конкретного года, а не «примерно»: в високосном феврале Масленица съезжает на день, и это видно в окне.\n• У каждого праздника четыре символа и два персонажа — всего 48 рисунков, и нарисованы все. Символы: фонарь Джека, призрак, летучая мышь, конфета; ёлка, снежинка, звезда, подарок; сердце, стрела Купидона, роза, конфета-сердце; клевер, горшок золота, радуга, кружка; крашенка, кролик, корзина, цыплёнок; блин, солнце, чучело, самовар; хунбао, фонарь, мандарин, хлопушка; кострище, папоротник, венок, вода. Персонажи: ведьма на метле и тыквоголовый; снеговик и олень; Купидон и сердцеед; лепрекон и зелёный гоблин; пасхальный кролик и крашенка-каталка; чучело Зимы и блин-катун; лунный дракон и лев-страж; русалка и огнецвет.\n• Дракон остался персонажем, а символом Лунного года стал красный конверт: голову дракона в 86 px сколько ни рисуй, она читалась как кот, рыба или ёжик, а хунбао узнаётся сразу.\n• В бою всё это работает, а не лежит на картинке: пятнадцатая часть обычных мобов подменяется персонажами праздника, а каждые 38–50 секунд приходит праздничный набег из пяти и более фигур. В начале забега показывается строка «СЕГОДНЯ: …», искры смерти красятся цветом праздника.\n• Экран «ПРАЗДНИКИ» — календарь, а не список: слева восемь окон со статусом («идёт, ещё N дней» / «через N дней»), сверху лента года (белая черта — сегодня), ниже «год целиком» — восемь полос, по которым видно и длину каждого окна, и их пересечения. Внизу — четыре символа и два персонажа выбранного праздника и три переключателя.\n• Вход в календарь двумя путями: восьмой сектор колеса меню («ПРАЗДНИКИ / КАЛЕНДАРЬ») и строка «Праздники» в настройках. Клавиша H открывает календарь из меню и настроек, стрелки листают праздники, ←/→ прогоняют проверку праздника, [ и ] сдвигают дату на день — так любой праздник виден в любой день без перевода часов системы.\n• Настройки праздников: включить/выключить все, включить выбранный вручную (по календарю / Хэллоуин / … / Купала) и сдвиг даты. Ручной выбор идёт вне окна и подписан на экране прямо.\n• Файл настроек вырос с 84 до 96 байт. Прежний читается как есть: праздники включаются по умолчанию, проверка стоит на «по календарю», сдвиг нулевой.\n• Стенд tools/holiday_preview.cpp рисует лист всех 48 рисунков в двух масштабах (86 и 26 px) и проверяет каждый: пустой, совпавший пиксель в пиксель с другим, обрезанный краем листа или нечитаемый на 26 px — провал. Сейчас 48 из 48 годных; лист лежит в design/holidays_sheet.png.\n• Рисунки проверяются не только «есть ли картинка»: у симметричных фигур половины обязаны совпасть пиксель в пиксель (сравнение с отражением, без допуска), у односторонних центр не должен уезжать больше чем на 7 px. Чтобы это стало правдой, зеркалит сам примитив: круг, линия, прямоугольник и треугольник рисуются сразу парой x и −x, а построчная заливка треугольника считает границы через ceil/floor — lround уводил её на столбец и давал ту самую кривизну. Симметричных рисунков 40 из 48, односторонние восемь (ведьма, дракон, русалка, стрела, конфета, кружка, хлопушка, папоротник) — они такими и задуманы.\n• Календарь проверен на 1280×720, 800×600 и 720×1280: на узком экране три переключателя встают столбиком, «год целиком» растягивается по свободной высоте, длинные имена переносятся по словам.\n• Честно: APK не собирался и на телефоне игра не запускалась — здесь нет Windows, JDK, SDK и NDK. Окна дат проверены стендом, но поведение в полночь на живом устройстве и то, как читается цвет на солнце, проверить можно только на телефоне.\n• Хеши экранов (стенд screen_check, 1280×720): меню 3884608a, настройки 96cab203, праздники 337b66e4. В остальных девяти не сдвинулось ни пикселя — справка 651a9753, зал славы ed4a13f3, выбор героя c2922f77, бой a10a052c, пауза 963d73f0, сундук e67a9b20, прокачка 10e11738, управление cc94248a, вид кнопок ade8ff7d — ровно как в 2.10.56. Патчноуты в этот список не входят: их картинка меняется от самой этой заметки, и сверять там нечего.\n• Стенд сам решает, какой сегодня праздник: в нём праздники выключены либо выбраны вручную, а календарь рисуется на закреплённой дате 31 октября 2026. Иначе хеши менялись бы 20 октября и 31 декабря, и проверка «картинка та же» ничего бы не значила. По той же причине первый праздничный набег отсчитывается без rand(): лишний вызов сдвигал общий поток случайности и менял сцену боя целиком.\n• Снимки экранов больше не тащат за собой курсор: стенд уводит его за край кадра, аргумент cursor возвращает обратно.",
             "Праздники: окна пересекаются, и теперь видно, кто из них главный.\n• Пересечения — не редкость: за 2024–2040 годы Лунный новый год накрывает День влюблённых 92 дня, Масленица — Лунный 26, Масленица — Валентина 21, Масленица — Патрика 19. В 18 днях совпадают сразу три праздника: 16–17 февраля 2026, 12–17 февраля 2029, 14–17 февраля 2034, 10–15 февраля 2037. Раньше в такой день побеждал тот, кто выше в таблице, — и 14 февраля 2024, 2027, 2032 и 2035 годов игра показывала Лунный новый год вместо Дня влюблённых.\n• Новое правило: идёт тот праздник, чей собственный день ближе к сегодняшнему — по кругу года, чтобы окно через 31 декабря не считалось за 364 дня. 14 февраля всегда День влюблённых, 17 марта — Патрик, даже когда на них наезжает Масленица. Ничья решается прежним порядком (Пасха, Масленица, Лунный, Новый год, Валентин, Патрик, Купала, Хэллоуин), так что выбор всегда один и тот же.\n• Шапка календаря называет соседей: «2026 ГОД • СЕГОДНЯ 17 ФЕВРАЛЯ • ЛУННЫЙ НОВЫЙ ГОД (ещё 9 дн.) • ВМЕСТЕ: МАСЛЕНИЦА, ДЕНЬ ВЛЮБЛЁННЫХ». В списке «ИДЁТ • N» стоит только у ведущего праздника, остальные подписаны «ВМЕСТЕ • N» приглушённым цветом. Список по-прежнему полный: ни один праздник из календаря не исчезает.\n• Шапка календаря была невидима с 2.11.0: линия-разделитель рисовалась как «рамка 255 px» (шестой аргумент drawRect — толщина, а не прозрачность) и заливала верхние 52 px полосой 0x3A3050. Теперь «ПРАЗДНИКИ» и строка «СЕГОДНЯ …» на месте.\n• Экран открывается на том празднике, который идёт сейчас, а не на Хэллоуине — первом в списке. Раньше шапка говорила «идёт Лунный новый год», а панель справа показывала Хэллоуин.\n• Подсказка внизу («↑↓ — ПРАЗДНИК …») больше не обрезается нижним краем: глиф шрифта 19 px, а строка стояла на 16 px от края.\n• Сдвиг даты (проверка праздника) не переходил через Новый год: из 20 декабря сдвиг на 30 дней давал 19 января того же года. Теперь граница года учитывается, и окно Нового года после сдвига считается по своему году.\n• Стенд tools/screen_shot.cpp получил аргумент dateYYYYMMDD — снимок календаря на закреплённую дату (date20260217). Дата проходит через тот же HolidayToday, что и в игре, поэтому снимок не может показать не тот день.\n• Проверка — новый стенд tools/holiday_probe.cpp: перебирает все дни 2024–2060 годов. В свой день всегда побеждает свой праздник, активных праздников в дне не больше трёх (дней с тремя — 18), список отсортирован по расстоянию и детерминирован, окно Нового года через 31 декабря считается как «через день», а не «через 364». Три мутации (расстояние всегда ноль, расстояние без круга года, сортировка по старой таблице) стенд ловит.\n• Хеши экранов (screen_check, 1280×720): праздники 3f868c27 (было 337b66e4). Остальные двенадцать не сдвинулись ни на пиксель — тот же список, что в 2.11.0.",
             "Эффекты: теперь их громкость — результат замера, а не побочный итог формулы синтеза.\n• Банк выровнен: у клинка пик был 1899 против 6800 у огненного шара, и в бою клинок оказывался на 10 дБ тише — не потому, что так задумано, а потому что так сложилась формула. Теперь у каждого эффекта снимается постоянная составляющая, срезаются первые 1,5 мс и последние 8 мс (обрыв волны давал щелчок: у «тира» и «фазы босса» хвост обрывался на 1414 и 2625), а пик приводится к одной величине. Порядок важен: снимать постоянную составляющую до срезания концов нельзя — срезанный хвост сам сдвигает среднее, и у клика выходило −1 %.\n• Числа подобраны по замеру через настоящий микшер: боевые эффекты стоят в 1,7–2 раза выше подложки музыки, сигналы (уровень, сундук, босс, смерть, тир, возрождение) — в 2,4–3,4 раза, сбор трофеев — на уровне подложки и ниже. Раньше удар давал пик 0,038 при подложке 0,112: эффекты тонули под музыкой, а самоцвет на 0,005 не было слышно вовсе.\n• Двадцать одновременных ударов держат пик 0,56 полной шкалы: до колена лимитера (0,62) дело не доходит, клиппинга нет.\n• У удара и клинка теперь по три записи: за бой они звучат десятки раз, и одна волна узнаётся даже сквозь джиттер высоты. Варианты отличаются частотой, длиной и долей шума, выровнены по громкости (не больше 1,6× по RMS) и выбираются счётчиком, а не rand(): лишний вызов rand() в play() сдвигал общий поток случайности и менял сцену боя целиком.\n• Громкость самоцвета больше не задаётся отдельным числом в play(): она в общей таблице, иначе правка таблицы молча не действовала на самый частый звук в игре.\n• Новый стенд tools/sfx_probe.cpp — 495 проверок: банк (пик, длина, постоянная составляющая, нули на концах, отсутствие одинаковых сэмплов и одинаковых вариантов), уровень каждого эффекта через микшер против подложки музыки, плотный бой, полифония и приоритеты, троттлинг, джиттер. Мутации (без нормализации — 20 провалов, всё тише — 23, один вариант вместо трёх — 2) пойманы.\n• Демо-дорожка design/sfx_demo.wav (16,7 с): все 23 эффекта по одному разу и кусок плотного боя, собрана тем же микшером, что и игра, — послушать можно без запуска.\n• Честно: слушал стенд, а не человек. Он ловит щелчки, провалы по громкости, клиппинг и «тот же звук», но не отвечает на вопрос, нравится ли звук. Проверить на слух стоит в наушниках и на телефоне.",
+            "Пол был один на место: пять кладок — по одной на каждый акт. Второй бой в том же акте выглядел как первый, потому что он и был первым.\n• Теперь рисунок пола — отдельная вещь от палитры места. Пять вариантов: ПЛИТЫ (кладка и печати, прежний вид), МОЗАИКА (шахматка 192 px с ромбами в светлых квадратах), РИТУАЛ (крупные круги-медальоны на сетке 512 px и печатей вдвое чаще), РАЗЛИВ (лужи с дрожащим бликом; в Руинах, Крипте и Соборе это вода, в Пепельном троне — расплав, в Сердце Архива — разлитые чернила), ОСЫПЬ (обломки колонн, кучи щебня и треснувшие плиты).\n• Вариант не зависит от места: пять мест на пять рисунков — двадцать пять разных арен. Роспись врагов при этом по-прежнему привязана к месту, поэтому знакомый бестиарий приходит на незнакомый пол, а не наоборот.\n• В кампании рисунок задаёт дело (соседние дела одного акта не повторяют пол), в бесконечном режиме он меняется каждые 90 с, а палитра — каждые 150 с: сочетания не повторяются подряд, и за десять минут забега игрок видит все пять.\n• Крупные фигуры стоят на своих сетках и не спорят с лендмарками и жаровнями: медальон уступает дорогу лендмарку, лужа и обломок — и лендмарку, и жаровне. Печати на полу теперь выбираются маской варианта, поэтому на «Ритуале» их ровно вдвое больше, а на «Мозаике» вдвое меньше.\n• Название карты видно словами: в паузе строка «КАРТА: КРИПТА • РИТУАЛ», в панели F3 — строка «КАРТА». По картинке вариант угадывается, но название не должно угадываться.\n• Цена кадра (стенд perf_bench, 160 мобов, 1280×720, один поток, ступень «высокое», максимум из трёх прогонов): ПЛИТЫ 5,9 мс против 5,7 до правки, РИТУАЛ 6,2, РАЗЛИВ 6,2, ОСЫПЬ 6,2, МОЗАИКА 6,5. Самый дорогой вариант — мозаика: её ромбы это линии через весь экран; запас до 16,7 мс остаётся.\n• Стенды: screen_check печатает теперь девятнадцать экранов — к «бою» добавились пять вариантов пола со своими хешами (бой плиты a10a052c — прежний бой, остальные четыре новые). screen_shot получил аргументы layoutN (прибить рисунок) и timeSEC (прибить время забега, то есть место), perf_bench — layoutN. Стенды больше не читают сейв и настройки с диска: файл, оставленный соседним прогоном, подменял золото в HUD, и один и тот же экран давал разные хеши — это выглядело как «кадр зависит от числа потоков», хотя потоков он не касался.\n• Честно: варианты проверены снимками в четырёх местах из пяти и на 1280×720; на телефоне в портрете смотрел только экран паузы, а в бою — нет.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
