@@ -225,7 +225,7 @@ static inline int holidayMonsterSlot(int type) {
 static constexpr int STORY_INTRO_VERSION = 4;
 static constexpr int PATCH_NOTES_VERSION = GAME_VERSION_NUM;
 // Every released version has one entry in the chronicle (see versions[]/notes[]).
-static constexpr int PATCH_NOTES_COUNT = 162;
+static constexpr int PATCH_NOTES_COUNT = 163;
 
 // ── Arena identity ──────────────────────────────────────────────────────────────
 // Each act is a different place, not the same floor with a new tint: stone, mortar,
@@ -474,7 +474,7 @@ static const ItemDef ITEM_DEFS[ITEM_COUNT] = {
     {30,false,"Чаша Переполнения", "Тир IV • избыток лечения даёт щит; тот поглощает урон раньше Покрова."},
     {31,false,"Осколок Последнего Удара", "Тир IV • перебор урона убийства бьёт до 3 врагов; цепочки нет."},
     {32,false,"Ключ Пепельного Ритма", "Тир IV • сбор самоцветов опыта заряжает всплеск, ускоряющий готовые атаки."},
-    {33,false,"Призма Перекрёстного Огня", "Тир IV • разные активные атаки по одной цели запускают рикошет по толпе."},
+    {33,false,"Призма Перекрёстного Огня", "Тир IV • три разных активных оружия бьют одну цель — рикошет по 2/3/4 соседям."},
     {34,false,"Угольный Фитиль", "Тир IV • крит активного оружия поджигает обычного врага; ожог не складывается."},
     {35,false,"Осколок Оттепели", "Тир IV • после оттепели: 6/8/10 урона по 2/3/4 соседям."},
     {36,false,"Печать Обратного Тока", "Тир IV • перехватывает обычный снаряд и направляет 8/12/16 урона во врага."},
@@ -1283,6 +1283,11 @@ struct Game {
     float emberGlobalCooldown = 0.0f;
     float frostShatterCooldown = 0.0f;
     float projectileParryCooldown = 0.0f;
+    // Счётчики срабатываний связок для аудита (tools/synergy_probe.cpp): без них
+    // «связка не срабатывает» и «срабатывает, но урон мизерный» неразличимы.
+    int crossfireProcCount = 0;
+    int emberProcCount = 0;
+    int frostShatterProcCount = 0;
     int ashRhythmSparkCount = 0;
     float ashRhythmFlashTimer = 0.0f;
     float ashTrailSpawnTimer = 0.0f;   // когда упадёт следующая метка тропы
@@ -2410,6 +2415,17 @@ struct Game {
         return tier >= 2 ? 4.0f : (tier == 1 ? 1.85f : 1.0f);
     }
     float getEvoMultiplier(int weaponId) const { return evolvedWeapons[weaponId] ? 1.65f : 1.0f; }
+    // Связки-артефакты (рикошет Призмы, ожог Фитиля, откол Оттепели) обещают
+    // конкретные числа: 24, 4-6, 6-10 урона. Это числа 2.10.x, когда оружие
+    // 8-го ранга било 2000-3000 в секунду, а теперь столько же бьёт 4-й ранг:
+    // к концу забега «+10 урона» — это 0.5 % удара, и артефакт-связка тихо
+    // перестаёт существовать. Множитель тянет их за рангом оружия: 1.00 на
+    // первом ранге, x1.84 на четвёртом, x2.96 на восьмом.
+    float getCouplingDamageScale() const {
+        int best = 1;
+        for (int i = 0; i < 7; ++i) best = std::max(best, itemLevels[i]);
+        return 1.0f + 0.28f * (float)(std::max(0, std::min(9, best)) - 1);
+    }
     // Роль оружия работает только по стражам: обычную волну АОЕ и так чистит.
     float getWeaponRoleBossMultiplier(int attackId) const {
         if (attackId < 0 || attackId >= 7) return 1.0f;
@@ -2616,17 +2632,17 @@ struct Game {
         if (itemId == 35) {
             const int rank = std::max(0, std::min(3, itemLevels[35]));
             char text[176];
-            if (rank == 0) snprintf(text, sizeof(text), "Переживший заморозку выпускает осколки: 6/8/10 урона по 2/3/4 соседям.");
+            if (rank == 0) snprintf(text, sizeof(text), "Переживший заморозку выпускает осколки: 20/28/36 урона по 2/3/4 соседям (растёт с рангом оружия).");
             else if (rank < 3) snprintf(text, sizeof(text), "Откол: %d цели в радиусе %.0f, %d урона • следующий ранг: %d цели, %d урона.", getFrostShatterTargetCount(rank), getFrostShatterRadius(rank), (int)getFrostShatterDamage(rank), getFrostShatterTargetCount(rank + 1), (int)getFrostShatterDamage(rank + 1));
-            else snprintf(text, sizeof(text), "Максимум: 4 цели в радиусе 108, по 10 урона • перезарядка 0,56 с; откол не цепляется.");
+            else snprintf(text, sizeof(text), "Максимум: 4 цели в радиусе 108, по 36 урона • перезарядка 0,56 с; откол не цепляется.");
             return std::string(text);
         }
         if (itemId == 34) {
             const int rank = std::max(0, std::min(3, itemLevels[34]));
             char text[160];
-            if (rank == 0) snprintf(text, sizeof(text), "Крит активного оружия поджигает цель: 4/5/6 тиков по 3/5/7 урона • ожог не складывается.");
+            if (rank == 0) snprintf(text, sizeof(text), "Крит активного оружия поджигает цель: 4/5/6 тиков по 12/18/24 урона (растёт с рангом оружия) • ожог не складывается.");
             else if (rank < 3) snprintf(text, sizeof(text), "Ожог: %d × %.0f урона • следующий ранг: %d тиков по %.0f.", getEmberTickCount(rank), getEmberTickDamage(rank), getEmberTickCount(rank + 1), getEmberTickDamage(rank + 1));
-            else snprintf(text, sizeof(text), "Максимум: 6 тиков по 7 урона за 3,66 с. Обычные цели и элиты; повтор не складывается.");
+            else snprintf(text, sizeof(text), "Максимум: 6 тиков по 24 урона за 3,66 с. Обычные цели и элиты; повтор не складывается.");
             return std::string(text);
         }
         if (itemId == 33) {
@@ -2634,7 +2650,7 @@ struct Game {
             char text[176];
             if (rank == 0) snprintf(text, sizeof(text), "4/3/3 разных активных оружия бьют одну цель за 2,2/2,5/2,8 с: рикошет поражает 2/3/4 соседа.");
             else if (rank < 3) snprintf(text, sizeof(text), "%d оружия / %.1f с → %d цели, %d урона. Следом: %d оружия / %d цели.", getCrossfireDistinctWeaponThreshold(rank), getCrossfireWindowSeconds(rank), getCrossfireTargetCount(rank), (int)getCrossfireDamage(rank), getCrossfireDistinctWeaponThreshold(rank + 1), getCrossfireTargetCount(rank + 1));
-            else snprintf(text, sizeof(text), "Макс.: 3 оружия / 2,8 с → 4 цели, 24 урона. Радиус 140; кд цели/общий 2/0,6 с.");
+            else snprintf(text, sizeof(text), "Макс.: 3 оружия / 2,8 с → 4 цели, 150 урона. Радиус 140; кд цели/общий 2/0,6 с.");
             return std::string(text);
         }
         if (itemId == 32) {
@@ -4607,7 +4623,7 @@ struct Game {
         return duration[std::max(0, std::min(3, rank))];
     }
     float getEmberTickDamage(int rank) const {
-        static const float damage[4] = {0.0f, 3.0f, 5.0f, 7.0f};
+        static const float damage[4] = {0.0f, 12.0f, 18.0f, 24.0f};
         return damage[std::max(0, std::min(3, rank))];
     }
     int getEmberTickCount(int rank) const {
@@ -4783,7 +4799,7 @@ struct Game {
         return true;
     }
     float getFrostShatterDamage(int rank) const {
-        static const float damage[4] = {0.0f, 6.0f, 8.0f, 10.0f};
+        static const float damage[4] = {0.0f, 20.0f, 28.0f, 36.0f};
         return damage[std::max(0, std::min(3, rank))];
     }
     float getFrostShatterRadius(int rank) const {
@@ -4833,7 +4849,8 @@ struct Game {
         }
         addFloatingText(x, y - 34.0f, "ЛЕДЯНОЙ ОТКОЛ", 0xFFB8F5FF, false);
         sound.play(SFX_FREEZE, 0.055f);
-        const float baseDamage = getFrostShatterDamage(rank);
+        const float baseDamage = getFrostShatterDamage(rank) * getCouplingDamageScale();
+        ++frostShatterProcCount;
         for (int k = 0; k < selectedCount; ++k) {
             const size_t targetIndex = selected[k];
             if (targetIndex >= monsters.size() || monsters[targetIndex].hp <= 0.0f) continue;
@@ -4854,7 +4871,8 @@ struct Game {
         target.emberTicksRemaining = getEmberTickCount(rank);
         target.emberTimer = getEmberDuration(rank);
         target.emberPulseTimer = 0.45f; // four/six ticks fit safely before the status expires.
-        target.emberDamagePerTick = getEmberTickDamage(rank);
+        target.emberDamagePerTick = getEmberTickDamage(rank) * getCouplingDamageScale();
+        ++emberProcCount;
         emberGlobalCooldown = getEmberApplyCooldown(rank);
         addFloatingText(target.x, target.y - target.radius - 12.0f, "УГОЛЬНЫЙ ОЖОГ", 0xFFFFA85A, false);
         if (options.hitEffectsEnabled) {
@@ -4911,7 +4929,7 @@ struct Game {
         return radius[std::max(0, std::min(3, rank))];
     }
     float getCrossfireDamage(int rank) const {
-        static const float damage[4] = {0.0f, 16.0f, 20.0f, 24.0f};
+        static const float damage[4] = {0.0f, 90.0f, 120.0f, 150.0f};
         return damage[std::max(0, std::min(3, rank))];
     }
     int getCrossfireTargetCount(int rank) const {
@@ -4961,7 +4979,8 @@ struct Game {
         }
         addFloatingText(originX, originY - 42.0f, "ПЕРЕКРЁСТНЫЙ ОГОНЬ!", 0xFF9CFFF0, true);
         sound.play(SFX_LIGHTNING, 0.055f);
-        const float baseDamage = getCrossfireDamage(rank);
+        const float baseDamage = getCrossfireDamage(rank) * getCouplingDamageScale();
+        ++crossfireProcCount;
         for (int k = 0; k < selectedCount; ++k) {
             const size_t targetIndex = selected[k];
             if (targetIndex >= monsters.size() || monsters[targetIndex].hp <= 0.0f) continue;
@@ -5432,7 +5451,10 @@ struct Game {
             weaponTimers[0] -= dt;
             if (weaponTimers[0] <= 0.0f) {
                 int lvl = itemLevels[0];
-                weaponTimers[0] = std::max(0.30f, (0.78f - lvl * 0.05f) * cdMult * getWeaponRankCooldownMultiplier(0));
+                // Пол паузы ставится ДО множителя артефактов. Раньше он стоял после,
+                // и «Часы вечности» с «Линзой Разлома» на 8-м ранге упирались в пол:
+                // ускорение атак не ускоряло ничего (стенд синергии: +0.2 %).
+                weaponTimers[0] = std::max(0.09f, std::max(0.30f, (0.78f - lvl * 0.05f) * getWeaponRankCooldownMultiplier(0)) * cdMult);
                 int count = 1 + lvl / 2 + (evolvedWeapons[0] ? 2 : 0);
                 int target = findNearestMonster(playerX, playerY, 550.0f);
                 float baseAngle = (playerFacing > 0) ? 0.0f : 3.14159f;
@@ -5465,7 +5487,7 @@ struct Game {
             weaponTimers[1] -= dt;
             if (weaponTimers[1] <= 0.0f) {
                 int lvl = itemLevels[1];
-                weaponTimers[1] = std::max(0.75f, (1.65f - lvl * 0.10f) * cdMult * getWeaponRankCooldownMultiplier(1));
+                weaponTimers[1] = std::max(0.12f, std::max(0.75f, (1.65f - lvl * 0.10f) * getWeaponRankCooldownMultiplier(1)) * cdMult);
                 int count = 1 + (lvl >= 4 ? 1 : 0) + (lvl >= 7 ? 1 : 0) + (evolvedWeapons[1] ? 1 : 0);
                 int target = findNearestMonster(playerX, playerY, 600.0f);
                 float baseAngle = (target >= 0)
@@ -5515,7 +5537,7 @@ struct Game {
             orbitalAngle += dt * (3.2f + lvl * 0.25f);
             weaponTimers[2] -= dt;
             if (weaponTimers[2] <= 0.0f) {
-                weaponTimers[2] = 0.22f * cdMult * getWeaponRankCooldownMultiplier(2); // Hit tick interval improves with each rank
+                weaponTimers[2] = std::max(0.09f, 0.22f * getWeaponRankCooldownMultiplier(2) * cdMult); // Hit tick interval improves with each rank
                 int orbCount = getWhirlOrbCount(lvl);
                 float orbitRad = (78.0f + lvl * 3.0f) * areaMult * getWeaponRankAreaMultiplier(2);
                 // Бонусы радиуса раздували орбиту, но не кольцо удара: на 8-м ранге
@@ -5571,7 +5593,7 @@ struct Game {
             weaponTimers[3] -= dt;
             if (weaponTimers[3] <= 0.0f) {
                 int lvl = itemLevels[3];
-                weaponTimers[3] = std::max(0.95f, (2.1f - lvl * 0.14f) * cdMult * getWeaponRankCooldownMultiplier(3));
+                weaponTimers[3] = std::max(0.14f, std::max(0.95f, (2.1f - lvl * 0.14f) * getWeaponRankCooldownMultiplier(3)) * cdMult);
                 int strikes = 3 + lvl / 2 + (lvl >= 4 ? 1 : 0) + (evolvedWeapons[3] ? 3 : 0);
                 float dmg = 50.0f * getWeaponLevelCurve(lvl) * getEvoMultiplier(3) * getWeaponRankDamageMultiplier(3);
                 // Цепь идёт по РАЗНЫМ целям: раньше каждый следующий разряд искал
@@ -5614,7 +5636,7 @@ struct Game {
             weaponTimers[4] -= dt;
             if (weaponTimers[4] <= 0.0f) {
                 int lvl = itemLevels[4];
-                weaponTimers[4] = 0.38f * cdMult * getWeaponRankCooldownMultiplier(4);
+                weaponTimers[4] = std::max(0.09f, 0.38f * getWeaponRankCooldownMultiplier(4) * cdMult);
                 float auraRad = (88.0f + lvl * 11.0f) * areaMult * getWeaponRankAreaMultiplier(4);
                 float dmg = 14.8f * getWeaponLevelCurve(lvl) * getEvoMultiplier(4) * getWeaponRankDamageMultiplier(4);
                 for (size_t m = 0; m < monsters.size(); ++m) {
@@ -5635,7 +5657,7 @@ struct Game {
             weaponTimers[5] -= dt;
             if (weaponTimers[5] <= 0.0f) {
                 int lvl = itemLevels[5];
-                weaponTimers[5] = std::max(0.65f, (1.45f - lvl * 0.09f) * cdMult * getWeaponRankCooldownMultiplier(5));
+                weaponTimers[5] = std::max(0.12f, std::max(0.65f, (1.45f - lvl * 0.09f) * getWeaponRankCooldownMultiplier(5)) * cdMult);
                 int count = 1 + lvl / 3 + (lvl >= 7 ? 1 : 0) + (evolvedWeapons[5] ? 2 : 0);
                 // Топоры летели только вверх и на 110–200 px: на первом ранге один
                 // топор падал в 120 px от героя и не доставал никого дальше. Теперь
@@ -5688,7 +5710,7 @@ struct Game {
             weaponTimers[6] -= dt;
             if (weaponTimers[6] <= 0.0f) {
                 int lvl = itemLevels[6];
-                weaponTimers[6] = std::max(1.10f, (3.2f - lvl * 0.25f) * cdMult * getWeaponRankCooldownMultiplier(6));
+                weaponTimers[6] = std::max(0.20f, std::max(1.10f, (3.2f - lvl * 0.25f) * getWeaponRankCooldownMultiplier(6)) * cdMult);
                 float maxRad = (165.0f + lvl * 20.0f) * areaMult * getWeaponRankAreaMultiplier(6);
                 float dmg = 40.0f * getWeaponLevelCurve(lvl) * getEvoMultiplier(6) * getWeaponRankDamageMultiplier(6);
                 FrostWave fw = {playerX, playerY, 20.0f, maxRad, 0.40f, 0.40f};
@@ -5699,6 +5721,13 @@ struct Game {
                     float dx = monsters[m].x - playerX;
                     float dy = monsters[m].y - playerY;
                     if (dx * dx + dy * dy <= maxRad * maxRad) {
+                        // «Оттепель» (предмет 35) ждала, когда заморозка кончится, но
+                        // кольцо морозит снова каждые ~0.9 с при заморозке на 3+ с:
+                        // цель не оттаивала никогда, и откол не срабатывал ни разу
+                        // (стенд синергии: 0 сработок за 8 с). Повторная заморозка уже
+                        // замороженной цели считается пережитой заморозкой.
+                        if (monsters[m].freezeTimer > 0.05f && monsters[m].iceFractureArmed)
+                            triggerFrostShatter(m);
                         monsters[m].freezeTimer = 1.6f + lvl * 0.2f + (evolvedWeapons[6] ? 2.5f : 0.0f);
                         monsters[m].iceFractureArmed = itemLevels[35] > 0 && !monsters[m].isBoss && !monsters[m].isResonator;
                         frozeAnyTarget = true;
@@ -13118,6 +13147,7 @@ struct Game {
             "2.12.5 • КНОПКА «НАЗАД» В ПРАЗДНИКАХ",
             "2.12.6 • РОСТ СПОСОБНОСТЕЙ ПОЛОЖЕ",
             "2.12.7 • РОЛИ: АОЕ И ПО СТРАЖАМ",
+            "2.12.8 • СИНЕРГИЯ: ЧТО С ЧЕМ РАБОТАЕТ",
         };
                 // Заметки намеренно не сокращаются: панель листается колесом мыши.
         static const char* const notes[] = {
@@ -13282,6 +13312,7 @@ struct Game {
             "Из календаря праздников нельзя было выйти мышью или пальцем.\n• Экран открывается из настроек и из паузы, но выйти из него можно было только клавишей ESC. Кнопки не было вовсе: три переключателя внизу — «ПРАЗДНИКИ», «ПРОВЕРКА», «СДВИГ ДАТЫ» — и всё. На телефоне клавиши нет, то есть с телефона календарь становился ловушкой.\n• Теперь в подвале есть «← НАЗАД [ESC]»: в альбоме — справа в ряду переключателей, в портрете — четвёртой строкой столбика. Та же кнопка, что в настройках: нажатие, подсветка под курсором, на телефоне подпись читается как «← НАЗАД».\n• Клавиши работают как раньше: ESC, ENTER и SPACE закрывают календарь и возвращают туда, откуда его открыли (в настройки или в паузу).\n• Попутно в альбоме подсказка клавиш стояла прямо на ряду кнопок (строка на SCREEN_H-22 при кнопках до SCREEN_H-20) — теперь она над рядом и ужимается по ширине. В портрете подвал вырос с 132 до 176 px: четыре кнопки в прежние 132 не вставали.\n• Подписи кнопок ужимаются по своей ширине: на 800×600 «ПРОВЕРКА: ПО КАЛЕНДАРЮ» была шире кнопки и заезжала на соседнюю.\n• Хеш экрана «праздники» сменился с 3f868c27 на 39049f60 — это тот самый ряд кнопок. Кадры боя не изменились: 2.12.5 рисует календарь, а не арену.",
             "Две правки по одному отзыву: «ТЕМП: медленно» в журнале устарел, а способности растут слишком сильно.\n• Строка «ТЕМП: МЕДЛЕННО / СРЕДНЕ / БЫСТРО / ОЧЕНЬ БЫСТРО» убрана из журнала справа сверху: темп музыки по толпе и так слышен и виден цветными волнами по краю экрана, а подпись только занимала место. Рамка журнала стала ниже: 102 -> 80 px.\n• Рост способностей от ранга: урон за ранг умножался на +8-14 % и получал разгон на поздних рангах, у каждого оружия был свой наклон урона от уровня, сверху шли частота, снаряды и площадь. Одно оружие с 1-го до 8-го ранга усиливалось в 29-82 раза по одной цели и в 43-1200 раз по толпе.\n• Теперь урон от уровня у всех семи оружий идёт по одной кривой: 1-й ранг - база, 4-й - x1.8, 8-й - x1.9 (было до x3.6). Кривая спереди круче, поэтому середина забега не просела.\n• Множитель урона за ранг: 9 %, 8 %, 5 %, дальше по 2 % - без разгона. Пол паузы между срабатываниями поднят: клинки 0.30 вместо 0.22 с, молния 0.95 вместо 0.65, топор 0.65 вместо 0.55, кольцо 1.30 вместо 1.20.\n• Охват не трогал: снаряды и радиусы остались прежними - это роль оружия, а не темп роста. У молнии с 4-го ранга на один разряд больше: на стенде зачистки она стояла на самой границе.\n• Итог по стенду оружия (одна цель / толпа): клинки x35.5 / x101.7 вместо x72.8 / x209.9, шар x18.3 / x98.6 вместо x47.5 / x197.3, вихрь x11.5 / x383.7 вместо x29.3 / x1210, молния x9.9 / x11.4 вместо x38.1 / x42.8, топор x16.2 / x26.9 вместо x82.0 / x111.2, кольцо x3.5 / x18.2 вместо x11.7 / x56.2, аура x2.5 вместо x9.6.\n• То есть 1-4-й ранги почти как были (на 10-20 % слабее), а 5-8-й дают вдвое меньше. Ранг 8 у каждого оружия остаётся лучшим, но перестаёт быть кнопкой зачистки.\n• Стенд зачистки (40 мобов с здоровьем 5-й минуты): на 4-м ранге 12.6 с у клинков, 7.7 у шара, 9.8 у вихря, 18.9 у молнии, 14.0 у ауры, 9.7 у топора, 17.7 у кольца при лимите 20 с - провалов 0.\n• tools/weapon_probe.cpp: пассивки усредняются по семи зёрнам, артефакты «не про урон» помечаются как шум и не валят стенд. Строка сравнения с суперумением считается по замеру, а не вписана руками.\n• Честно: баланс проверен стендами, а не живым забегом; сколько волн выживает игрок после правки, никто не проходил.",
             "Оружие получило роли: «АОЕ» чистит толпу, «ПО СТРАЖАМ» снимает одного.\n• Раньше все семь оружий были одним выбором с разной цифрой: и волну, и стража ими били одинаково, и держать оружие «под босса» было незачем.\n• Роль — правило, а не подпись: оружие роли «по стражам» бьёт стражей на 35 % сильнее. Сейчас это серебряные клинки и цепная молния, у остальных пяти роль АОЕ.\n• Клинки стали оружием одной цели: узкий веер, без пробива насквозь (раньше на 4-м и 7-м ранге клинок шёл через двоих). Толпу пробивает топор — это его дело.\n• Ледяное кольцо получило чуть шире волну (165 + 20 за уровень вместо 155 + 18) и чуть короче паузу (3.2 - 0.25 за уровень): на стенде зачистки оно упиралось в лимит.\n• Роль видно на карточке прокачки: «ОРУЖИЕ • АОЕ» или «ОРУЖИЕ • ПО СТРАЖАМ». В широком окне, где карточка уже, длинная подпись заменяется на «ОРУЖИЕ», а не режется.\n• Аудит стал строже. В стенде оружия появился сценарий «страж»: мишень 30 px, помеченная стражем (его способности выключены, иначе его снаряды попадали бы в замер). Теперь стенд печатает таблицу ролей и проверяет поведение, а не намерение: оружие «по стражам» обязано бить стража сильнее любого АОЕ; лучшее АОЕ обязано чистить толпу сильнее любого «по стражам»; у «по стражам» урон по стражу не ниже 60 % урона по толпе; у АОЕ толпа не меньше двух урона по стражу.\n• Замер на 8-м ранге: страж — клинки 2151, молния 1375, лучшее АОЕ 713 (топор), то есть x3. Толпа — вихрь 4239, лучшее «по стражам» 1541 (клинки), то есть x2.8. На 4-м ранге: 648 против 326 и 1135 против 502.\n• Стенд зачистки волны теперь учитывает роль: лимит 30 с для «по стражам» против 20 с для АОЕ (медленная зачистка — цена за урон по стражу, а не поломка), а каждый замер идёт по трём зёрнам и требует два успешных из трёх: на одном зерне разница в пару мобов решала исход.\n• Честно: роли проверены стендами, а не живым забегом; ощущение «нужно ли брать оружие под босса» может сказать только человек.",
+            "Аудит синергии: проверено, что два скилла вместе дают, а не только сколько даёт каждый по отдельности.\n• Новый стенд tools/synergy_probe.cpp: 21 пара оружий, оружие тиров с основным, девять артефактов-связок и резонанс (эволюция). Каждый замер по трём зёрнам, мишени стоят где поставлены.\n• Пары оружий складываются честно: отношение к сумме одиночек 0.97-1.06 в обоих сценариях. Своего сложения у пар нет - его дают артефакты; зато нет и потерь: ни одна пара не бьёт слабее своей лучшей половины.\n• Найдено и починено: ускорение атак упиралось в пол. У клинков пол 0.30 с стоял ПОСЛЕ множителя артефактов, и «Часы вечности» с «Линзой Разлома» на 8-м ранге не ускоряли ничего (Линза давала +0.2 %). Пол теперь ставится до множителя: Линза +38 %, Часы +76 %.\n• Найдено и починено: «Осколок Оттепели» не срабатывал НИ РАЗУ. Он ждал, когда заморозка кончится, а кольцо морозит снова каждые ~0.9 с при заморозке на 3+ с - цель не оттаивала никогда (0 сработок за 8 с). Повторная заморозка уже замороженной цели считается пережитой.\n• Найдено и починено: связки обещали плоские числа из 2.10.x (24 урона рикошета, 4-6 ожога, 6-10 откола), а оружие 8-го ранга бьёт 2-4 тысячи в секунду - это 1-2 %. Теперь числа 90/120/150, 12/18/24 и 20/28/36 плюс общий множитель x1.84 на 4-м ранге оружия и x2.96 на 8-м: связки растут вместе с оружием.\n• Призма после правки: +13.9 % к сборке из трёх оружий (0.5 сработки в секунду), Оттепель +3.8 %, Фитиль +5.1 %, Разоблачение +14.8 %, Линза +37.9 %, Часы +75.8 %, крит-артефакты 46-69 %.\n• «Призма Перекрёстного Огня» требует ТРЁХ разных оружий по одной цели - это сказано в описании и на карточке, раньше там было «разные активные атаки».\n• Резонанс окупается у всех семи: эволюция даёт x1.66 (кольцо) - x3.49 (топор) к тому же оружию 8-го ранга с реликвией.\n• Лучшая пара по толпе - шар + вихрь (7206), по стражу - клинки + молния (3744). Лучшая пара по балансу «и волна, и страж» - клинки + вихрь (1.33 от лучшей одиночки в обоих сценариях).\n• Честно: связки проверены стендом, а не забегом; и стенд не видит артефактов «по событию» (золото, опыт, щит, лечение, потеря HP) - у них в стоячем стенде нет события.",
         };
         static_assert(sizeof(versions) / sizeof(versions[0]) == PATCH_NOTES_COUNT,
                       "хроника: versions[] должен совпадать с PATCH_NOTES_COUNT");
