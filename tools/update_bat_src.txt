@@ -24,8 +24,8 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 rem Своя версия: по ней видно, свежий файл запущен или закешированный.
-set "SELF=2.10.30"
-set SELF_VER=2.12.2
+set "SELF=2.10.31"
+set SELF_VER=2.12.3
 set "REMOTE=origin"
 set "WANT=%~1"
 set "FORCED="
@@ -123,7 +123,7 @@ git fetch --all --prune > "%STEP%" 2>&1
 if not errorlevel 1 goto fetched
 echo ОШИБКА: не удалось связаться с GitHub. Проверь сеть и адрес remote:
 echo   git remote -v
-type "%STEP%"
+call :show_step
 echo Собираю то, что уже скачано, без обновления.
 >> "%LOG%" echo offline: fetch failed
 if defined FORCED set "TARGET=!WANT!"
@@ -193,7 +193,7 @@ if not errorlevel 1 goto switched
 rem Отказано. Обычная причина: этот самый файл скачан с GitHub руками, поэтому
 rem он отличается от версии в ветке, и git не даёт его перезаписать.
 echo Переключение отклонено. Git сообщил:
-type "%STEP%"
+call :show_step
 del "%STEP%.c" >nul 2>&1
 set "BLOCKERS="
 for /f "tokens=1,*" %%a in ('git status --porcelain 2^>nul') do call :note_change "%%b"
@@ -214,10 +214,11 @@ echo чтобы правки в ветке не мешали переключе�
 git switch !TARGET! > "%STEP%" 2>&1
 if not errorlevel 1 goto switched
 git switch -c !TARGET! --track !TARGET_REF! > "%STEP%.c" 2>&1
-if not errorlevel 1 goto switched
-type "%STEP%"
+set "SW_RC=!errorlevel!"
+call :show_step "update_step.log.c"
 del "%STEP%.c" >nul 2>&1
-goto switch_blocked
+if not "!SW_RC!"=="0" goto switch_blocked
+goto switched
 
 :switch_blocked
 echo.
@@ -227,7 +228,7 @@ echo.
 echo Прячу их в git stash и пробую снова - ничего не пропадёт.
 git stash push -u -m "update.bat: autosave before update" > "%STEP%" 2>&1
 if errorlevel 1 goto switch_give_up
-type "%STEP%"
+call :show_step
 set "STASHED=1"
 goto retry_switch
 
@@ -270,8 +271,13 @@ del "update.bat" >nul 2>&1
 echo update.bat отличается от версии в !TARGET!: отложил его на время pull, верну после.
 :pull_now
 git pull --ff-only > "%STEP%" 2>&1
-type "%STEP%"
-if not errorlevel 1 goto pulled
+rem Код возврата снимаем сразу после git: раньше между командой и проверкой
+rem стоял показ лога, и сбой самого показа записывался в вину pull.
+set "PULL_RC=!errorlevel!"
+call :show_step
+if not "!PULL_RC!"=="0" goto pull_failed
+goto pulled
+:pull_failed
 echo.
 echo ВНИМАНИЕ: pull не удался - обновление кода не прошло.
 set "AHEAD="
@@ -352,8 +358,19 @@ echo Скачанный update.bat новее версии в !TARGET! - вер�
 echo.
 echo [5/5] сборка !VER_AFTER!
 call "%~dp0build_windows.bat"
-if errorlevel 1 goto fail
+if not errorlevel 1 goto build_ok
+echo.
+echo СБОРКА НЕ ПРОШЛА. Компилятор сказал:
+set "ERRLOG=%BUILD%\build.log"
+if not exist "!ERRLOG!" goto build_failed_nolog
+findstr /i /c:"error" "!ERRLOG!" 2>nul
+copy /y "!ERRLOG!" "%cd%\build_error.log" >nul 2>&1
+echo.
+echo Полный лог: build\build.log, копия: build_error.log - её можно прислать целиком.
+:build_failed_nolog
+goto fail
 
+:build_ok
 echo.
 echo Готово. Версия !VER_AFTER!, ветка !BRANCH!, коммит !HEAD_AFTER!.
 >> "%LOG%" echo done: version=!VER_AFTER! branch=!BRANCH! commit=!HEAD_AFTER!
@@ -512,8 +529,19 @@ set "TARGET_REF=!CAND!"
 :consider_done
 goto :eof
 
+:show_step
+rem Показ лога шага. Только средствами cmd (FOR по файлу), без внешней утилиты
+rem type: на одной машине она падала как "ype" (первая буква съедалась), и тогда
+rem успешный pull считался неудачным, а сборка шла вслепую.
+set "SHOWFILE=%~1"
+if not defined SHOWFILE set "SHOWFILE=update_step.log"
+pushd "%BUILD%" >nul 2>&1
+if exist "!SHOWFILE!" for /f "delims=" %%l in (!SHOWFILE!) do echo %%l
+popd >nul 2>&1
+goto :eof
+
 :fail_step
-type "%STEP%"
+call :show_step
 :fail
 if exist "%KEEP%" copy /y "%KEEP%" "update.bat" >nul 2>&1
 if exist "%KEEP%" del "%KEEP%" >nul 2>&1

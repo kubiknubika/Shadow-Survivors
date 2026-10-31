@@ -215,7 +215,10 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* pException) {
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
+// Третий параметр — командная строка. Он был безымянным, а ниже читался как
+// lpCmdLine: Windows-сборка падала на этом с 2.10.48 («lpCmdLine» was not
+// declared), и никто этого не видел, потому что стенды собирают другой TU.
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow) {
     // Перехват критических ошибок Windows (access violation, segfault и т.д.)
     SetUnhandledExceptionFilter(CrashHandler);
 
