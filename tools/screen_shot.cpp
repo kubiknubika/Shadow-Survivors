@@ -67,6 +67,7 @@ int main(int argc, char** argv) {
     bool touchUi = false;
     int buttonScale = TOUCH_SIZE_DEFAULT;
     int iconStyle = -1; // -1: как в настройках (по умолчанию вектор)
+    int pinYear = 0, pinMonth = 1, pinDay = 1;   // «сегодня» для снимка, если задано
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "touch") == 0) touchUi = true;
         // icons0/icons1/icons2 — стиль иконок: ВЕКТОР, ИИ-АРТ, ЦВЕТ. Арсенал
@@ -77,6 +78,14 @@ int main(int argc, char** argv) {
         // size140 — тот же экран с размером кнопок 140 %: так видно, что настройка
         // двигает геометрию, а не только цифру в строке.
         else if (strncmp(argv[i], "size", 4) == 0) buttonScale = atoi(argv[i] + 4);
+        // date20260217 — закрепить «сегодня» этим днём: пересечения окон
+        // (Валентин + Лунный новый год) выпадают на конкретные годы, и без
+        // этого снимок их не покажет.
+        else if (strncmp(argv[i], "date", 4) == 0 && strlen(argv[i]) == 12) {
+            pinYear = atoi(std::string(argv[i] + 4, 4).c_str());
+            pinMonth = atoi(std::string(argv[i] + 8, 2).c_str());
+            pinDay = atoi(std::string(argv[i] + 10, 2).c_str());
+        }
     }
 
     struct Case { const char* name; int state; } cases[] = {
@@ -103,6 +112,10 @@ int main(int argc, char** argv) {
     g.options.graphicsLevel = graphics;
     g.options.touchButtonScale = touchClampSize(buttonScale);
     if (iconStyle >= 0) g.options.skillIconStyle = iconStyle;
+    if (pinYear > 0) {
+        g.holidayPinYear = pinYear; g.holidayPinMonth = pinMonth; g.holidayPinDay = pinDay;
+        g.activeHoliday = g.resolveActiveHoliday();
+    }
     // scrollN — прокрутить арсенал на N рядов: 41-й предмет стоит в самом конце
     // списка, и без прокрутки его иконку в экране не увидеть.
     for (int i = 1; i < argc; ++i)
@@ -115,6 +128,13 @@ int main(int argc, char** argv) {
         for (int f = 0; f < 3; ++f) g.update(1.0f / 60.0f);
     }
     g.state = (GameState)state;
+    // Календарь игра открывает на текущем празднике (openHolidays): снимок
+    // повторяет это, иначе шапка говорит «идёт Лунный», а панель показывает
+    // Хэллоуин — просто первый в списке.
+    if (state == STATE_HOLIDAY) {
+        const HolidayId live = g.resolveActiveHoliday();
+        if (live != HOLIDAY_NONE) g.holidayCursor = live;
+    }
     // «debug» — та же сцена боя с открытой панелью F3: там видна строка
     // «ГРАФИКА» (уровень, ступень, цена кадра, потоки).
     if (strcmp(screen, "debug") == 0) g.debugOverlay = true;

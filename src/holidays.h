@@ -233,33 +233,9 @@ inline HolidayWindow holidayWindow(HolidayId id, int year) {
     }
 }
 
-// Приоритет при пересечении окон. Плавающие праздники (Пасха, Масленица,
-// Лунный Новый год) «переезжают» каждый год и могут налезть на чужое окно;
-// в этом случае выигрывает тот, чей день ближе к сегодняшнему. Фиксированные
-// праздники между собой не пересекаются вовсе — это проверяет стенд.
 inline bool holidayIsActive(HolidayId id, int month, int day, int year) {
     const HolidayWindow w = holidayWindow(id, year);
     return holidayInWindow(month, day, w.startMonth, w.startDay, w.endMonth, w.endDay);
-}
-
-// Все активные праздники в массив (максимум 3). Календарь показывает их списком,
-// игра берёт первый — так игрок видит пересечение, а не «праздник пропал».
-inline int holidayActiveList(int month, int day, int year, HolidayId* out, int maxOut) {
-    int n = 0;
-    // Порядок — от «самого важного» к остальным: Пасха, Масленица, Лунный,
-    // Новый год, Валентин, Патрик, Купала, Хэллоуин.
-    static const HolidayId order[HOLIDAY_COUNT] = {
-        HOLIDAY_EASTER, HOLIDAY_MASLENITSA, HOLIDAY_LUNAR, HOLIDAY_WINTER,
-        HOLIDAY_LOVE, HOLIDAY_PATRICK, HOLIDAY_KUPALA, HOLIDAY_HALLOWEEN};
-    for (int i = 0; i < HOLIDAY_COUNT && n < maxOut; ++i)
-        if (holidayIsActive(order[i], month, day, year)) out[n++] = order[i];
-    return n;
-}
-
-inline HolidayId holidayForDate(int month, int day, int year) {
-    HolidayId list[4];
-    const int n = holidayActiveList(month, day, year, list, 4);
-    return n > 0 ? list[0] : HOLIDAY_NONE;
 }
 
 // Номер дня в году (0-based). Нужен календарю для маркера «сегодня».
@@ -269,9 +245,115 @@ inline int holidayDayOfYear(int month, int day, int year) {
     return total + day - 1;
 }
 
+// «Свой день» праздника — тот, ради которого он существует. Окна нужны, чтобы
+// праздник длился две недели, но разрешать пересечения по середине окна нельзя:
+// у Валентина окно 7–17 февраля, середина — 12-е, и 14 февраля Лунный новый год
+// (окно которого шире) выигрывал бы у самого Валентина. Поэтому у каждого
+// праздника есть фокус: у плавающих это сам день (Пасха, Лунный новый год),
+// у Масленицы — четверг сырной недели, у остальных он записан прямо.
+inline HolidayDate holidayFocusDay(HolidayId id, int year) {
+    const HolidayDef& def = holidayDef(id);
+    switch (def.kind) {
+        case HOLIDAY_KIND_EASTER:
+            return holidayOrthodoxEaster(year);
+        case HOLIDAY_KIND_LUNAR:
+            return holidayLunarNewYear(year);
+        case HOLIDAY_KIND_MASLEN: {
+            // Старт + 3 дня: «разгул» сырной недели, а не её понедельник и не
+            // воскресенье — иначе фокус совпадал бы с соседним праздником.
+            const HolidayWindow w = holidayWindow(id, year);
+            return holidayAddDays(w.startMonth, w.startDay, 3, year);
+        }
+        default:
+            break;
+    }
+    switch (id) {
+        case HOLIDAY_HALLOWEEN: return {10, 31};
+        case HOLIDAY_WINTER:    return {1, 1};
+        case HOLIDAY_LOVE:      return {2, 14};
+        case HOLIDAY_PATRICK:   return {3, 17};
+        case HOLIDAY_KUPALA:    return {7, 7};
+        default: {
+            const HolidayWindow w = holidayWindow(id, year);
+            return {w.startMonth, w.startDay};
+        }
+    }
+}
+
+inline int holidayDaysInYear(int year) { return holidayDaysInMonth(2, year) == 29 ? 366 : 365; }
+
+// Дата, с которой работает игра. Объявлена здесь: её возвращает и сдвиг даты,
+// который считается раньше остальных календарных помощников.
+struct HolidayToday { int year, month, day; };
+
+// Сдвиг даты на N дней (может быть отрицательным), в том числе через Новый год.
+// Год меняется на границе: раньше он оставался прежним, и сдвиг «на 30 дней» от
+// 20 декабря показывал 19 января того же года — окно Нового года, переходящее
+// через 31 декабря, после сдвига считалось по чужому году.
+inline HolidayToday holidayShiftDate(int year, int month, int day, int shiftDays) {
+    int doy = holidayDayOfYear(month, day, year) + shiftDays;
+    while (doy < 0) { --year; doy += holidayDaysInYear(year); }
+    while (doy >= holidayDaysInYear(year)) { doy -= holidayDaysInYear(year); ++year; }
+    int m = 1, d = doy;
+    while (d >= holidayDaysInMonth(m, year)) { d -= holidayDaysInMonth(m, year); ++m; }
+    return {year, m, d + 1};
+}
+
+// Расстояние по кругу года: окно через 31 декабря не должно «уезжать» на 364.
+inline int holidayDayDistance(int doyA, int doyB, int daysInYear) {
+    const int d = doyA > doyB ? doyA - doyB : doyB - doyA;
+    return std::min(d, daysInYear - d);
+}
+
+// Насколько сегодня далеко от «своего дня» праздника.
+inline int holidayFocusDistance(HolidayId id, int month, int day, int year) {
+    const HolidayDate f = holidayFocusDay(id, year);
+    const int daysInYear = holidayDaysInYear(year);
+    return holidayDayDistance(holidayDayOfYear(month, day, year),
+                              holidayDayOfYear(f.month, f.day, year), daysInYear);
+}
+
+// Все активные праздники, ближайший к своему дню — первым. Раньше порядок был
+// жёстко задан таблицей, и 14 февраля 2024 года игра показывала Лунный новый
+// год: его окно шире и стояло выше. Теперь решает расстояние до фокуса, а
+// таблица остаётся только разрешением ничьей (два праздника в один день).
+inline int holidayActiveList(int month, int day, int year, HolidayId* out, int maxOut) {
+    static const HolidayId order[HOLIDAY_COUNT] = {
+        HOLIDAY_EASTER, HOLIDAY_MASLENITSA, HOLIDAY_LUNAR, HOLIDAY_WINTER,
+        HOLIDAY_LOVE, HOLIDAY_PATRICK, HOLIDAY_KUPALA, HOLIDAY_HALLOWEEN};
+    struct Entry { HolidayId id; int dist; int rank; };
+    Entry entries[HOLIDAY_COUNT];
+    int n = 0;
+    for (int i = 0; i < HOLIDAY_COUNT; ++i) {
+        const HolidayId id = order[i];
+        if (!holidayIsActive(id, month, day, year)) continue;
+        entries[n++] = {id, holidayFocusDistance(id, month, day, year), i};
+    }
+    // Вставками: элементов не больше восьми, зато сортировка устойчивая и
+    // ничья разрешается порядком таблицы, а не случайностью.
+    for (int i = 1; i < n; ++i) {
+        const Entry e = entries[i];
+        int j = i - 1;
+        while (j >= 0 && (entries[j].dist > e.dist ||
+                          (entries[j].dist == e.dist && entries[j].rank > e.rank))) {
+            entries[j + 1] = entries[j];
+            --j;
+        }
+        entries[j + 1] = e;
+    }
+    const int count = std::min(n, maxOut);
+    for (int i = 0; i < count; ++i) out[i] = entries[i].id;
+    return count;
+}
+
+inline HolidayId holidayForDate(int month, int day, int year) {
+    HolidayId list[4];
+    const int n = holidayActiveList(month, day, year, list, 4);
+    return n > 0 ? list[0] : HOLIDAY_NONE;
+}
+
 // Сегодняшняя дата по локальным часам. Отдельная функция, чтобы стенд мог
 // подменить дату, не трогая системные часы.
-struct HolidayToday { int year, month, day; };
 inline HolidayToday holidayRealToday() {
     const std::time_t now = std::time(nullptr);
     std::tm t{};
@@ -287,14 +369,9 @@ inline HolidayToday holidayRealToday() {
 // «проверка праздника» (сдвиг в днях). Сдвиг нужен, чтобы посмотреть любой
 // праздник в любой день, не переводя часы системы.
 inline HolidayToday holidayShiftedToday(int shiftDays) {
-    HolidayToday today = holidayRealToday();
+    const HolidayToday today = holidayRealToday();
     if (shiftDays == 0) return today;
-    const int doy = holidayDayOfYear(today.month, today.day, today.year) + shiftDays;
-    const int dim = (today.year % 4 == 0 && (today.year % 100 != 0 || today.year % 400 == 0)) ? 366 : 365;
-    int d = ((doy % dim) + dim) % dim;
-    int m = 1;
-    while (d >= holidayDaysInMonth(m, today.year)) { d -= holidayDaysInMonth(m, today.year); ++m; }
-    return {today.year, m, d + 1};
+    return holidayShiftDate(today.year, today.month, today.day, shiftDays);
 }
 
 // Сколько дней осталось до конца окна включительно (сегодня = 1).
