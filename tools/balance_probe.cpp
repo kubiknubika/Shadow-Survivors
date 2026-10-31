@@ -75,6 +75,9 @@ static void resetArena(Game& g, bool realSpawns) {
     g.balance.spawnMultiplier = realSpawns ? 1.15f : 0.0f;
     g.squadTimer = 1.0e9f;
     g.ratTimer = 1.0e9f;
+    // Волна праздника приходит на 30-й секунде и подкидывает мобов: их убийства
+    // роняют самоцветы, и «опыт» начинал зависеть от урона, а не от экономики.
+    g.holidayWaveTimer = 1.0e9f;
     g.resonatorSpawnTimer = 1.0e9f;
     g.portalSpawnTimer = 1.0e9f;
     g.nextBossIndex = 999;
@@ -354,6 +357,7 @@ static const SceneBlind SCENE_BLIND[] = {
     {37, "казнь ниже порога HP: мишень с бесконечным здоровьем"},
     {38, "потеря HP героем: в сценах урона герой бессмертен"},
     {36, "вражеский снаряд: в потоке стрелков мало, выстрелы редко долетают"},
+    {31, "нужен добивающий удар: в потоке мобы 5-й минуты с 8 тыс. HP, перебор почти не случается"},
     {39, "резонатор: в сценах он не спавнится"},
 };
 static const char* sceneBlindReason(int id) {
