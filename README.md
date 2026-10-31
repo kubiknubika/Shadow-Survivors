@@ -135,7 +135,9 @@ build_android.bat install    :: собрать и сразу поставить 
 14 меток). Стоя на месте след не появляется. Разбор, числа и снимки —
 [`design/item_41_trail.md`](design/item_41_trail.md),
 [`design/ash_trail.png`](design/ash_trail.png),
-[`design/icon_sheet_41.png`](design/icon_sheet_41.png).
+[`design/icon_sheet_41.png`](design/icon_sheet_41.png). Иконка у предмета одна,
+а рисунков — три, по одному на каждый стиль (`ВЕКТОР`, `ИИ-АРТ`, `ЦВЕТ`):
+[`design/icon_40_styles.png`](design/icon_40_styles.png).
 
 ---
 
@@ -180,7 +182,7 @@ build\screens 2 1
 | стенд | что отвечает |
 |---|---|
 | `tools/screen_check.cpp` | хеши одиннадцати экранов: кадр изменился или нет (и одинаков ли он в 1, 2, 4 потока) |
-| `tools/screen_shot.cpp` | один экран в BMP — когда хеша мало и надо посмотреть глазами; аргумент `touch` включает телефонный интерфейс, экран `trail` — бой с тлеющей тропой |
+| `tools/screen_shot.cpp` | один экран в BMP — когда хеша мало и надо посмотреть глазами; аргумент `touch` включает телефонный интерфейс, экран `trail` — бой с тлеющей тропой, `icons0/1/2` — стиль иконок, `scrollN` — прокрутка арсенала |
 | `tools/perf_bench.cpp` | цена кадра в мс; код 1, если не влезает в 16.7 мс. Аргумент `trail` — сцена с тлеющей тропой (предмет 40): герой бежит по кругу и оставляет след |
 | `tools/touch_probe.cpp` | 166 проверок касаний против настоящей игры: три схемы, крестовина и диагональ, зеркало, мёртвая зона, размер и внешний вид кнопок, прокрутка пальцем, чтение старых файлов настроек, три минуты забега без падений |
 | `tools/android_smoke.cpp` | 48 проверок: исполняет **весь Android-слой** на поддельном NDK — поток игры, EGL, AAudio, ассеты, пауза/возврат, первый запуск с выбором схемы, размер и внешний вид кнопок из настроек, запись в файл, сейв при выходе |
@@ -188,6 +190,7 @@ build\screens 2 1
 | `tools/touch_preview.cpp` | рисует схемы управления на кадре боя (`design/touch_controls.png`), размеры (`sizes` → `design/touch_sizes.png`), стили (`styles` → `design/touch_styles.png`) и цвета (`themes` → `design/touch_themes.png`) |
 | `tools/bake_ai_icon.py` / `tools/generate_icon_color_atlas.py` | иконка предмета в оба атласа: первый вшивает один предмет, второй пересобирает стиль «ЦВЕТ» целиком |
 | `python3 tools/make_icon_sheet.py` | лист всех иконок из того же атласа, что идёт в exe (`design/icon_sheet_41.png`) |
+| `tools/style_preview.cpp` | три стиля иконок одного предмета рядом, в трёх размерах слотов (`design/icon_40_styles.png`); рисует та же функция, что игра, и возвращает код 1, если в каком-то стиле слот пустой |
 | `python3 tools/check_version.py --strict` | номер версии не разъехался между `version.h`, хроникой и CHANGELOG |
 | `python3 tools/check_android_bat.py --strict` | батник, gradle, CMake, манифест, иконки и то, что инструкция не врёт про файлы |
 

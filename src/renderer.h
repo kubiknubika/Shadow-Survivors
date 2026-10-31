@@ -2863,6 +2863,30 @@ struct Renderer {
             poly({{0,-10},{7,-4},{5,4},{0,10},{-6,5},{-8,-2}},body,outline,1);
             poly({{0,-5},{3,-1},{1,2},{-2,5},{-3,0}},facet,outline,1);
             ring(0,0,9,1,accent); dot(0,0,1,white); break;
+        case 40: { // Ember trail: три отпечатка вдоль выжженной дуги.
+            // Тропа — не печать и не руна: у неё нет центра. Силуэт — дуга от
+            // левого низа к правому верху, и отпечатки гаснут по пути: первый
+            // ещё горит и даёт пламя, последний уже уголь. Поэтому иконка
+            // читается как «след», а не как очередной круглый артефакт.
+            // Формы круглые, а не гранёные: на 22 px квадрат превращается в
+            // пятно, а кружок с точкой внутри остаётся отпечатком.
+            const uint32_t emberHot = 0xFFFFCF63, emberDim = 0xFF7C3414;
+            for (int k = 0; k <= 10; ++k) {                 // выжженная дуга
+                const float t = (float)k / 10.0f;
+                const int px = (int)lroundf(-9.0f + 17.0f * t);
+                const int py = (int)lroundf(7.0f - 12.0f * t + 3.0f * sinf(3.14159f * t));
+                dot(px, py, 1, k % 2 ? shade : accent);
+            }
+            dot(-8,6,4,outline); dot(-8,6,3,body);          // отпечаток 1: горит
+            poly({{-8,6},{-6,2},{-3,0},{-5,3},{-9,4}},emberHot,outline,1); // пламя
+            dot(-8,6,1,sparkle);
+            dot(-1,1,3,outline); dot(-1,1,2,body);          // отпечаток 2: тлеет
+            dot(-1,1,1,emberHot);
+            dot(6,-5,3,outline); dot(6,-5,2,shade);         // отпечаток 3: уголь
+            dot(6,-5,1,emberDim);
+            dot(9,-9,1,emberHot); dot(-11,2,1,emberHot);    // искры
+            break;
+        }
         default: break;
         }
         switch (id) {

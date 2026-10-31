@@ -10,6 +10,7 @@ design/ai_icons/icon_NN_*.png. Пересобрать весь атлас мож
 иконок. Инструмент добавляет ровно один предмет и не трогает соседние байты.
 
     python3 tools/bake_ai_icon.py 40 design/ai_icons/icon_40_ember_trail.png
+    python3 tools/bake_ai_icon.py 40 design/ai_icons/icon_40_ember_trail.png --force
 
 Пайплайн тот же, что в генераторе: центр кадра обрезается в квадрат, RGBA
 накладывается на цвет подложки кнопки, картинка уменьшается до 64×64 и
@@ -36,8 +37,51 @@ def fmt_array(values, per_line, formatter):
     return "\n".join(lines)
 
 
-def bake(path):
+def trim_to_subject(image):
+    """Обрезает пустой фон по границам предмета и добивает до квадрата.
+
+    Картинка, нарисованная «в общий квадрат», часто занимает треть кадра: на
+    64x64 от неё остаётся тонкая полоска. Обрезка по фону возвращает предмету
+    место в слоте, не перерисовывая сам рисунок.
+    """
+    import statistics
+    rgb = image.convert("RGB")
+    w, h = rgb.size
+    border = []
+    for x in range(0, w, max(1, w // 64)):
+        border.append(rgb.getpixel((x, 0)))
+        border.append(rgb.getpixel((x, h - 1)))
+    for y in range(0, h, max(1, h // 64)):
+        border.append(rgb.getpixel((0, y)))
+        border.append(rgb.getpixel((w - 1, y)))
+    bg = tuple(int(statistics.median(c[i] for c in border)) for i in range(3))
+    px = rgb.load()
+    minX, minY, maxX, maxY = w, h, -1, -1
+    for y in range(0, h, max(1, h // 256)):
+        for x in range(0, w, max(1, w // 256)):
+            r, g, b = px[x, y]
+            if abs(r - bg[0]) + abs(g - bg[1]) + abs(b - bg[2]) > 40:
+                if x < minX: minX = x
+                if x > maxX: maxX = x
+                if y < minY: minY = y
+                if y > maxY: maxY = y
+    if maxX <= minX or maxY <= minY:
+        return image
+    pad = int(max(maxX - minX, maxY - minY) * 0.08) + 2
+    cx, cy = (minX + maxX) // 2, (minY + maxY) // 2
+    half = max(maxX - minX, maxY - minY) // 2 + pad
+    box = (max(0, cx - half), max(0, cy - half), min(w, cx + half), min(h, cy + half))
+    cropped = image.crop(box)
+    side = max(cropped.size)
+    square = Image.new("RGBA", (side, side), bg + (255,))
+    square.paste(cropped, ((side - cropped.width) // 2, (side - cropped.height) // 2))
+    return square
+
+
+def bake(path, fit=False):
     image = Image.open(path).convert("RGBA")
+    if fit:
+        image = trim_to_subject(image)
     side = min(image.size)
     left = (image.width - side) // 2
     top = (image.height - side) // 2
@@ -63,24 +107,49 @@ def bake(path):
 
 
 def main(argv):
-    if len(argv) != 3:
+    # --force перезаписывает уже вшитую иконку. Без него инструмент только
+    # добавляет новую: выпущенные иконки нельзя затирать случайным запуском.
+    force = "--force" in argv
+    # --fit обрезает пустой фон: рисунок, снятый «в общий квадрат», иначе
+    # остаётся в слоте тонкой полоской.
+    fit = "--fit" in argv
+    args = [a for a in argv if a not in ("--force", "--fit")]
+    if len(args) != 3:
         print(__doc__)
         return 2
-    item, png = int(argv[1]), argv[2]
+    item, png = int(args[1]), args[2]
     if not os.path.exists(png):
         print(f"нет файла: {png}")
         return 2
     text = open(OUT, encoding="utf-8").read()
     name = f"SKILL_ICON_{item:02d}_AI"
-    if f"static const uint32_t {name}_PALETTE" in text:
-        print(f"{name} уже вшита — инструмент не перезаписывает выпущенные иконки")
+    already = f"static const uint32_t {name}_PALETTE" in text
+    if already and not force:
+        print(f"{name} уже вшита — инструмент не перезаписывает выпущенные иконки (--force, если так и надо)")
         return 1
+    if already:
+        palette, indices = bake(png, fit)
+        block = [
+            f"static const uint32_t {name}_PALETTE[{COLORS}] = {{",
+            fmt_array(palette, 8, lambda v: f"0x{v:08X}u"),
+            "};",
+            f"static const uint8_t {name}_PIXELS[{SIZE * SIZE}] = {{",
+            fmt_array(indices, 24, lambda v: str(int(v))),
+            "};",
+        ]
+        start = text.index(f"static const uint32_t {name}_PALETTE")
+        end = text.index("};", text.index(f"static const uint8_t {name}_PIXELS")) + 2
+        out = text[:start] + "\n".join(block) + text[end:]
+        open(OUT, "w", encoding="utf-8").write(out)
+        print(f"перезаписана {name} из {os.path.relpath(png, ROOT)}; соседние иконки не тронуты")
+        return 0
+
     marker = "static const BakedIconImage SKILL_ICONS_AI["
     start = text.index(marker)
     count = int(text[start + len(marker):text.index("]", start)])
     body_start = text.index("= {", start) + len("= {")
     body_end = text.index("};", body_start)
-    palette, indices = bake(png)
+    palette, indices = bake(png, fit)
     block = [
         f"static const uint32_t {name}_PALETTE[{COLORS}] = {{",
         fmt_array(palette, 8, lambda v: f"0x{v:08X}u"),

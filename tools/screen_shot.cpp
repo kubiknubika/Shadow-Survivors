@@ -62,8 +62,14 @@ int main(int argc, char** argv) {
     // названий клавиш и экран выбора схемы движения.
     bool touchUi = false;
     int buttonScale = TOUCH_SIZE_DEFAULT;
+    int iconStyle = -1; // -1: как в настройках (по умолчанию вектор)
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "touch") == 0) touchUi = true;
+        // icons0/icons1/icons2 — стиль иконок: ВЕКТОР, ИИ-АРТ, ЦВЕТ. Арсенал
+        // должен проверяться во всех трёх, а не только в том, что стоит по
+        // умолчанию: стили рисуются разным кодом.
+        else if (strncmp(argv[i], "icons", 5) == 0 && argv[i][5] >= '0' && argv[i][5] <= '2')
+            iconStyle = argv[i][5] - '0';
         // size140 — тот же экран с размером кнопок 140 %: так видно, что настройка
         // двигает геометрию, а не только цифру в строке.
         else if (strncmp(argv[i], "size", 4) == 0) buttonScale = atoi(argv[i] + 4);
@@ -92,6 +98,11 @@ int main(int argc, char** argv) {
     g.cheatGodMode = true;
     g.options.graphicsLevel = graphics;
     g.options.touchButtonScale = touchClampSize(buttonScale);
+    if (iconStyle >= 0) g.options.skillIconStyle = iconStyle;
+    // scrollN — прокрутить арсенал на N рядов: 41-й предмет стоит в самом конце
+    // списка, и без прокрутки его иконку в экране не увидеть.
+    for (int i = 1; i < argc; ++i)
+        if (strncmp(argv[i], "scroll", 6) == 0) g.arsenalScrollRow = std::max(0, atoi(argv[i] + 6));
     g.renderThreads = threads;
     for (int i = 0; i < 5; ++i) g.itemLevels[i] = 3;
     g.state = (GameState)state;
