@@ -81,6 +81,10 @@ struct Probe {
         g.dashTimer = 0.0f;
         g.arenaLayoutOverride = -1;
         g.floorDeviceSpawnTimer = 1.0e9f;   // сам по себе спавн в замерах не нужен
+        // Звук в стенде живёт по тем же правилам: кулдауны тикают, голоса
+        // сбрасываются, иначе вторая проверка ловила бы хвост первой.
+        for (int i = 0; i < SFX_COUNT; ++i) g.sound.cooldowns[i] = 0.0f;
+        for (ActiveVoice& voice : g.sound.voices) voice.active = false;
         for (int i = 0; i < ITEM_COUNT; ++i) g.itemLevels[i] = 0;
         for (int i = 0; i < 7; ++i) g.evolvedWeapons[i] = false;
     }
@@ -105,6 +109,7 @@ struct Probe {
         for (int f = 0; f < frames; ++f) {
             g.state = STATE_PLAYING;
             g.updateFloorDevices(1.0f / 60.0f);
+            g.sound.update(1.0f / 60.0f);
             g.playerHurtTimer = std::max(0.0f, g.playerHurtTimer - 1.0f / 60.0f);
         }
     }
@@ -310,6 +315,61 @@ int main() {
         p.g.clearFloorDevices();
         check(p.g.floorDevices.empty() && p.g.floorDevicesTriggered == 0,
               "новый забег начинается с чистого пола");
+    }
+
+    // ── звук: пол слышно, а не только видно ──────────────────────────────────
+    {
+        Probe p;
+        p.quietArena();
+        p.g.spawnFloorDevice();
+        check(p.g.sound.activeVoiceCount(SFX_FLOOR_APPEAR) > 0,
+              "появление предмета слышно, а не только видно");
+
+        // Второй спавн в тот же кадр не должен накладывать второй голос: подсказка
+        // не имеет права превращаться в очередь из трёх «бум» подряд.
+        const int voicesAfterFirst = p.g.sound.activeVoiceCount(SFX_FLOOR_APPEAR);
+        p.g.spawnFloorDevice();
+        check(p.g.sound.activeVoiceCount(SFX_FLOOR_APPEAR) == voicesAfterFirst,
+              "подряд идущие появления не копят голоса");
+
+        // «Зов» звучит один раз, когда предмет оказался рядом.
+        Probe q;
+        q.quietArena();
+        q.g.spawnFloorDeviceAt(FLOOR_DEVICE_PLATE, 0.0f, 140.0f);
+        q.g.playerX = q.g.playerY = 0.0f;
+        q.tick(0.2f);
+        check(q.g.sound.activeVoiceCount(SFX_FLOOR_NEAR) > 0, "предмет рядом зовёт игрока");
+        check(q.g.floorDevices[0].nudged, "зов не повторяется каждый кадр");
+
+        // Шипы: треск до выброса, удар после.
+        Probe w;
+        w.quietArena();
+        w.g.spawnFloorDeviceAt(FLOOR_DEVICE_SPIKES, 0.0f, 0.0f);
+        w.g.playerX = w.g.playerY = 0.0f;
+        w.g.playerHp = w.g.playerMaxHp;
+        w.tick(0.2f);
+        check(w.g.sound.activeVoiceCount(SFX_FLOOR_SPIKE_WARN) > 0, "шипы трещат до выброса");
+        check(w.g.sound.activeVoiceCount(SFX_FLOOR_SPIKE_BURST) == 0, "удар шипов не звучит раньше времени");
+        w.tick(FLOOR_SPIKE_WINDUP);
+        check(w.g.sound.activeVoiceCount(SFX_FLOOR_SPIKE_BURST) > 0, "выброс шипов звучит");
+
+        // Знак: тик заряда, и его высота растёт к концу.
+        Probe z;
+        z.quietArena();
+        z.g.spawnFloorDeviceAt(FLOOR_DEVICE_SIGIL, 0.0f, 0.0f);
+        z.g.playerX = z.g.playerY = 0.0f;
+        float lowest = 9.0f, highest = 0.0f;
+        for (int step = 0; step < 12; ++step) {
+            z.g.sound.cooldowns[SFX_FLOOR_SIGIL_TICK] = 0.0f;
+            z.tick(0.11f);
+            for (const ActiveVoice& voice : z.g.sound.voices)
+                if (voice.active && voice.id == SFX_FLOOR_SIGIL_TICK) {
+                    lowest = std::min(lowest, voice.speed);
+                    highest = std::max(highest, voice.speed);
+                }
+        }
+        check(lowest < 9.0f, "заряд знака тикает");
+        check(highest > lowest + 0.15f, "тик знака растёт по высоте вместе с зарядом");
     }
 
     // ── вид зависит от рисунка пола ──────────────────────────────────────────

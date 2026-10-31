@@ -219,6 +219,21 @@ static void checkMixLevels(SoundEngine& engine, float bed) {
                  sfxName(id), peaks[id], bed);
         expect(peaks[id] >= bed * 2.0f, what);
     }
+    // Подсказки предметов на полу: слышны поверх боя (иначе о предмете не узнать),
+    // но тише сигналов и заметно тише, чем «стало на уровень»: это фон, а не событие.
+    static const SfxId floorCues[] = {SFX_FLOOR_APPEAR, SFX_FLOOR_NEAR, SFX_FLOOR_PLATE,
+                                      SFX_FLOOR_SPIKE_WARN, SFX_FLOOR_SPIKE_BURST,
+                                      SFX_FLOOR_SIGIL_TICK, SFX_FLOOR_SIGIL_DONE,
+                                      SFX_RESONATOR_BREAK};
+    for (SfxId id : floorCues) {
+        char what[200];
+        snprintf(what, sizeof(what), "%s: пик %.3f при подложке %.3f — подсказку не слышно",
+                 sfxName(id), peaks[id], bed);
+        expect(peaks[id] >= bed * 0.45f, what);
+        snprintf(what, sizeof(what), "%s: пик %.3f при подложке %.3f — подсказка громче сигнала уровня",
+                 sfxName(id), peaks[id], bed);
+        expect(peaks[id] <= bed * 2.6f, what);
+    }
     for (SfxId id : pickups) {
         char what[200];
         snprintf(what, sizeof(what), "%s: пик %.3f при подложке %.3f — сбор слышно громче боя",
@@ -232,6 +247,54 @@ static void checkMixLevels(SoundEngine& engine, float bed) {
     for (int id = 0; id < SFX_COUNT; ++id) loudest = std::max(loudest, peaks[id]);
     report("самый громкий эффект", loudest, "полной шкалы");
     expect(loudest >= 0.25f, "весь набор эффектов тише 0,25 полной шкалы");
+}
+
+// Сигналы, которые играет бой и спавн (playCue): без rand() и с кулдауном.
+static void checkCues(SoundEngine& engine) {
+    printf("подсказки playCue: без rand и с кулдауном\n");
+    for (int i = 0; i < SFX_COUNT; ++i) engine.cooldowns[i] = 0.0f;
+    for (ActiveVoice& voice : engine.voices) voice.active = false;
+
+    // Главное: playCue не сдвигает поток случайности. Иначе появление предмета на
+    // полу меняло бы сцену боя целиком — это уже ловили на праздничном набеге.
+    srand(4242);
+    const int expected = rand();
+    srand(4242);
+    engine.playCue(SFX_FLOOR_APPEAR, 0.0f, 1.0f);
+    engine.playCue(SFX_FLOOR_PLATE, 0.0f, 1.0f);
+    engine.playCue(SFX_FLOOR_SIGIL_TICK, 0.0f, 1.0f, 1.12f);
+    const int after = rand();
+    expect(after == expected, "playCue тратит rand() — сдвинет поток случайности");
+
+    // Громкость масштабируется расстоянием, а не берётся из воздуха.
+    engine.playCue(SFX_FLOOR_NEAR, 0.0f, 0.5f);
+    float nearVol = -1.0f;
+    for (const ActiveVoice& voice : engine.voices)
+        if (voice.active && voice.id == SFX_FLOOR_NEAR) nearVol = voice.volume;
+    const float want = SoundEngine::baseVolume(SFX_FLOOR_NEAR) * 0.5f;
+    expect(nearVol > 0.0f && std::fabs(nearVol - want) < 1e-4f,
+           "playCue: громкость не масштабируется расстоянием");
+
+    // Кулдаун держит повтор: два вызова подряд не дают двух голосов.
+    for (ActiveVoice& voice : engine.voices) voice.active = false;
+    engine.cooldowns[SFX_FLOOR_APPEAR] = 0.0f;
+    engine.playCue(SFX_FLOOR_APPEAR, 0.25f, 1.0f);
+    const int first = engine.activeVoiceCount(SFX_FLOOR_APPEAR);
+    engine.playCue(SFX_FLOOR_APPEAR, 0.25f, 1.0f);
+    expect(engine.activeVoiceCount(SFX_FLOOR_APPEAR) == first && first == 1,
+           "кулдаун подсказки не держит повтор — голоса копятся");
+
+    // Высота пересчитывается в скорость воспроизведения: тик знака должен звенеть
+    // выше к концу заряда, иначе «заряд идёт» на слух неотличим от «стою зря».
+    for (ActiveVoice& voice : engine.voices) voice.active = false;
+    engine.cooldowns[SFX_FLOOR_SIGIL_TICK] = 0.0f;
+    engine.playCue(SFX_FLOOR_SIGIL_TICK, 0.0f, 1.0f, 1.30f);
+    float speed = -1.0f;
+    for (const ActiveVoice& voice : engine.voices)
+        if (voice.active && voice.id == SFX_FLOOR_SIGIL_TICK) speed = voice.speed;
+    expect(speed > 1.25f, "playCue: высота не доходит до голоса — заряд не слышно");
+
+    for (int i = 0; i < SFX_COUNT; ++i) engine.cooldowns[i] = 0.0f;
 }
 
 static void checkDenseFight(SoundEngine& engine) {
@@ -418,6 +481,12 @@ static void renderDemo(SoundEngine& engine, const char* path) {
         {SFX_BOSS, 0.80f}, {SFX_BOSS_TELEGRAPH, 0.60f}, {SFX_BOSS_IMPACT, 0.60f},
         {SFX_BOSS_PHASE, 0.60f}, {SFX_BOSS_DEATH, 1.20f}, {SFX_PLAYER_DEATH, 0.80f},
         {SFX_REVIVE, 1.00f},
+        // Предметы на полу: по одному разу каждую подсказку, а тик знака — трижды,
+        // чтобы на слух было слышно, как растёт высота заряда.
+        {SFX_FLOOR_APPEAR, 0.40f}, {SFX_FLOOR_NEAR, 0.35f}, {SFX_FLOOR_PLATE, 0.40f},
+        {SFX_FLOOR_SPIKE_WARN, 0.45f}, {SFX_FLOOR_SPIKE_BURST, 0.45f},
+        {SFX_FLOOR_SIGIL_TICK, 0.22f}, {SFX_FLOOR_SIGIL_TICK, 0.22f}, {SFX_FLOOR_SIGIL_TICK, 0.22f},
+        {SFX_FLOOR_SIGIL_DONE, 0.65f}, {SFX_RESONATOR_BREAK, 0.50f},
     };
     printf("демо: ");
     for (const Cue& cue : cues) printf("%s ", sfxName(cue.id));
@@ -464,6 +533,7 @@ int main(int argc, char** argv) {
     checkVariants(engine);
     const float bed = musicBedPeak(engine);
     checkMixLevels(engine, bed);
+    checkCues(engine);
     checkDenseFight(engine);
     checkStealing(engine);
     checkThrottle(engine);

@@ -101,6 +101,10 @@ static Result measure(Game& g, int itemId, int level, bool evolved, int targetCo
     g.nextBossIndex = 999;
     g.eventCooldown = 1.0e9f;        // «тихая охота» не должна подмешивать своих мобов
     g.huntActive = false;
+    // Предметы пола — не оружие: их урон подмешивался в замер и давал разброс
+    // ±3 %, из-за которого артефакт выглядел «хуже базы». Стенд меряет оружие.
+    g.clearFloorDevices();
+    g.floorDeviceSpawnTimer = 1.0e9f;
     g.pendingResonatorBurst = 0;
     g.pendingMatryoshkaSplits.clear();
     g.state = STATE_PLAYING;
@@ -224,6 +228,8 @@ static Result measure(Game& g, int itemId, int level, bool evolved, int targetCo
 
 // ── Суперумение: сколько целей и урона даёт одна активация ───────────────────
 static void measureSuper(Game& g, int targets, float radius, double* damage, int* touched) {
+    g.clearFloorDevices();
+    g.floorDeviceSpawnTimer = 1.0e9f;
     g.monsters.clear();
     g.projectiles.clear();
     g.pickups.clear();
