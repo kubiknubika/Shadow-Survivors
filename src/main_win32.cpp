@@ -1,11 +1,14 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <thread>
 #include <mmsystem.h>
 #include <windowsx.h>
 #include <dwmapi.h>
 #include <time.h>
 #include <exception>
 #include <string>
+#include <cstring>
+#include <cstdlib>
 #include "version.h"
 #include "game.h"
 
@@ -16,6 +19,11 @@ static WINDOWPLACEMENT g_wpPrev = { sizeof(g_wpPrev) };
 
 static int g_winW = 1280;
 static int g_winH = 720;
+// Ключи командной строки: на слабом железе быстрее задать ступень один раз,
+// чем искать её в настройках мышью. Пустое значение — не задано.
+static int g_forceThreads = 0;
+static int g_forceGraphics = -1;
+static bool g_useHalftone = true;
 static int g_viewX = 0, g_viewY = 0, g_viewW = 1280, g_viewH = 720;
 
 static void updateViewportRect(int clientW, int clientH) {
@@ -24,15 +32,8 @@ static void updateViewportRect(int clientW, int clientH) {
     if (clientW < 240 || clientH < 240) return;
     g_winW = clientW; g_winH = clientH;
     g_viewX = 0; g_viewY = 0; g_viewW = g_winW; g_viewH = g_winH;
-    const double aspect = (double)g_winW / (double)g_winH;
     int logicalW, logicalH;
-    if (aspect >= 1.0) {
-        logicalH = 720;
-        logicalW = std::max(640, ((int)(logicalH * aspect + 8.0) / 16) * 16);
-    } else {
-        logicalW = 720;
-        logicalH = std::max(720, ((int)(logicalW / aspect + 8.0) / 16) * 16);
-    }
+    logicalScreenSize(g_winW, g_winH, logicalW, logicalH);
     if (SCREEN_W != logicalW || SCREEN_H != logicalH) {
         SCREEN_W = logicalW; SCREEN_H = logicalH;
         g_renderer.resize(SCREEN_W, SCREEN_H);
@@ -214,7 +215,10 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* pException) {
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
+// Третий параметр — командная строка. Он был безымянным, а ниже читался как
+// lpCmdLine: Windows-сборка падала на этом с 2.10.48 («lpCmdLine» was not
+// declared), и никто этого не видел, потому что стенды собирают другой TU.
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow) {
     // Перехват критических ошибок Windows (access violation, segfault и т.д.)
     SetUnhandledExceptionFilter(CrashHandler);
 
@@ -273,7 +277,32 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     g_bmi.bmiHeader.biBitCount = 32;
     g_bmi.bmiHeader.biCompression = BI_RGB;
 
+    // Ключи: ShadowSurvivors.exe --threads 4 --graphics 3
+    //   --threads N   1..8  сколько потоков рисуют кадр (0 — по числу ядер)
+    //   --graphics N  0..4  АВТО / высокое / среднее / быстрое / эконом
+    if (lpCmdLine && lpCmdLine[0]) {
+        for (const char* p = lpCmdLine; *p; ++p) {
+            if (strncmp(p, "--threads", 9) == 0) g_forceThreads = atoi(p + 9);
+            else if (strncmp(p, "--graphics", 10) == 0) g_forceGraphics = atoi(p + 10);
+        }
+        if (g_forceThreads < 0) g_forceThreads = 0;
+        if (g_forceThreads > 8) g_forceThreads = 8;
+        if (g_forceGraphics >= 0 && g_forceGraphics <= 4) g_game.options.graphicsLevel = g_forceGraphics;
+    }
+
     g_game.init();
+    // Кадр рисуется полосами: по одному потоку на полосу, максимум четыре.
+    // На одном ядре или в системе, где неизвестно число ядер, остаётся
+    // однопоточный путь — он же и запасной, если полосы не годятся.
+    {
+        unsigned cores = std::thread::hardware_concurrency();
+        if (g_forceThreads > 0) g_game.renderThreads = g_forceThreads;
+        else {
+            if (cores < 2) cores = 1;
+            if (cores > 4) cores = 4;
+            g_game.renderThreads = (int)cores;
+        }
+    }
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
 
@@ -282,7 +311,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     QueryPerformanceCounter(&lastCounter);
 
     HDC hdc = GetDC(hwnd);
+    // HALFTONE нужен только когда кадр действительно растягивается: это
+    // фильтр в софте, и на 1:1 он всё равно гоняет буфер через свой конвейер.
+    // 1:1 отдаём напрямую через SetDIBitsToDevice (см. ниже).
     SetStretchBltMode(hdc, HALFTONE);
+    SetBrushOrgEx(hdc, 0, 0, NULL);
 
     MSG msg;
     bool running = true;
@@ -302,19 +335,47 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         float dt = (float)(now.QuadPart - lastCounter.QuadPart) / (float)freq.QuadPart;
         lastCounter = now;
 
+        // Время кадра меряется вокруг самой работы, а не вокруг ожидания
+        // вертикальной синхронизации: иначе при 60 Гц «АВТО» всегда видело бы
+        // 16.7 мс и не смогло бы отличить быстрый кадр от медленного.
+        LARGE_INTEGER workStart;
+        QueryPerformanceCounter(&workStart);
         g_game.update(dt);
         g_game.render(g_renderer);
+        LARGE_INTEGER workEnd;
+        QueryPerformanceCounter(&workEnd);
+        // Ступень графики в режиме «АВТО» двигается по времени кадра: на телефоне
+        // через эмулятор это единственная честная мерка.
+        g_game.observeFrameTime((float)(workEnd.QuadPart - workStart.QuadPart) * 1000.0f / (float)freq.QuadPart);
 
         // Present the full logical canvas at the client aspect ratio; world view is never cropped.
-        StretchDIBits(
-            hdc,
-            g_viewX, g_viewY, g_viewW, g_viewH,
-            0, 0, SCREEN_W, SCREEN_H,
-            g_renderer.pixels,
-            &g_bmi,
-            DIB_RGB_COLORS,
-            SRCCOPY
-        );
+        if (g_viewX == 0 && g_viewY == 0 && g_viewW == SCREEN_W && g_viewH == SCREEN_H) {
+            // Окно ровно в логический кадр (например 1280×720): растяжения нет,
+            // значит и HALFTONE не нужен — отдаём строки как есть.
+            SetDIBitsToDevice(hdc, 0, 0, SCREEN_W, SCREEN_H, 0, 0, 0, SCREEN_H,
+                              g_renderer.pixels, &g_bmi, DIB_RGB_COLORS);
+        } else {
+            // HALFTONE — фильтр в софте: он сглаживает край, но гонит весь кадр
+            // через свой конвейер. Когда окно заметно больше логического кадра и
+            // ступень графики уже снижена, дешевле отдать без сглаживания: на
+            // телефоне это экономит несколько миллисекунд на каждом кадре.
+            const bool bigUpscale = g_viewW > (SCREEN_W * 3) / 2 || g_viewH > (SCREEN_H * 3) / 2;
+            const bool wantHalftone = !(bigUpscale && g_game.resolvedGraphicsTier() >= 2);
+            if (wantHalftone != g_useHalftone) {
+                g_useHalftone = wantHalftone;
+                SetStretchBltMode(hdc, g_useHalftone ? HALFTONE : COLORONCOLOR);
+                if (g_useHalftone) SetBrushOrgEx(hdc, 0, 0, NULL);
+            }
+            StretchDIBits(
+                hdc,
+                g_viewX, g_viewY, g_viewW, g_viewH,
+                0, 0, SCREEN_W, SCREEN_H,
+                g_renderer.pixels,
+                &g_bmi,
+                DIB_RGB_COLORS,
+                SRCCOPY
+            );
+        }
 
         // DWM frame pacing follows the active monitor refresh rate (including 120/144/165 Hz).
         // This synchronizes the GDI/DIB presentation to compositor vblank and avoids tearing.

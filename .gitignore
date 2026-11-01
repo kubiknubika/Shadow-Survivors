@@ -30,6 +30,18 @@ crash.log
 *.dmp
 *.mdmp
 
+# ------------------------------------------------------------------ android build
+# local.properties пишет build_android.bat (или Android Studio): в нём путь к SDK
+# на конкретном компьютере, поэтому в репозиторий он не идёт.
+/android/local.properties
+/android/.gradle/
+/android/.cxx/
+/android/app/.cxx/
+/android/app/build/
+# APK — такой же бинарник, как exe: если нужно отдать релиз в git, git add -f.
+*.apk
+*.aab
+
 # --------------------------------------------------------------- OS metadata
 Thumbs.db
 ehthumbs.db

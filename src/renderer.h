@@ -6,6 +6,18 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <mutex>
+#include <atomic>
+// SIMD-ветки ниже нужны для трёх самых горячих операций кадра (свечение,
+// полупрозрачная заливка, добавление света). На x86-64 SSE2 есть всегда; на
+// другой платформе или при сборке с -DRENDERER_NO_SIMD остаётся тот же
+// скалярный код, что и раньше, поэтому картинка не зависит от флагов.
+#if defined(__SSE2__) && !defined(RENDERER_NO_SIMD)
+#define RENDERER_SIMD 1
+#include <emmintrin.h>
+#else
+#define RENDERER_SIMD 0
+#endif
 #include "font_atlas.h"
 #include "sprite_atlas.h"
 #include "skill_icon_atlas.h"
@@ -14,6 +26,26 @@
 
 static int SCREEN_W = 1280;
 static int SCREEN_H = 720;
+
+// Логический размер кадра: во что игра рисует и что потом растягивается на окно.
+// Высота (в альбоме) и ширина (в портрете) держатся на 720 px, поэтому плотность
+// мира не зависит от монитора, а видимая площадь — зависит от соотношения сторон.
+// Это же число, а не размер окна, определяет, где кончается экран: «за краем»
+// значит «за пределами этих пикселей». Одна функция на игру и на стенды, иначе
+// тест меряет не то, что видит игрок.
+inline void logicalScreenSize(int clientW, int clientH, int& outW, int& outH) {
+    if (clientW < 240 || clientH < 240) { outW = SCREEN_W; outH = SCREEN_H; return; }
+    const double aspect = (double)clientW / (double)clientH;
+    if (aspect >= 1.0) {
+        const int h = 720;
+        outH = h;
+        outW = std::max(640, ((int)(h * aspect + 8.0) / 16) * 16);
+    } else {
+        const int w = 720;
+        outW = w;
+        outH = std::max(720, ((int)(w / aspect + 8.0) / 16) * 16);
+    }
+}
 
 inline uint32_t makeRGB(int r, int g, int b) {
     r = r < 0 ? 0 : (r > 255 ? 255 : r);
@@ -31,16 +63,16 @@ inline uint32_t lerpColor(uint32_t c1, uint32_t c2, float t) {
 }
 
 struct ItemTone { uint32_t bg, edge, glow; };
-// Тон сорока предметов: подложка, рамка, свечение. Смысл важнее красоты:
+// Тон сорока одного предмета: подложка, рамка, свечение. Смысл важнее красоты:
 // игрок должен узнавать предмет по цвету и не путать соседние.
 //
-// Сорок предметов — сорок разных цветов, а не десять по кругу. Цвет задаётся
+// Сорок один предмет — разные цвета, а не десять по кругу. Цвет задаётся
 // семейством (смысл: огонь — оранжевый, кровь — красный, лёд — бирюза, ветер —
 // зелёный, руны — фиолет, магнит — пурпур, пергамент — янтарь, бездна — тёмный
 // фиолет) и весом предмета (тёмный вариант для тяжёлых печатей, светлый для
 // лёгких). Таблица в tools/generate_icon_color_atlas.py — источник тех же цветов
 // для атласа иконок, поэтому рамка слота и сама иконка всегда одного тона.
-static const ItemTone ITEM_TONE[40] = {
+static const ItemTone ITEM_TONE[41] = {
     {0xFF0A1329, 0xFF7EA4FC, 0xFFC8D7F9},  // 00 blue/bright
     {0xFF29140A, 0xFFF66C28, 0xFFF2B292},  // 01 orange/pure
     {0xFF180A29, 0xFFB97EFC, 0xFFDFC8F9},  // 02 violet/bright
@@ -81,6 +113,9 @@ static const ItemTone ITEM_TONE[40] = {
     {0xFF280B22, 0xFFC610A2, 0xFFE458C8},  // 37 magenta/deep
     {0xFF25160E, 0xFF8B3F18, 0xFFCD6C3C},  // 38 orange/dark
     {0xFF180A29, 0xFF8828F6, 0xFFBF92F2},  // 39 violet/pure
+    // 40 тлеющая тропа — тлеющий уголь: теплее и ярче «угольного фитиля» (38),
+    // чтобы два огненных предмета не читались одним пятном в списке.
+    {0xFF2A1106, 0xFFE4611C, 0xFFF6A55C},  // 40 ember/orange
 };
 
 struct Renderer {
@@ -88,8 +123,45 @@ struct Renderer {
 
     int width = 0;
     int height = 0;
+    // Полоса кадра: этот экземпляр имеет право писать только строки
+    // [bandY0, bandY1). У обычного экземпляра это весь экран, поэтому проверка
+    // не стоит ничего; у полосы из пула потоков — это и есть разделение работы.
+    int bandY0 = 0;
+    int bandY1 = SCREEN_H;
+    // Признак «это полоса»: у обычного экземпляра проверка полосы выключена
+    // совсем, иначе однопоточный кадр платит за распараллеливание в каждом
+    // пикселе.
+    bool bandActive = false;
+
+    // Уровень эффектов кадра: 3 — полный, 2 — без мелких ореолов, 1 — ореолы
+    // в половинном разрешении, 0 — только крупные свечения. Ставит Game по
+    // настройке «Графика» и по времени кадра. Геометрия и логика от него не
+    // зависят: ниже только дешевеет растеризация.
+    int fxLevel = 3;
+    // Буфер ореолов в половинном разрешении. Свечение — низкочастотная
+    // картинка, поэтому вдвое меньше пикселей почти не видно, а работы вчетверо
+    // меньше. Заполняется аддитивно, поэтому порядок и потоки на картинку не
+    // влияют; к кадру прибавляется одной полосой (compositeGlow).
+    uint32_t* glowPixels = nullptr;
+    std::vector<uint32_t> glowOwn;
+    int glowW = 0, glowH = 0;
+    // Пока true, крупные ореолы копятся в половинном буфере: кадр прибавляет их
+    // одной полосой в том месте, где кончается пол и начинаются существа.
+    // Порядок важен: прибавка «в конце кадра» светила бы сквозь героя и стражей.
+    bool deferGlow = false;
+    bool ownsPixels = true;   // полосы смотрят в буфер главного экземпляра
+    bool explicitBand = false; // полоса задана извне (pixels не наш)
     std::vector<uint8_t> vignetteAlpha;   // запечённая карта затемнения
     int vignetteW = -1, vignetteH = -1;
+    // Снимок области кадра до отрисовки фигуры и маска её пикселей: по ним
+    // считается объём (свет сверху-слева, тень с обратной стороны, AO у земли).
+    // Карта колонок для растянутых спрайтов: индекс пикселя экрана → индекс
+    // пикселя атласа. Раньше это было деление на каждый пиксель — самое дорогое
+    // в кадре место, потому что спрайтов сотни и тысяч.
+    std::vector<int32_t> columnMap;
+    std::vector<uint32_t> figureScratch;
+    std::vector<uint16_t> figureColor;   // упакованный цвет детали (5 бит на канал)
+    std::vector<uint8_t> figureMask;
     // 0 = compact vector icons, 1 = AI-rendered art for the two approved skill variants.
     int skillIconStyle = 0; // 0 = vector, 1 = AI art, 2 = «цвет» (один предмет — один цвет)
 
@@ -97,10 +169,48 @@ struct Renderer {
         resize(SCREEN_W, SCREEN_H);
     }
     ~Renderer() {
-        delete[] pixels;
+        if (ownsPixels) delete[] pixels;
+        pixels = nullptr;
     }
 
+    // Экземпляр-полоса: тот же кадр, но право записи ограничено строками
+    // [y0, y1). Нужен, чтобы несколько потоков рисовали один кадр, не
+    // перекрываясь: пиксель принадлежит ровно одной полосе, поэтому картинка
+    // не зависит от числа потоков. Буфер не освобождается.
+    void initBand(uint32_t* buffer, int w, int h, int y0, int y1, int iconStyle) {
+        if (ownsPixels) delete[] pixels;
+        pixels = buffer;
+        width = w;
+        height = h;
+        ownsPixels = false;
+        explicitBand = true;
+        bandY0 = std::max(0, std::min(h, y0));
+        bandY1 = std::max(bandY0, std::min(h, y1));
+        bandActive = true;
+        skillIconStyle = iconStyle;
+        clipActive = false;
+        clipX0 = 0; clipY0 = bandY0; clipX1 = SCREEN_W; clipY1 = bandY1;
+        vignetteW = -1;
+        vignetteH = -1;
+    }
+
+    // Полоса рисует в тот же буфер ореолов, что и главный экземпляр: свечения
+    // складываются, поэтому делить их между полосами можно по строкам.
+    void shareGlowFrom(const Renderer& src) {
+        glowPixels = src.glowPixels;
+        glowW = src.glowW;
+        glowH = src.glowH;
+    }
+
+    // Обрезка строк по полосе [y0, y1) — полуинтервал.
+    inline void clampBandRows(int& y0, int& y1) const {
+        if (y0 < bandY0) y0 = bandY0;
+        if (y1 > bandY1) y1 = bandY1;
+    }
+    inline bool inBand(int y) const { return !bandActive || (y >= bandY0 && y < bandY1); }
+
     void resize(int newWidth, int newHeight) {
+        if (explicitBand) return;
         newWidth = std::max(1, newWidth);
         newHeight = std::max(1, newHeight);
         if (pixels && width == newWidth && height == newHeight) return;
@@ -109,6 +219,10 @@ struct Renderer {
         height = newHeight;
         pixels = new uint32_t[(size_t)width * (size_t)height];
         for (size_t i = 0; i < (size_t)width * (size_t)height; ++i) pixels[i] = 0xFF0E0B16;
+        glowW = (width + 1) / 2;
+        glowH = (height + 1) / 2;
+        glowOwn.assign((size_t)glowW * (size_t)glowH, 0);
+        glowPixels = glowOwn.data();
         vignetteW = -1;   // виньетка пересчитается под новый размер
     }
 
@@ -117,13 +231,30 @@ struct Renderer {
     }
 
     inline void putPixel(int x, int y, uint32_t col) {
-        if ((unsigned)x < (unsigned)SCREEN_W && (unsigned)y < (unsigned)SCREEN_H) {
+        if ((unsigned)x < (unsigned)SCREEN_W && (unsigned)y < (unsigned)SCREEN_H && inBand(y)) {
             pixels[y * SCREEN_W + x] = col;
         }
     }
 
+    // Обрезка текста по прямоугольнику. Нужна там, где текст длиннее панели:
+    // патчноуты, словарь. Действует только на вывод глифов, поэтому панели и
+    // рамки рисуются как обычно.
+    int clipX0 = 0, clipY0 = 0, clipX1 = SCREEN_W, clipY1 = SCREEN_H;
+    bool clipActive = false;
+    void setClip(int x, int y, int w, int h) {
+        clipActive = true;
+        clipX0 = std::max(0, x); clipY0 = std::max(0, y);
+        clipX1 = std::min(SCREEN_W, x + w); clipY1 = std::min(SCREEN_H, y + h);
+    }
+    void clearClip() { clipActive = false; clipX0 = 0; clipY0 = 0; clipX1 = SCREEN_W; clipY1 = SCREEN_H; }
+
     inline void blendPixel(int x, int y, uint32_t col, int alpha) {
         if ((unsigned)x >= (unsigned)SCREEN_W || (unsigned)y >= (unsigned)SCREEN_H) return;
+        if (bandActive && (y < bandY0 || y >= bandY1)) return;
+        // Отсечение на уровне пикселя: линии и круги идут через blendPixel, и
+        // без этой проверки скроллящаяся карта рисовала маршрут поверх кнопок.
+        if (clipActive && ((unsigned)(x - clipX0) >= (unsigned)(clipX1 - clipX0) ||
+                           (unsigned)(y - clipY0) >= (unsigned)(clipY1 - clipY0))) return;
         if (alpha <= 0) return;
         if (alpha >= 255) {
             pixels[y * SCREEN_W + x] = col;
@@ -141,6 +272,9 @@ struct Renderer {
 
     inline void addPixel(int x, int y, uint32_t col, int intensity) {
         if ((unsigned)x >= (unsigned)SCREEN_W || (unsigned)y >= (unsigned)SCREEN_H || intensity <= 0) return;
+        if (bandActive && (y < bandY0 || y >= bandY1)) return;
+        if (clipActive && ((unsigned)(x - clipX0) >= (unsigned)(clipX1 - clipX0) ||
+                           (unsigned)(y - clipY0) >= (unsigned)(clipY1 - clipY0))) return;
         uint32_t dst = pixels[y * SCREEN_W + x];
         int r = ((dst >> 16) & 0xFF) + ((((col >> 16) & 0xFF) * intensity) >> 8);
         int g = ((dst >> 8) & 0xFF)  + ((((col >> 8) & 0xFF) * intensity) >> 8);
@@ -153,7 +287,16 @@ struct Renderer {
 
     inline void blendSpan(int y, int x0, int x1, uint32_t col, int alpha) {
         if ((unsigned)y >= (unsigned)SCREEN_H || alpha <= 0 || x0 > x1) return;
+        if (bandActive && (y < bandY0 || y >= bandY1)) return;
         x0 = std::max(0, x0); x1 = std::min(SCREEN_W - 1, x1);
+        // Область отсечения уважают и заливки: раньше setClip действовал только
+        // на текст и контуры, а круги, линии и скруглённые панели лезли за
+        // границу списка — прокручиваемая карта кампании рисовала дела поверх
+        // кнопок внизу экрана.
+        if (clipActive) {
+            if (y < clipY0 || y >= clipY1) return;
+            x0 = std::max(x0, clipX0); x1 = std::min(x1, clipX1 - 1);
+        }
         if (x0 > x1) return;
         uint32_t* row = pixels + y * SCREEN_W;
         if (alpha >= 255) {
@@ -162,7 +305,33 @@ struct Renderer {
         }
         const int sr = (col >> 16) & 0xFF, sg = (col >> 8) & 0xFF, sb = col & 0xFF;
         const int inv = 255 - alpha;
-        for (int x = x0; x <= x1; ++x) {
+        int x = x0;
+#if RENDERER_SIMD
+        // Полупрозрачная заливка — самая частая операция кадра (панели, тени,
+        // вода, ореолы). Формула ((канал*alpha + фон*(255-alpha)) >> 8) точно
+        // ложится на 16-битные дорожки: каждое произведение ≤ 65025, сумма
+        // ≤ 65025, то есть переполнения нет, а насыщение не нужно вовсе.
+        {
+            const __m128i zero = _mm_setzero_si128();
+            const __m128i alphaVec = _mm_set1_epi16((short)alpha);
+            const __m128i invVec = _mm_set1_epi16((short)inv);
+            const __m128i alphaMask = _mm_set1_epi32((int)0xFF000000u);
+            // Цвет, уже умноженный на alpha: на строку он один и тот же.
+            const __m128i srcBytes = _mm_set1_epi32((int)((uint32_t)(sr << 16) | (uint32_t)(sg << 8) | (uint32_t)sb));
+            const __m128i preLo = _mm_mullo_epi16(_mm_unpacklo_epi8(srcBytes, zero), alphaVec);
+            const __m128i preHi = _mm_mullo_epi16(_mm_unpackhi_epi8(srcBytes, zero), alphaVec);
+            for (; x + 3 <= x1; x += 4) {
+                const __m128i dst = _mm_loadu_si128((const __m128i*)(row + x));
+                const __m128i lo = _mm_srli_epi16(
+                    _mm_add_epi16(preLo, _mm_mullo_epi16(_mm_unpacklo_epi8(dst, zero), invVec)), 8);
+                const __m128i hi = _mm_srli_epi16(
+                    _mm_add_epi16(preHi, _mm_mullo_epi16(_mm_unpackhi_epi8(dst, zero), invVec)), 8);
+                _mm_storeu_si128((__m128i*)(row + x),
+                                 _mm_or_si128(_mm_packus_epi16(lo, hi), alphaMask));
+            }
+        }
+#endif
+        for (; x <= x1; ++x) {
             const uint32_t dst = row[x];
             const int dr = (dst >> 16) & 0xFF, dg = (dst >> 8) & 0xFF, db = dst & 0xFF;
             row[x] = 0xFF000000u | (((sr * alpha + dr * inv) >> 8) << 16)
@@ -173,15 +342,30 @@ struct Renderer {
     void fillRect(int x, int y, int w, int h, uint32_t col, int alpha = 255) {
         int x0 = std::max(0, x), y0 = std::max(0, y);
         int x1 = std::min(SCREEN_W, x + w), y1 = std::min(SCREEN_H, y + h);
-        if (x0 >= x1 || y0 >= y1) return;
+        if (clipActive) {
+            x0 = std::max(x0, clipX0); x1 = std::min(x1, clipX1);
+            y0 = std::max(y0, clipY0); y1 = std::min(y1, clipY1);
+        }
+        clampBandRows(y0, y1);
+        if (x0 >= x1 || y0 >= y1 || alpha <= 0) return;
+        // Полуразмерная заливка идёт через blendSpan: там те же вычисления, но
+        // без проверки границ и клипа на каждый пиксель. Раньше blendPixel
+        // вызывался построчно-постолбцово и тратил на это больше, чем на саму
+        // арифметику цвета.
         if (alpha >= 255) {
+            if (x1 - x0 == 1) {
+                // Вертикальная полоска в один пиксель: у плит пола это рамка
+                // шва. Раньше на каждую строку шёл отдельный вызов заливки,
+                // то есть 62 вызова на плитку вместо одного цикла.
+                for (int py = y0; py < y1; ++py) pixels[py * SCREEN_W + x0] = col;
+                return;
+            }
             for (int py = y0; py < y1; ++py) {
                 uint32_t* row = pixels + py * SCREEN_W;
-                for (int px = x0; px < x1; ++px) row[px] = col;
+                std::fill(row + x0, row + x1, col);
             }
-        } else if (alpha > 0) {
-            for (int py = y0; py < y1; ++py)
-                for (int px = x0; px < x1; ++px) blendPixel(px, py, col, alpha);
+        } else {
+            for (int py = y0; py < y1; ++py) blendSpan(py, x0, x1 - 1, col, alpha);
         }
     }
 
@@ -189,14 +373,19 @@ struct Renderer {
         if (h <= 0 || w <= 0) return;
         int x0 = std::max(0, x), x1 = std::min(SCREEN_W, x + w);
         int y0 = std::max(0, y), y1 = std::min(SCREEN_H, y + h);
+        if (clipActive) {
+            x0 = std::max(x0, clipX0); x1 = std::min(x1, clipX1);
+            y0 = std::max(y0, clipY0); y1 = std::min(y1, clipY1);
+        }
+        clampBandRows(y0, y1);
         for (int py = y0; py < y1; ++py) {
             float t = (float)(py - y) / (float)h;
             uint32_t c = lerpColor(topCol, botCol, t);
             if (alpha >= 255) {
                 uint32_t* row = pixels + py * SCREEN_W;
-                for (int px = x0; px < x1; ++px) row[px] = c;
+                std::fill(row + x0, row + x1, c);
             } else {
-                for (int px = x0; px < x1; ++px) blendPixel(px, py, c, alpha);
+                blendSpan(py, x0, x1 - 1, c, alpha);
             }
         }
     }
@@ -212,20 +401,28 @@ struct Renderer {
         if (rad <= 0) { fillRect(x, y, w, h, col, alpha); return; }
         if (rad * 2 > w) rad = w / 2;
         if (rad * 2 > h) rad = h / 2;
-        int x0 = std::max(0, x), y0 = std::max(0, y);
-        int x1 = std::min(SCREEN_W, x + w), y1 = std::min(SCREEN_H, y + h);
-        int r2 = rad * rad;
+        const int x0 = std::max(0, x);
+        int y0 = std::max(0, y);
+        const int x1 = std::min(SCREEN_W, x + w);
+        int y1 = std::min(SCREEN_H, y + h);
+        clampBandRows(y0, y1);
+        if (x0 >= x1 || y0 >= y1 || alpha <= 0) return;
+        const int r2 = rad * rad;
+        // Скругление — это отступ по краям строки, а не отдельная проверка на
+        // каждый пиксель: раньше вся панель (включая ровную середину) шла
+        // пиксель за пикселем через blendPixel с проверкой границ и клипа.
         for (int py = y0; py < y1; ++py) {
             int dy = 0;
             if (py < y + rad) dy = (y + rad) - py;
             else if (py >= y + h - rad) dy = py - (y + h - rad - 1);
-            for (int px = x0; px < x1; ++px) {
-                int dx = 0;
-                if (px < x + rad) dx = (x + rad) - px;
-                else if (px >= x + w - rad) dx = px - (x + w - rad - 1);
-                if (dx > 0 && dy > 0 && dx * dx + dy * dy > r2) continue;
-                blendPixel(px, py, col, alpha);
+            int inset = 0;
+            if (dy > 0) {
+                const int rem = r2 - dy * dy;
+                if (rem < 0) continue;
+                inset = rad - (int)sqrtf((float)rem);
+                if (inset < 0) inset = 0;
             }
+            blendSpan(py, x + inset, x + w - 1 - inset, col, alpha);
         }
     }
 
@@ -233,6 +430,7 @@ struct Renderer {
         if (rad <= 0) { drawRect(x, y, w, h, col, thickness, alpha); return; }
         int x0 = std::max(0, x), y0 = std::max(0, y);
         int x1 = std::min(SCREEN_W, x + w), y1 = std::min(SCREEN_H, y + h);
+        clampBandRows(y0, y1);
         int rOuter2 = rad * rad;
         int innerRad = std::max(0, rad - thickness);
         int rInner2 = innerRad * innerRad;
@@ -261,7 +459,8 @@ struct Renderer {
     void fillCircle(int cx, int cy, int r, uint32_t col, int alpha = 255) {
         if (r <= 0 || alpha <= 0) return;
         const int r2 = r * r;
-        const int y0 = std::max(0, cy - r), y1 = std::min(SCREEN_H - 1, cy + r);
+        const int y0 = std::max(std::max(0, cy - r), bandY0);
+        const int y1 = std::min(std::min(SCREEN_H - 1, cy + r), bandY1 - 1);
         for (int py = y0; py <= y1; ++py) {
             const int dy = py - cy;
             const int rem = r2 - dy * dy;
@@ -271,52 +470,286 @@ struct Renderer {
         }
     }
 
+    // Ядро свечения считается один раз на радиус и живёт в таблице: в кадре
+    // это десятки тысяч обращений, поэтому читается оно по сырому указателю.
     static const std::vector<uint32_t>* getGlowKernel(int radius) {
         if (radius <= 0 || radius > 256) return nullptr;
         static std::vector<std::vector<uint32_t>> kernels(513);
         std::vector<uint32_t>& kernel = kernels[radius];
         if (kernel.empty()) {
-            const int r2 = radius * radius;
-            kernel.resize((size_t)r2);
-            for (int d2 = 0; d2 < r2; ++d2) {
-                const int falloff = 256 - (d2 * 256) / r2;
-                kernel[d2] = (uint32_t)(falloff * falloff);
+            // Полосы рисуются потоками, поэтому первое заполнение таблицы идёт
+            // под замком: без него два потока одновременно делали resize одной
+            // и той же таблицы и роняли процесс.
+            static std::mutex buildLock;
+            std::lock_guard<std::mutex> guard(buildLock);
+            if (kernel.empty()) {
+                const int r2 = radius * radius;
+                // Собираем в стороне и подменяем целиком: если заполнять вектор
+                // на месте, другой поток увидит его уже непустым и прочитает
+                // половину таблицы.
+                std::vector<uint32_t> built((size_t)r2);
+                for (int d2 = 0; d2 < r2; ++d2) {
+                    const int falloff = 256 - (d2 * 256) / r2;
+                    built[d2] = (uint32_t)(falloff * falloff);
+                }
+                kernel.swap(built);
             }
         }
         return &kernel;
     }
 
-    void addGlow(int cx, int cy, int r, uint32_t col, int maxIntensity = 180) {
-        if (r <= 0 || maxIntensity <= 0) return;
+    // Готовое свечение: та же прибавка к пикселю, что и в addGlow, но посчитанная
+    // один раз на набор (радиус, цвет, яркость). В кадре почти все свечения —
+    // это самоцветы: восемь наборов параметров на тысячи вызовов. Кэш превращает
+    // работу «на каждый пиксель» в сложение байтов с насыщением, которое умеет
+    // одна команда на четыре пикселя.
+    struct GlowSprite {
+        int radius = 0;
+        uint32_t color = 0;
+        int intensity = 0;
+        int side = 0;
+        std::vector<uint16_t> extent;   // половина ширины строки внутри круга
+        std::vector<uint32_t> delta;    // прибавка к пикселю, (2r+1)²
+    };
+
+    // Кэш готового свечения на этот экземпляр: у каждой полосы кадра он свой,
+    // иначе два потока переписывали бы одни и те же слоты.
+    GlowSprite glowSlots[64];
+
+    const GlowSprite* getGlowSprite(int r, uint32_t col, int m) {
+        // Большие радиусы в кэш не берём: они редки, а память считают квадратами.
+        if (r <= 0 || r > 40) return nullptr;
+        const uint32_t key = (uint32_t)r * 2654435761u ^ (col * 2246822519u) ^ ((uint32_t)m * 3266489917u);
+        GlowSprite& g = glowSlots[(key >> 8) & 63];
+        if (g.radius == r && g.color == col && g.intensity == m) return &g;
+        const int side = r * 2 + 1;
         const int r2 = r * r;
-        const int y0 = std::max(0, cy - r), y1 = std::min(SCREEN_H - 1, cy + r);
+        const int cr = (col >> 16) & 0xFF, cg = (col >> 8) & 0xFF, cb = col & 0xFF;
+        g.radius = r; g.color = col; g.intensity = m; g.side = side;
+        g.extent.resize((size_t)side);
+        g.delta.resize((size_t)side * side);
+        for (int dy = -r; dy <= r; ++dy) {
+            const int rem = r2 - 1 - dy * dy;
+            const int ext = rem > 0 ? (int)sqrtf((float)rem) : -1;
+            g.extent[(size_t)(dy + r)] = (uint16_t)(ext + 1);   // 0 — строка пустая
+            uint32_t* row = g.delta.data() + (size_t)(dy + r) * side;
+            for (int dx = -ext; dx <= ext; ++dx) {
+                const int d2 = dx * dx + dy * dy;
+                const int falloff = 256 - (d2 * 256) / r2;
+                const int intensity = (m * falloff * falloff) >> 16;
+                row[dx + r] = intensity > 0
+                    ? (((uint32_t)((cr * intensity) >> 8) << 16)
+                     | ((uint32_t)((cg * intensity) >> 8) << 8)
+                     | (uint32_t)((cb * intensity) >> 8))
+                    : 0u;
+            }
+        }
+        return &g;
+    }
+
+    // Свечение в произвольный буфер: полный кадр (pixels) или половинный
+    // буфер ореолов (glowPixels). Ширина, высота и границы строк вынесены
+    // наружу, чтобы обе ветки были одним кодом.
+    void addGlowRaw(uint32_t* buf, int bw, int bh, int cx, int cy, int r,
+                    uint32_t col, int maxIntensity, int clipY0, int clipY1) {
+        if (r <= 0 || maxIntensity <= 0) return;
+        // Яркость больше 255 давала выход за таблицу прибавок (256 входов).
+        // Такая яркость и не нужна: свечение уже полностью закрывает канал.
+        if (maxIntensity > 255) maxIntensity = 255;
+        // Дешёвый отсев: свечение целиком за кадром. Частицы и снаряды улетают
+        // за край постоянно, а до этой проверки для каждой из них считался
+        // диапазон строк, корень и границы.
+        if (cx + r < 0 || cy + r < 0 || cx - r >= bw || cy - r >= bh) return;
+        if (const GlowSprite* gs = getGlowSprite(r, col, maxIntensity)) {
+            const int side = gs->side;
+            const int gy0 = std::max(std::max(0, cy - r), clipY0), gy1 = std::min(std::min(bh - 1, cy + r), clipY1 - 1);
+            const uint32_t* delta = gs->delta.data();
+            const uint16_t* extent = gs->extent.data();
+            for (int py = gy0; py <= gy1; ++py) {
+                const int ext = (int)extent[py - (cy - r)] - 1;
+                if (ext < 0) continue;
+                int dx = std::max(-ext, -cx);
+                const int dxEnd = std::min(ext, bw - 1 - cx);
+                if (dx > dxEnd) continue;
+                uint32_t* dstRow = buf + py * bw + cx;
+                const uint32_t* srcRow = delta + (size_t)(py - (cy - r)) * side + r;
+                int x = dx;
+#if RENDERER_SIMD
+                const __m128i alphaMask = _mm_set1_epi32((int)0xFF000000u);
+                for (; x + 3 <= dxEnd; x += 4) {
+                    const __m128i diff = _mm_loadu_si128((const __m128i*)(srcRow + x));
+                    __m128i* quad = (__m128i*)(dstRow + x);
+                    _mm_storeu_si128(quad, _mm_or_si128(_mm_adds_epu8(_mm_loadu_si128(quad), diff), alphaMask));
+                }
+#endif
+                for (; x <= dxEnd; ++x) {
+                    const uint32_t d = srcRow[x];
+                    if (!d) continue;
+                    uint32_t& dst = dstRow[x];
+                    int rr = ((dst >> 16) & 0xFF) + (int)((d >> 16) & 0xFF);
+                    int gg = ((dst >> 8) & 0xFF) + (int)((d >> 8) & 0xFF);
+                    int bb = (dst & 0xFF) + (int)(d & 0xFF);
+                    if (rr > 255) rr = 255;
+                    if (gg > 255) gg = 255;
+                    if (bb > 255) bb = 255;
+                    dst = 0xFF000000u | ((uint32_t)rr << 16) | ((uint32_t)gg << 8) | (uint32_t)bb;
+                }
+            }
+            return;
+        }
+        const int r2 = r * r;
+        const int y0 = std::max(std::max(0, cy - r), clipY0), y1 = std::min(std::min(bh - 1, cy + r), clipY1 - 1);
         const int cr = (col >> 16) & 0xFF, cg = (col >> 8) & 0xFF, cb = col & 0xFF;
         const std::vector<uint32_t>* kernel = getGlowKernel(r);
+        const uint32_t* k = kernel ? kernel->data() : nullptr;
+        // Таблица «яркость → прибавка» на этот вызов: в кадре десятки свечений,
+        // и три умножения на каждый пиксель дороже, чем 256 входов таблицы.
+        // Значения те же, что и в прежней формуле ((канал * intensity) >> 8).
+        // Прибавка упакована в те же байты, что и пиксель (r<<16 | g<<8 | b):
+        // тогда к четырём пикселям сразу можно прибавить вектор одной командой.
+        // Строим только те входы, которые этот вызов может запросить: яркость
+        // не превышает maxIntensity. У мелких частиц это 30–60 входов вместо 256.
+        uint32_t addPacked[256];
+        for (int i = 0; i <= maxIntensity; ++i) {
+            addPacked[i] = ((uint32_t)((cr * i) >> 8) << 16)
+                         | ((uint32_t)((cg * i) >> 8) << 8)
+                         | (uint32_t)((cb * i) >> 8);
+        }
         for (int py = y0; py <= y1; ++py) {
             const int dy = py - cy, dy2 = dy * dy;
             const int rem = r2 - 1 - dy2; // the glow is defined for d² < r²
             if (rem < 0) continue;
             const int extent = (int)sqrtf((float)rem);
             const int dx0 = std::max(-extent, -cx);
-            const int dx1 = std::min(extent, SCREEN_W - 1 - cx);
+            const int dx1 = std::min(extent, bw - 1 - cx);
             if (dx0 > dx1) continue;
-            uint32_t* row = pixels + py * SCREEN_W;
-            for (int dx = dx0; dx <= dx1; ++dx) {
-                const int d2 = dx * dx + dy2;
-                const int intensity = kernel
-                    ? (int)((maxIntensity * (uint64_t)(*kernel)[d2]) >> 16)
-                    : (int)((maxIntensity * (256 - (d2 * 256) / r2) * (256 - (d2 * 256) / r2)) >> 16);
-                if (intensity <= 0) continue;
-                uint32_t& dst = row[cx + dx];
-                int rr = ((dst >> 16) & 0xFF) + ((cr * intensity) >> 8);
-                int gg = ((dst >> 8) & 0xFF) + ((cg * intensity) >> 8);
-                int bb = (dst & 0xFF) + ((cb * intensity) >> 8);
+            uint32_t* dstRow = buf + py * bw + cx;
+            if (k) {
+                int dx = dx0;
+#if RENDERER_SIMD
+                // Прибавление света — это сложение байтов с насыщением, ровно
+                // то, что делает paddusb: четыре пикселя за команду, без
+                // разбора на каналы и без трёх сравнений с 255 на каждый.
+                // Альфа принудительно в 255 — так же, как в скалярной ветке.
+                const __m128i alphaMask = _mm_set1_epi32((int)0xFF000000u);
+                for (; dx + 3 <= dx1; dx += 4) {
+                    const uint32_t a0 = addPacked[(maxIntensity * (int)k[(dx + 0) * (dx + 0) + dy2]) >> 16];
+                    const uint32_t a1 = addPacked[(maxIntensity * (int)k[(dx + 1) * (dx + 1) + dy2]) >> 16];
+                    const uint32_t a2 = addPacked[(maxIntensity * (int)k[(dx + 2) * (dx + 2) + dy2]) >> 16];
+                    const uint32_t a3 = addPacked[(maxIntensity * (int)k[(dx + 3) * (dx + 3) + dy2]) >> 16];
+                    const __m128i diff = _mm_set_epi32((int)a3, (int)a2, (int)a1, (int)a0);
+                    __m128i* quad = (__m128i*)(dstRow + dx);
+                    const __m128i sum = _mm_adds_epu8(_mm_loadu_si128(quad), diff);
+                    _mm_storeu_si128(quad, _mm_or_si128(sum, alphaMask));
+                }
+#endif
+                for (; dx <= dx1; ++dx) {
+                    // maxIntensity ≤ 255, ядро ≤ 65536 — произведение влезает
+                    // в 32 бита, 64-битное умножение здесь было лишним.
+                    const int intensity = (maxIntensity * (int)k[dx * dx + dy2]) >> 16;
+                    if (intensity <= 0) continue;
+                    const uint32_t d = addPacked[intensity];
+                    uint32_t& dst = dstRow[dx];
+                    int rr = ((dst >> 16) & 0xFF) + (int)((d >> 16) & 0xFF);
+                    int gg = ((dst >> 8) & 0xFF) + (int)((d >> 8) & 0xFF);
+                    int bb = (dst & 0xFF) + (int)(d & 0xFF);
+                    if (rr > 255) rr = 255;
+                    if (gg > 255) gg = 255;
+                    if (bb > 255) bb = 255;
+                    dst = 0xFF000000u | ((uint32_t)rr << 16) | ((uint32_t)gg << 8) | (uint32_t)bb;
+                }
+            } else {
+                for (int dx = dx0; dx <= dx1; ++dx) {
+                    const int d2 = dx * dx + dy2;
+                    const int falloff = 256 - (d2 * 256) / r2;
+                    const int intensity = (maxIntensity * falloff * falloff) >> 16;
+                    if (intensity <= 0) continue;
+                    const uint32_t d = addPacked[intensity];
+                    uint32_t& dst = dstRow[dx];
+                    int rr = ((dst >> 16) & 0xFF) + (int)((d >> 16) & 0xFF);
+                    int gg = ((dst >> 8) & 0xFF) + (int)((d >> 8) & 0xFF);
+                    int bb = (dst & 0xFF) + (int)(d & 0xFF);
+                    if (rr > 255) rr = 255;
+                    if (gg > 255) gg = 255;
+                    if (bb > 255) bb = 255;
+                    dst = 0xFF000000u | ((uint32_t)rr << 16) | ((uint32_t)gg << 8) | (uint32_t)bb;
+                }
+            }
+        }
+    }
+
+    void addGlow(int cx, int cy, int r, uint32_t col, int maxIntensity = 180) {
+        // Три ступени экономии, и каждая следующая включает предыдущую:
+        //   1) мелкие ореолы не рисуются совсем (искры добычи и чисел урона —
+        //      это больше половины вызовов, а видно их на телефоне хуже, чем
+        //      стоит их цена);
+        //   2) крупные ореолы считаются в половинном разрешении и прибавляются
+        //      к кадру одной полосой до существ (см. compositeGlow);
+        //   3) порог мелких растёт, порог крупных падает.
+        int minRadius = 0, halfFrom = 1 << 30;
+        if (fxLevel == 2) { minRadius = 16; halfFrom = 96; }
+        else if (fxLevel == 1) { minRadius = 28; halfFrom = 64; }
+        else if (fxLevel <= 0) { minRadius = 48; halfFrom = 96; }
+        if (r < minRadius) return;
+        if (deferGlow && r >= halfFrom && glowPixels && glowW > 0 && glowH > 0) {
+            addGlowRaw(glowPixels, glowW, glowH, cx >> 1, cy >> 1,
+                       std::max(1, (r + 1) >> 1), col, maxIntensity,
+                       bandActive ? (bandY0 >> 1) : 0,
+                       bandActive ? ((bandY1 + 1) >> 1) : glowH);
+            return;
+        }
+        addGlowRaw(pixels, SCREEN_W, SCREEN_H, cx, cy, r, col, maxIntensity, bandY0, bandY1);
+    }
+
+    void clearGlow() {
+        if (fxLevel > 2 || !glowPixels) return;
+        memset(glowPixels, 0, sizeof(uint32_t) * (size_t)glowW * (size_t)glowH);
+    }
+
+    // Полоса чистит только свои строки: буфер общий на кадр.
+    void clearGlowBand() {
+        if (fxLevel > 2 || !glowPixels || !bandActive) return;
+        const int r0 = bandY0 >> 1, r1 = (bandY1 + 1) >> 1;
+        if (r1 > r0) memset(glowPixels + (size_t)r0 * glowW, 0, sizeof(uint32_t) * (size_t)(r1 - r0) * (size_t)glowW);
+    }
+
+    // Прибавить половинный буфер ореолов к кадру. Один проход по экрану;
+    // дешёвая альтернатива дорогим большим ореолам (см. addGlow).
+    void compositeGlow() {
+        if (fxLevel > 2 || !glowPixels || glowW <= 0) return;
+        const int cy0 = bandActive ? bandY0 : 0;
+        const int cy1 = bandActive ? bandY1 : SCREEN_H;
+        for (int y = cy0; y < cy1; ++y) {
+            const uint32_t* src = glowPixels + (size_t)(y >> 1) * (size_t)glowW;
+            uint32_t* dst = pixels + (size_t)y * (size_t)SCREEN_W;
+            int x = 0;
+#if RENDERER_SIMD
+            const __m128i alphaMask = _mm_set1_epi32((int)0xFF000000u);
+            for (; x + 7 < SCREEN_W; x += 8) {
+                const __m128i s = _mm_loadu_si128((const __m128i*)(src + (x >> 1)));
+                const __m128i lo = _mm_shuffle_epi32(s, _MM_SHUFFLE(1, 1, 0, 0));
+                const __m128i hi = _mm_shuffle_epi32(s, _MM_SHUFFLE(3, 3, 2, 2));
+                __m128i* d0 = (__m128i*)(dst + x);
+                __m128i* d1 = (__m128i*)(dst + x + 4);
+                _mm_storeu_si128(d0, _mm_or_si128(_mm_adds_epu8(_mm_loadu_si128(d0), lo), alphaMask));
+                _mm_storeu_si128(d1, _mm_or_si128(_mm_adds_epu8(_mm_loadu_si128(d1), hi), alphaMask));
+            }
+#endif
+            for (; x < SCREEN_W; ++x) {
+                const uint32_t d = src[x >> 1];
+                if (!d) continue;
+                uint32_t& p = dst[x];
+                int rr = (int)((p >> 16) & 0xFF) + (int)((d >> 16) & 0xFF);
+                int gg = (int)((p >> 8) & 0xFF) + (int)((d >> 8) & 0xFF);
+                int bb = (int)(p & 0xFF) + (int)(d & 0xFF);
                 if (rr > 255) rr = 255;
                 if (gg > 255) gg = 255;
                 if (bb > 255) bb = 255;
-                dst = 0xFF000000u | ((uint32_t)rr << 16) | ((uint32_t)gg << 8) | (uint32_t)bb;
+                p = 0xFF000000u | ((uint32_t)rr << 16) | ((uint32_t)gg << 8) | (uint32_t)bb;
             }
         }
+        // Полоса чистит только свои строки: остальные ей не принадлежат.
+        if (bandActive) clearGlowBand(); else clearGlow();
     }
 
     void drawCircleRing(int cx, int cy, int r, int thickness, uint32_t col, int alpha = 255, bool additive = false) {
@@ -352,12 +785,29 @@ struct Renderer {
     }
 
     inline void addSpan(int y, int x0, int x1, uint32_t col, int intensity) {
+        if (bandActive && (y < bandY0 || y >= bandY1)) return;
         if ((unsigned)y >= (unsigned)SCREEN_H || intensity <= 0 || x0 > x1) return;
         x0 = std::max(0, x0); x1 = std::min(SCREEN_W - 1, x1);
         if (x0 > x1) return;
         const int cr = (col >> 16) & 0xFF, cg = (col >> 8) & 0xFF, cb = col & 0xFF;
+        const uint32_t addPacked = ((uint32_t)((cr * intensity) >> 8) << 16)
+                                 | ((uint32_t)((cg * intensity) >> 8) << 8)
+                                 | (uint32_t)((cb * intensity) >> 8);
         uint32_t* row = pixels + y * SCREEN_W;
-        for (int x = x0; x <= x1; ++x) {
+        int x = x0;
+#if RENDERER_SIMD
+        // Свет прибавляется к каналу с отсечкой на 255 — это paddusb, четыре
+        // пикселя за команду. Раньше на каждый пиксель было три сравнения.
+        {
+            const __m128i diff = _mm_set1_epi32((int)addPacked);
+            const __m128i alphaMask = _mm_set1_epi32((int)0xFF000000u);
+            for (; x + 3 <= x1; x += 4) {
+                __m128i* quad = (__m128i*)(row + x);
+                _mm_storeu_si128(quad, _mm_or_si128(_mm_adds_epu8(_mm_loadu_si128(quad), diff), alphaMask));
+            }
+        }
+#endif
+        for (; x <= x1; ++x) {
             uint32_t& dst = row[x];
             int rr = ((dst >> 16) & 0xFF) + ((cr * intensity) >> 8);
             int gg = ((dst >> 8) & 0xFF) + ((cg * intensity) >> 8);
@@ -370,6 +820,26 @@ struct Renderer {
     }
 
     void drawLine(int x0, int y0, int x1, int y1, uint32_t col, int thickness = 1, int alpha = 255, bool additive = false) {
+        // Тонкая линия по оси — это одна полоса, а не шаг Брезенхема с проверкой
+        // границ на каждый пиксель. В кадре таких линий тысячи: фаски плит пола,
+        // лучи печати инея, насечки диска. Формула цвета та же, что в blendPixel
+        // и addPixel, поэтому вывод не меняется.
+        if (thickness <= 1) {
+            if (y0 == y1) {
+                const int lo = std::min(x0, x1), hi = std::max(x0, x1);
+                if (additive) addSpan(y0, lo, hi, col, alpha);
+                else blendSpan(y0, lo, hi, col, alpha);
+                return;
+            }
+            if (x0 == x1) {
+                const int lo = std::min(y0, y1), hi = std::max(y0, y1);
+                for (int y = lo; y <= hi; ++y) {
+                    if (additive) addPixel(x0, y, col, alpha);
+                    else blendPixel(x0, y, col, alpha);
+                }
+                return;
+            }
+        }
         int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
         int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
         int err = dx + dy;
@@ -427,16 +897,17 @@ struct Renderer {
             buildVignetteMap();
         // Blend with a precomputed multiply table: the per-pixel division by 255 was the
         // remaining cost after baking the map (3,8 мс на 1080p).
-        static uint8_t mulLut[256 * 256];
-        static bool lutReady = false;
-        if (!lutReady) {
+        // Таблица собирается один раз; инициализация статической структуры в
+        // C++11 потокобезопасна, поэтому полосам не нужен замок.
+        struct MulLut { uint8_t v[256 * 256]; MulLut() {
             for (int inv = 0; inv < 256; ++inv)
-                for (int v = 0; v < 256; ++v)
-                    mulLut[(inv << 8) | v] = (uint8_t)((v * inv) / 255);
-            lutReady = true;
-        }
+                for (int val = 0; val < 256; ++val)
+                    v[(inv << 8) | val] = (uint8_t)((val * inv) / 255);
+        } };
+        static const MulLut& lutTable = []() -> const MulLut& { static const MulLut t; return t; }();
+        const uint8_t* mulLut = lutTable.v;
         const int tr = 0x04, tg = 0x02, tb = 0x08;
-        for (int y = 0; y < SCREEN_H; ++y) {
+        for (int y = bandY0; y < bandY1; ++y) {
             const uint8_t* row = vignetteAlpha.data() + (size_t)y * SCREEN_W;
             uint32_t* dst = pixels + (size_t)y * SCREEN_W;
             for (int x = 0; x < SCREEN_W; ++x) {
@@ -462,6 +933,7 @@ struct Renderer {
         for (int sy = 0; sy < h; ++sy) {
             int py = startY + sy;
             if ((unsigned)py >= (unsigned)SCREEN_H) continue;
+            if (py < bandY0 || py >= bandY1) continue;
             const uint32_t* row = spr->pixels + sy * w;
             for (int sx = 0; sx < w; ++sx) {
                 int px = startX + (flipX ? (w - 1 - sx) : sx);
@@ -488,10 +960,11 @@ struct Renderer {
     void bakedSpriteVisualOffset(const BakedSprite* spr, int& dx, int& dy) const {
         dx = dy = 0;
         if (!spr || spr->width <= 0 || spr->height <= 0) return;
-        struct Entry { const BakedSprite* spr; int dx, dy; };
+        struct Entry { const BakedSprite* spr = nullptr; int dx = 0, dy = 0; };
         static Entry cache[256];
-        static int used = 0;
-        for (int i = 0; i < used; ++i) {
+        static std::atomic<int> used{0};
+        const int filled = used.load(std::memory_order_acquire);
+        for (int i = 0; i < filled; ++i) {
             if (cache[i].spr == spr) { dx = cache[i].dx; dy = cache[i].dy; return; }
         }
         int x0 = spr->width, y0 = spr->height, x1 = -1, y1 = -1;
@@ -509,7 +982,13 @@ struct Renderer {
             dx = (int)std::lround((x0 + x1) * 0.5 - (spr->width - 1) * 0.5);
             dy = (int)std::lround((y0 + y1) * 0.5 - (spr->height - 1) * 0.5);
         }
-        if (used < 256) cache[used++] = Entry{spr, dx, dy};
+        const int slot = used.load(std::memory_order_relaxed);
+        if (slot < 256) {
+            cache[slot].dx = dx;
+            cache[slot].dy = dy;
+            cache[slot].spr = spr;
+            used.store(slot + 1, std::memory_order_release);
+        }
     }
 
     // Draw a baked sprite so its visible pixels are centred on (cx, cy).
@@ -529,38 +1008,82 @@ struct Renderer {
         const int w = std::max(1, (int)(spr->width * scaleX));
         const int h = std::max(1, (int)(spr->height * scaleY));
         const int x = cx - w / 2, y = cy - h / 2;
-        const int x0 = std::max(0, x), y0 = std::max(0, y);
-        const int x1 = std::min(SCREEN_W, x + w), y1 = std::min(SCREEN_H, y + h);
+        const int x0 = std::max(0, x);
+        int y0 = std::max(0, y);
+        const int x1 = std::min(SCREEN_W, x + w);
+        int y1 = std::min(SCREEN_H, y + h);
+        clampBandRows(y0, y1);
+        if (x0 >= x1 || y0 >= y1) return;
+        const int span = x1 - x0;
+        columnMap.resize((size_t)span);
+        for (int i = 0; i < span; ++i) {
+            const int dx = x0 + i - x;
+            columnMap[i] = std::min(spr->width - 1, (flipX ? (w - 1 - dx) : dx) * spr->width / w);
+        }
+        const bool cap = clipActive;
+        const int cx0 = std::max(x0, clipX0), cx1 = std::min(x1, clipX1);
+        if (cap && cx0 >= cx1) return;
+        const int lo = cap ? cx0 : x0, hi = cap ? cx1 : x1;
         for (int py = y0; py < y1; ++py) {
+            if (cap && (py < clipY0 || py >= clipY1)) continue;
             const int sy = std::min(spr->height - 1, ((py - y) * spr->height) / h);
             const uint32_t* row = spr->pixels + sy * spr->width;
-            for (int px = x0; px < x1; ++px) {
-                const int dx = px - x;
-                const int sx = std::min(spr->width - 1, (flipX ? (w - 1 - dx) : dx) * spr->width / w);
-                uint32_t c = row[sx];
+            uint32_t* dst = pixels + py * SCREEN_W;
+            for (int px = lo; px < hi; ++px) {
+                uint32_t c = row[columnMap[px - x0]];
                 int a = (c >> 24) & 0xFF;
                 if (a <= 10) continue;
                 a = (a * alphaScale) >> 8;
                 if (hitFlash) c = lerpColor(c, 0xFFFFE8B0, 0.72f);
                 else if (frozen) c = lerpColor(c, 0xFF50E8FF, 0.55f);
-                blendPixel(px, py, c, a);
+                if (a >= 255) { dst[px] = c; continue; }
+                if (a <= 0) continue;
+                const uint32_t d = dst[px];
+                const int inv = 255 - a;
+                dst[px] = 0xFF000000u
+                    | (((((c >> 16) & 0xFF) * a + ((d >> 16) & 0xFF) * inv) >> 8) << 16)
+                    | (((((c >> 8) & 0xFF) * a + ((d >> 8) & 0xFF) * inv) >> 8) << 8)
+                    | (((c & 0xFF) * a + (d & 0xFF) * inv) >> 8);
             }
         }
     }
 
     void drawBakedSpriteScaled(const BakedSprite* spr, int x, int y, int w, int h, int alphaScale = 255) {
         if (!spr || w <= 0 || h <= 0) return;
-        const int x0 = std::max(0, x), y0 = std::max(0, y);
-        const int x1 = std::min(SCREEN_W, x + w), y1 = std::min(SCREEN_H, y + h);
+        const int x0 = std::max(0, x);
+        int y0 = std::max(0, y);
+        const int x1 = std::min(SCREEN_W, x + w);
+        int y1 = std::min(SCREEN_H, y + h);
+        clampBandRows(y0, y1);
+        if (x0 >= x1 || y0 >= y1) return;
+        const int span = x1 - x0;
+        columnMap.resize((size_t)span);
+        if (w == spr->width) {
+            for (int i = 0; i < span; ++i) columnMap[i] = x0 + i - x;
+        } else {
+            for (int i = 0; i < span; ++i)
+                columnMap[i] = std::min(spr->width - 1, ((x0 + i - x) * spr->width) / w);
+        }
+        const bool cap = clipActive;
+        const int cx0 = std::max(x0, clipX0), cx1 = std::min(x1, clipX1);
+        if (cap && (cx0 >= cx1)) return;
         for (int py = y0; py < y1; ++py) {
+            if (cap && (py < clipY0 || py >= clipY1)) continue;
             const int sy = std::min(spr->height - 1, ((py - y) * spr->height) / h);
             const uint32_t* row = spr->pixels + sy * spr->width;
-            for (int px = x0; px < x1; ++px) {
-                const int sx = std::min(spr->width - 1, ((px - x) * spr->width) / w);
-                const uint32_t c = row[sx];
-                const int a = (((c >> 24) & 0xFF) * alphaScale) >> 8;
-                if (a >= 255) pixels[py * SCREEN_W + px] = c;
-                else if (a > 0) blendPixel(px, py, c, a);
+            uint32_t* dst = pixels + py * SCREEN_W;
+            const int lo = cap ? cx0 : x0, hi = cap ? cx1 : x1;
+            for (int px = lo; px < hi; ++px) {
+                const uint32_t c = row[columnMap[px - x0]];
+                int a = (int)(((c >> 24) & 0xFF) * alphaScale) >> 8;
+                if (a >= 255) { dst[px] = c; continue; }
+                if (a <= 0) continue;
+                const uint32_t d = dst[px];
+                const int inv = 255 - a;
+                dst[px] = 0xFF000000u
+                    | (((((c >> 16) & 0xFF) * a + ((d >> 16) & 0xFF) * inv) >> 8) << 16)
+                    | (((((c >> 8) & 0xFF) * a + ((d >> 8) & 0xFF) * inv) >> 8) << 8)
+                    | (((c & 0xFF) * a + (d & 0xFF) * inv) >> 8);
             }
         }
     }
@@ -618,21 +1141,43 @@ struct Renderer {
         if (!text || alpha <= 0) return;
         const char* p = text;
         int curX = x;
+        const int sr = (col >> 16) & 0xFF, sg = (col >> 8) & 0xFF, sb = col & 0xFF;
+        const bool cap = clipActive;
         while (*p) {
             uint32_t cp = nextUTF8(p);
             const BakedGlyph* g = findGlyph(font, cp);
             if (!g) continue;
             if (g->width > 0 && g->height > 0) {
-                int gx = curX + g->bearingX;
-                int gy = y + g->bearingY;
+                const int gx = curX + g->bearingX;
+                const int gy = y + g->bearingY;
                 const uint8_t* bmp = font.bitmapData + g->dataOffset;
-                for (int row = 0; row < g->height; ++row) {
-                    int py = gy + row;
+                // Клип и границы кадра проверяются на строку глифа, а не на
+                // каждый пиксель: текст рисуется десятки раз за кадр, и это
+                // были три лишние проверки на пиксель внутри подсчёта цвета.
+                const int gh = (int)g->height, gw = (int)g->width;
+                const int rowStart = std::max(cap ? std::max(0, clipY0 - gy) : 0, bandY0 - gy);
+                const int rowEnd = std::min(cap ? std::min(gh, clipY1 - gy) : gh, bandY1 - gy);
+                const int colStart = cap ? std::max(0, clipX0 - gx) : 0;
+                const int colEnd = cap ? std::min(gw, clipX1 - gx) : gw;
+                for (int row = rowStart; row < rowEnd; ++row) {
+                    const int py = gy + row;
                     if ((unsigned)py >= (unsigned)SCREEN_H) continue;
                     const uint8_t* rptr = bmp + row * g->width;
-                    for (int colIdx = 0; colIdx < g->width; ++colIdx) {
-                        uint8_t cov = rptr[colIdx];
-                        if (cov > 8) blendPixel(gx + colIdx, py, col, (cov * alpha) >> 8);
+                    uint32_t* dst = pixels + py * SCREEN_W;
+                    for (int colIdx = colStart; colIdx < colEnd; ++colIdx) {
+                        const uint8_t cov = rptr[colIdx];
+                        if (cov <= 8) continue;
+                        const int px = gx + colIdx;
+                        if ((unsigned)px >= (unsigned)SCREEN_W) continue;
+                        const int a = (cov * alpha) >> 8;
+                        if (a <= 0) continue;
+                        if (a >= 255) { dst[px] = col; continue; }
+                        const int inv = 255 - a;
+                        const uint32_t d = dst[px];
+                        dst[px] = 0xFF000000u
+                            | ((((sr * a + ((d >> 16) & 0xFF) * inv) >> 8) << 16))
+                            | ((((sg * a + ((d >> 8) & 0xFF) * inv) >> 8) << 8))
+                            | (((sb * a + (d & 0xFF) * inv) >> 8));
                     }
                 }
             }
@@ -640,7 +1185,46 @@ struct Renderer {
         }
     }
 
+    // Журнал нарисованного текста. Стенд вёрстки (tools/ui_probe.cpp) читает
+    // его вместо пикселей: строка попадает в журнал тем же вызовом, что и на
+    // экран, поэтому стенд не может разойтись с игрой — текст, который игра не
+    // нарисовала, не появится и в проверке. Тег слоя ставит вызывающий код:
+    // 0 — интерфейс, 1 — мир (там подписи перекрываются по природе).
+    struct TextLayout {
+        int x = 0, y = 0, w = 0, h = 0;
+        int clipX0 = 0, clipY0 = 0, clipX1 = 0, clipY1 = 0;
+        bool clipped = false;
+        int tag = 0;
+        const BakedFont* font = nullptr;
+        std::string text;
+    };
+    std::vector<TextLayout> textLayouts;
+    // Журнал выключен по умолчанию: в игре он не нужен и не должен стоить
+    // ни одной аллокации на строку. Включает его только стенд вёрстки.
+    bool textJournalEnabled = false;
+    int textTag = 0;
+
+    void clearTextLayouts() { textLayouts.clear(); }
+
+    void recordTextLayout(const BakedFont& font, int x, int y, const char* text, int alpha) {
+        if (!textJournalEnabled || !text || alpha <= 0) return;
+        TextLayout tl;
+        tl.x = x;
+        tl.y = y;
+        tl.w = textWidth(font, text);
+        tl.h = font.lineHeight;
+        tl.clipped = clipActive;
+        const int bx0 = clipActive ? clipX0 : 0, by0 = clipActive ? clipY0 : bandY0;
+        const int bx1 = clipActive ? clipX1 : SCREEN_W, by1 = clipActive ? clipY1 : bandY1;
+        tl.clipX0 = bx0; tl.clipY0 = by0; tl.clipX1 = bx1; tl.clipY1 = by1;
+        tl.tag = textTag;
+        tl.font = &font;
+        tl.text = text;
+        textLayouts.push_back(tl);
+    }
+
     void drawText(const BakedFont& font, int x, int y, const char* text, uint32_t col, bool shadow = true, int alpha = 255) {
+        recordTextLayout(font, x, y, text, alpha);
         if (shadow) drawTextRaw(font, x + 2, y + 2, text, 0xFF040208, (alpha * 225) >> 8);
         drawTextRaw(font, x, y, text, col, alpha);
     }
@@ -686,6 +1270,37 @@ struct Renderer {
         return curY;
     }
 
+    // Высота текста, свёрстанного с той же шириной, что и drawTextWrapped:
+    // по ней считается прокрутка.
+    int measureTextWrapped(const BakedFont& font, int maxWidth, const char* text) const {
+        if (!text) return 0;
+        std::string str(text), word, line;
+        int height = 0;
+        auto flushLine = [&](const std::string& l, bool preserveBlank = false) {
+            if (l.empty()) {
+                if (preserveBlank) height += font.lineHeight;
+                return;
+            }
+            height += font.lineHeight;
+        };
+        for (size_t i = 0; i <= str.size(); ++i) {
+            char c = (i < str.size()) ? str[i] : ' ';
+            if (c == ' ' || c == '\n') {
+                if (!word.empty()) {
+                    std::string cand = line.empty() ? word : (line + " " + word);
+                    if (textWidth(font, cand.c_str()) > maxWidth && !line.empty()) {
+                        flushLine(line);
+                        line = word;
+                    } else line = cand;
+                    word.clear();
+                }
+                if (c == '\n') { flushLine(line, true); line.clear(); }
+            } else word.push_back(c);
+        }
+        if (!line.empty()) flushLine(line);
+        return height;
+    }
+
     void drawShadow(int cx, int cy, int rx, int ry) {
         if (rx <= 0 || ry <= 0) return;
         const int y0 = std::max(0, cy - ry), y1 = std::min(SCREEN_H - 1, cy + ry);
@@ -708,6 +1323,256 @@ struct Renderer {
             }
             blendSpan(py, cx - extent, cx + extent, 0xFF040208, 135);
         }
+    }
+
+    // ── Общий свет фигур ──────────────────────────────────────────────────────
+    // Одно направление света на весь бестиарий: сверху-слева. Раньше у каждого
+    // стража блик стоял там, где его нарисовали: у Моргара сверху, у Малакора
+    // справа, у Протоколиста вообще снизу — шесть стражей выглядели как шесть
+    // разных игр. Направление задаётся здесь один раз и одинаково для всех.
+    static constexpr int FIG_LIGHT_DX = -1;
+    static constexpr int FIG_LIGHT_DY = -1;
+    // Толщины и силы блика, тени и стыка переехали в FigMaterial: с 2.10.32 они
+    // зависят от материала, и одной константы на всех больше нет.
+    // Выключатель нужен стендам: свет сравнивается «до и после» на одном кадре,
+    // иначе цифры смешивают разные палитры стражей.
+    static inline bool figureVolumeEnabled = true;
+    static inline float figureVolumeGradient = 1.0f;
+
+    // ── Пружина позы (аудит §8, P2 №7–8) ─────────────────────────────────────
+    // Поза стража раньше переключалась мгновенно: пришёл замах — фигура в тот же
+    // кадр встала в позу, кончился выброс — в тот же кадр вернулась. В анимации
+    // это называется отсутствием follow-through: движение обрывается, а не
+    // догоняет. Теперь тело идёт за позой пружиной с небольшим перелётом:
+    // замах слегка отстаёт, а после выброса фигура ещё пару кадров проседает.
+    //
+    // Коэффициент демпфирования меньше критического, поэтому сигнал реально
+    // перелетает цель (до ~15 %), а не просто плавно к ней подходит.
+    struct BossSpring {
+        float pose = 0.0f, poseV = 0.0f;
+        float burst = 0.0f, burstV = 0.0f;
+        float lastT = -1.0f;
+    };
+    // Пружина общая на кадр, а не на экземпляр: при рисовании полосами страж
+    // переезжает из полосы в полосу, и его поза не должна начинаться заново.
+    static BossSpring* bossSprings() { static BossSpring springs[6]; return springs; }
+    static inline bool bossSpringEnabled = true;
+    // Для стендов: последние сглаженные значения, которые получила фигура.
+    static inline float lastBossPose = 0.0f, lastBossBurst = 0.0f;
+    static inline void springStep(float& x, float& v, float target, float dt, float omega, float zeta) {
+        const float a = omega * omega * (target - x) - 2.0f * zeta * omega * v;
+        v += a * dt;
+        x += v * dt;
+    }
+
+    // ── Материалы (аудит §8, P1 №4–6) ────────────────────────────────────────
+    // Раньше проход объёма применял один приём ко всем шести стражам: металл,
+    // ткань, камень и стекло получали одинаковый блик и одинаковую тень, и вся
+    // линейка выглядела отлитой из одного материала. Теперь у материала своя
+    // рампа: металл — узкий резкий блик и короткая жёсткая тень, ткань и плоть —
+    // широкий мягкий переход, стекло — яркий край почти без тени, пергамент и
+    // кость блика не получают вовсе.
+    struct FigMaterial {
+        int rimDepth, coreDepth;      // толщина блика и тени, px
+        float rimK, coreK;            // сила блика и тени на силуэте
+        float internalK;              // блик на стыке деталей (тень стыка — отдельно)
+        float rampLight, rampDark;    // тональная рампа: свет и тень по корпусу
+    };
+    // Тип стража: 0 металл, 1 плоть/плесень, 2 ткань, 3–4 камень, 5 стекло.
+    static FigMaterial figMaterial(int bossId) {
+        switch (bossId) {
+            case 0:  return {2, 3, 0.62f, 0.44f, 0.30f, 0.20f, 0.26f};
+            case 1:  return {4, 5, 0.34f, 0.26f, 0.00f, 0.11f, 0.16f};
+            case 2:  return {4, 5, 0.30f, 0.24f, 0.00f, 0.10f, 0.16f};
+            case 3:  return {3, 4, 0.44f, 0.32f, 0.28f, 0.15f, 0.20f};
+            case 4:  return {3, 4, 0.40f, 0.30f, 0.28f, 0.14f, 0.20f};
+            default: return {2, 2, 0.70f, 0.10f, 0.24f, 0.26f, 0.06f};
+        }
+    }
+    // Пергамент, страницы книг, кость, маска: блик на них читается как пластик.
+    static FigMaterial figMaterialParchment() { return {3, 3, 0.10f, 0.12f, 0.00f, 0.06f, 0.10f}; }
+
+    // Снимок области кадра ДО отрисовки фигуры. Ореол, знак на полу и осколки
+    // уже нарисованы, поэтому в маску объёма они не попадут.
+    void captureFigureRegion(int x0, int y0, int w, int h) {
+        const int W = std::min(SCREEN_W, width), H = std::min(SCREEN_H, height);
+        figureScratch.resize((size_t)w * h);
+        for (int j = 0; j < h; ++j) {
+            const int sy = y0 + j;
+            for (int i = 0; i < w; ++i) {
+                const int sx = x0 + i;
+                // Строки вне полосы не читаем вовсе: их в этот момент пишет
+                // другой поток. Всё равно объём считается только по своим
+                // строкам (границы полос обходят фигуру стража стороной).
+                const bool inBand = (sy >= bandY0 && sy < bandY1);
+                figureScratch[(size_t)j * w + i] =
+                    (inBand && sx >= 0 && sy >= 0 && sx < W && sy < H) ? pixels[(size_t)sy * W + sx] : 0u;
+            }
+        }
+    }
+
+    // Объём фигуры: край со стороны света светлеет, противоположный уходит в
+    // тень, низ темнеет (AO от земли). В 3D это rim-свет, core shadow и AO;
+    // здесь — один проход по маске, поэтому фигуру не нужно перерисовывать.
+    // Границы берутся двух родов: силуэт (фигура против фона) и стык деталей.
+    // Стык даёт вполовину более слабый эффект — иначе фигура выглядит не
+    // объёмной, а тиснёной, с двойными контурами у каждой детали.
+    void applyFigureVolume(int x0, int y0, int w, int h, float strength = 1.0f, float gradient = 0.0f,
+                           int bodyCx = 0, int bodyCy = 0, int matId = -1) {
+        if (strength <= 0.01f || w <= 0 || h <= 0) return;
+        const int W = std::min(SCREEN_W, width), H = std::min(SCREEN_H, height);
+        if ((int)figureScratch.size() != w * h) return;
+        figureMask.resize((size_t)w * h);
+        figureColor.resize((size_t)w * h);
+        int bottom = -1, top = h, leftmost = w, rightmost = -1;
+        for (int j = 0; j < h; ++j) {
+            for (int i = 0; i < w; ++i) {
+                const int sx = x0 + i, sy = y0 + j;
+                if (sx < 0 || sy < 0 || sx >= W || sy >= H || sy < bandY0 || sy >= bandY1) {
+                    figureMask[(size_t)j * w + i] = 0;
+                    continue;
+                }
+                const uint32_t pix = pixels[(size_t)sy * W + sx];
+                // Плотный ключ цвета: 5 бит на канал. Полный цвет детали не нужен,
+                // нужно только «это та же деталь или соседняя», а 32-битная копия
+                // области стоила дороже самого прохода.
+                figureColor[(size_t)j * w + i] = (uint16_t)((((pix >> 19) & 0x1F) << 10) |
+                                                           (((pix >> 11) & 0x1F) << 5) |
+                                                           ((pix >> 3) & 0x1F));
+                const bool solid = pix != figureScratch[(size_t)j * w + i];
+                figureMask[(size_t)j * w + i] = solid ? 1 : 0;
+                if (solid) {
+                    if (j > bottom) bottom = j;
+                    if (j < top) top = j;
+                    if (i < leftmost) leftmost = i;
+                    if (i > rightmost) rightmost = i;
+                }
+            }
+        }
+        if (bottom < 0) return;
+        const float k = std::max(0.0f, std::min(1.0f, strength));
+        // Центр градиента — центр самой фигуры (cx, cy вызова), а не середина
+        // рамки: у Моргара щит уводит рамку влево, и по рамке половина тела
+        // попадала в «тень» независимо от позы.
+        const float gc = (float)(bodyCx - x0), gr = (float)(bodyCy - y0);
+        const float ghw = std::max(1.0f, std::max(std::fabs((float)leftmost - gc), std::fabs((float)rightmost - gc)));
+        const float ghh = std::max(1.0f, std::max(std::fabs((float)top - gr), std::fabs((float)bottom - gr)));
+        auto solidAt = [&](int i, int j) {
+            if (i < 0 || j < 0 || i >= w || j >= h) return false;
+            return figureMask[(size_t)j * w + i] != 0;
+        };
+        // Ищет ближайшую границу в заданном направлении. Возвращает расстояние и
+        // говорит, силуэт это или стык деталей. У стыка деталей толщина ограничена
+        // (internalMax): контактная тень — это кант в 2 px, а не размытое пятно.
+        auto boundaryToward = [&](int i, int j, int dx, int dy, int depth, int internalMax, bool& silhouette) {
+            silhouette = false;
+            const int c0 = figureColor[(size_t)j * w + i];
+            const int r0 = (c0 >> 10) & 0x1F, g0 = (c0 >> 5) & 0x1F, b0 = c0 & 0x1F;
+            for (int d = 1; d <= depth; ++d) {
+                const int ni = i + dx * d, nj = j + dy * d;
+                if (!solidAt(ni, nj)) { silhouette = true; return d; }
+                const int c1 = figureColor[(size_t)nj * w + ni];
+                const int dr = std::abs(r0 - ((c1 >> 10) & 0x1F));
+                const int dg = std::abs(g0 - ((c1 >> 5) & 0x1F));
+                const int db = std::abs(b0 - (c1 & 0x1F));
+                if (dr + dg + db > 4) return d <= internalMax ? d : 0;
+            }
+            return 0;
+        };
+        // Материал зависит только от типа стража (или от «это пергамент»),
+        // поэтому таблица считается до цикла, а не на каждый пиксель фигуры.
+        const FigMaterial matBase = figMaterial(matId);
+        const FigMaterial matParch = figMaterialParchment();
+        for (int j = 0; j <= bottom; ++j) {
+            const uint8_t* maskRow = &figureMask[(size_t)j * w];
+            const uint16_t* colorRow = &figureColor[(size_t)j * w];
+            const int sy = y0 + j;
+            if (sy < 0 || sy >= H || sy < bandY0 || sy >= bandY1) continue;
+            uint32_t* pixRow = pixels + (size_t)sy * W;
+            for (int i = 0; i < w; ++i) {
+                if (!maskRow[i]) continue;
+                const int sx = x0 + i;
+                if (sx < 0 || sx >= W) continue;
+                uint32_t c = pixRow[sx];
+                // Материал по цвету детали: пергамент, страницы и кость узнаются
+                // по высокой светлоте при низкой насыщенности, остальное — по типу
+                // стража. Один и тот же приём для стали и для ткани — это и была
+                // причина, по которой линейка читалась отлитой из одного металла.
+                const uint16_t key = colorRow[i];
+                const int r5 = (key >> 10) & 0x1F, g5 = (key >> 5) & 0x1F, b5 = key & 0x1F;
+                const int lum8 = ((r5 * 77 + g5 * 150 + b5 * 29) >> 8) * 8;
+                // Тёплое и светлое — пергамент, страницы, кость, маска. Камень
+                // Протоколиста тоже светлый, но холодный (синего больше красного),
+                // поэтому одним порогом насыщенности их не разделить.
+                const int chroma = std::max(r5, std::max(g5, b5)) - std::min(r5, std::min(g5, b5));
+                const bool parchment = (lum8 > 150) && (chroma <= 6) && (r5 > b5 + 2);
+                const FigMaterial mat = parchment ? matParch : matBase;
+                // Тональная рампа по материалу. Ступенчатую (три тона по осям
+                // кадра) пробовал: на крупном теле она даёт прямой диагональный
+                // шов через всю фигуру — у Азарота балахон делился на светлую и
+                // тёмную половину ровной линией. Тона даёт не порог по координате,
+                // а сама форма: блик у края, кольцо собственной тени внутри и
+                // контактный кант на стыке деталей. Здесь — только сила рампи,
+                // своя для каждого материала.
+                if (gradient > 0.001f) {
+                    const float nx = (i - gc) / ghw, ny = (j - gr) / ghh;
+                    const float dot = (nx * FIG_LIGHT_DX + ny * FIG_LIGHT_DY) * 0.70710678f;
+                    if (dot > 0.0f) c = lerpColor(c, 0xFFFFE8C0, dot * mat.rampLight * gradient * k);
+                    else c = lerpColor(c, 0xFF0A0714, -dot * mat.rampDark * gradient * k);
+                }
+                bool rimSil = false, coreSil = false;
+                const int rimD = boundaryToward(i, j, FIG_LIGHT_DX, FIG_LIGHT_DY, mat.rimDepth, 2, rimSil);
+                const int coreD = rimD ? 0
+                    : boundaryToward(i, j, -FIG_LIGHT_DX, -FIG_LIGHT_DY, mat.coreDepth, 2, coreSil);
+                if (rimD) {
+                    const float edge = 1.0f - (rimD - 1) / (float)mat.rimDepth;
+                    const float t = edge * mat.rimK * (rimSil ? 1.0f : mat.internalK) * k;
+                    c = lerpColor(c, 0xFFFFF4D6, t);
+                } else if (coreD) {
+                    const float edge = 1.0f - (coreD - 1) / (float)mat.coreDepth;
+                    // Контактная тень между деталями: кант в 2 px, в полтора раза
+                    // сильнее обычной тени силуэта. Раньше стык шёл на 45 % от
+                    // силуэта и детали сливались в одно пятно (средний контраст
+                    // стыка 21 против 34 у плоской заливки).
+                    const float boost = coreSil ? 1.0f : 1.5f;
+                    const float t = edge * mat.coreK * boost * k;
+                    c = lerpColor(c, 0xFF06040C, std::min(0.75f, t));
+                } else {
+                    // Кольцо собственной тени: полоса в 4–7 px внутри от тёмного
+                    // края. Это третий тон рампы, и он идёт по форме, а не по
+                    // координате кадра, поэтому читается как объём, а не как
+                    // половина, залитая краской.
+                    bool ringSil = false;
+                    const int ringD = boundaryToward(i, j, -FIG_LIGHT_DX, -FIG_LIGHT_DY,
+                                                    mat.coreDepth + 6, 0, ringSil);
+                    if (ringD > mat.coreDepth) {
+                        const float t = (1.0f - (ringD - mat.coreDepth) / 6.0f) * mat.coreK * 0.55f * k;
+                        c = lerpColor(c, 0xFF0A0714, t);
+                    }
+                }
+                // AO у земли: последние 14 px фигуры темнеют — фигура стоит на
+                // полу, а не лежит на нём картинкой.
+                const int aoBand = 14;
+                if (bottom - j < aoBand) {
+                    const float t = (1.0f - (bottom - j) / (float)aoBand) * 0.16f * k;
+                    c = lerpColor(c, 0xFF07050E, t);
+                }
+                pixels[(size_t)sy * W + sx] = c;
+            }
+        }
+    }
+
+    // Низ фигуры в пикселях от cy при масштабе 1.12. Замерено стендом по кадрам
+    // (design/char_model_audit.md, §6): у Азарота, Протоколиста и Двойника низ
+    // на 22–34 px ниже общего cy+50, и они висели над собственной тенью.
+    static int bossFootOffset(int id) {
+        static const int t[6] = {60, 50, 52, 74, 84, 72};
+        return t[std::max(0, std::min(5, id))];
+    }
+    // Ширина тени по ширине силуэта, а не одна на всех.
+    static int bossShadowWidth(int id) {
+        static const int t[6] = {34, 30, 32, 46, 44, 46};
+        return t[std::max(0, std::min(5, id))];
     }
 
     void drawHeroSprite(int cx, int cy, int heroClass, float animTime, int facing, bool hurtFlash, bool dashing) {
@@ -909,27 +1774,96 @@ struct Renderer {
     // Four guardians, four silhouettes. They are drawn from primitives instead of sharing
     // one baked sprite family, because "same shape, different tint" reads as a placeholder.
     // echo == true renders the trio copy: same shape, spectral and translucent.
-    void drawBossFigure(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged, bool echo, float s = 1.0f) {
+    // castPose: 0..1 — насколько замах уже сделан (колба поднята над головой),
+    // castBurst: 0..1 — удар/выброс уже случился (колба выброшена вперёд).
+    // mirror: страж повёрнут влево — фигура рисуется зеркально, к герою.
+    // recoil: 0..1 — отдача от попадания: фигура приседает и сжимается.
+    void drawBossFigure(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged, bool echo,
+                        float s = 1.0f, float castPose = 0.0f, float castBurst = 0.0f,
+                        bool mirror = false, float recoil = 0.0f, float fade = 1.0f) {
         const int id = bossType % 6;
         const uint32_t flash = 0xFFFFF0C8;
         const float breath = 0.5f + 0.5f * sinf(animTime * 2.2f);
         const int lift = (int)(sinf(animTime * 1.6f) * 2.0f);
         auto tint = [&](uint32_t c) { return hitFlash ? lerpColor(c, flash, 0.7f) : c; };
-        const int alpha = echo ? 205 : 255;
+        const int alpha = (int)((echo ? 205 : 255) * std::max(0.0f, std::min(1.0f, fade)));
 
         // Everything below is written in one canonical 1:1 size; the helpers rescale it so
         // the same figure works in the arena and on the campaign dossier card.
-        const float sc = s;
-        auto PX = [&](int ax) { return cx + (int)lrintf((ax - cx) * sc); };
-        auto PY = [&](int ay) { return cy + (int)lrintf((ay - cy) * sc); };
+        //
+        // Зеркало делается здесь, в переводе координат: вся фигура нарисована
+        // в одной системе, поэтому достаточно отразить смещение от центра — и
+        // страж поворачивается к герою, а не идёт спиной вперёд. Раньше стражи
+        // не разворачивались вообще: любой из них смотрел вправо при любом
+        // движении по арене.
+        // Squash & stretch (P2 №8). Раньше от удара фигура сжималась целиком —
+        // одинаково по обеим осям, и попадание читалось как «страж стал меньше».
+        // Теперь она приседает: по вертикали ужимается сильнее, чем по
+        // горизонтали, поэтому объём сохраняется и удар «вдавливает» стража в пол.
+        const float scX = s * (1.0f + recoil * 0.055f);
+        const float scY = s * (1.0f - recoil * 0.075f);
+        const float sc = scX;  // радиусы, толщины линий и ширина прямоугольников
+        const int cyAdj = cy + (int)(recoil * 3.0f);
+        // Выпад. Раньше удар стража читался только по одной детали — древку, книге,
+        // перу: корпус стоял на месте, будто статуя махнула рукой. Теперь на замахе
+        // страж отклоняется назад, а на выбросе подаётся всем телом к герою.
+        const float cpLean = std::max(0.0f, std::min(1.2f, castPose));
+        const float cbLean = std::max(0.0f, std::min(1.2f, castBurst));
+        const int lunge = (int)lrintf((cbLean * 13.0f - cpLean * 6.0f) * sc) * (mirror ? -1 : 1);
+        cx += lunge;
+        // ── Задержка периферии (P2 №7) ───────────────────────────────────────
+        // Раньше корпус и все свисающие детали считались от одного animTime, и
+        // фигура двигалась монолитом, как картонная вырезка. В жизни периферия
+        // догоняет корпус: кисть отстаёт от плеча, подол — от пояса, кончик пера —
+        // от кисти. Здесь это сдвиг фазы: деталь считает синус от (animTime - lag),
+        // и чем дальше она от центра фигуры, тем больше lag.
+        // Величины подобраны по читаемости, а не по физике: настоящая тряпка
+        // отстаёт на 1–3 кадра (17–50 мс), и на 100-пиксельной фигуре это не
+        // видно вовсе. 60–160 мс — это 4–10 кадров, уже заметный «хвост».
+        const float T_HAND = animTime - 0.060f;   // кисти и оружие в руках
+        const float T_CLOAK = animTime - 0.110f;  // полы, ленты, страницы
+        const float T_HEM = animTime - 0.160f;    // подол, шлейф, длинные перья
+        // ── Походка (P2 №9) ─────────────────────────────────────────────────
+        // Корпус проседает в момент шага: ноги разошлись — вес ушёл вниз, ноги
+        // сошлись — корпус подбросило. Раньше корпус ходил ровно, и страж
+        // «скользил» над полом.
+        // Периферия ходит не «своей волной рядом с корпусом», а запаздывающим
+        // корпусом: тот же сигнал наклона, но снятый на lag раньше. Разница
+        // между корпусом и подолом — это и есть видимый хвост: корпус уже пошёл
+        // влево, а подол ещё висит справа.
+        auto swayLag = [&](float freq, float amp, float lag) {
+            return (int)lrintf(sinf((animTime - lag) * freq) * amp * sc);
+        };
+        auto footfall = [&](float freq) {
+            return (int)lrintf(fabsf(sinf(animTime * freq)) * 3.0f * sc);
+        };
+        // ── LOD (P2 №10) ─────────────────────────────────────────────────────
+        // Каноническая фигура — около 120 px в высоту. Ниже 60 px (s < 0.5)
+        // частицы в 1–2 px, заклёпки, звенья цепи и трещины перестают читаться и
+        // превращают силуэт в грязь: SS() отдаёт им минимум 1 px, и точка пары
+        // размером с глаз перекрывает сам глаз. Поэтому мелочь рисуется только
+        // на крупной фигуре, а силуэт и основные плоскости — всегда.
+        const bool lodSmall = (s * 120.0f) < 60.0f;
+        auto MO = [&](int ax) { return mirror ? (cx - ax) : (ax - cx); };
+        auto PX = [&](int ax) { return cx + (int)lrintf(MO(ax) * sc); };
+        auto PY = [&](int ay) { return cyAdj + (int)lrintf((ay - cy) * scY); };
         auto SS = [&](int v) { return std::max(1, (int)lrintf(v * sc)); };
+        // Для прямоугольников в зеркале берём правый край как левый, иначе
+        // деталь съезжает на свою же ширину.
+        auto RX = [&](int x, int w) { return cx + (int)lrintf((MO(x) - (mirror ? w : 0)) * sc); };
         auto FR = [&](int x, int y, int w, int h, int rad, uint32_t c, int a = 255) {
-            fillRoundedRect(PX(x), PY(y), SS(w), SS(h), std::max(1, (int)lrintf(rad * sc)), c, a);
+            fillRoundedRect(RX(x, w), PY(y), SS(w), SS(h), std::max(1, (int)lrintf(rad * sc)), c, a);
         };
         auto FC = [&](int x, int y, int r, uint32_t c, int a = 255) { fillCircle(PX(x), PY(y), SS(r), c, a); };
-        auto FX = [&](int x, int y, int w, int h, uint32_t c, int a = 255) { fillRect(PX(x), PY(y), SS(w), SS(h), c, a); };
+        auto FX = [&](int x, int y, int w, int h, uint32_t c, int a = 255) { fillRect(RX(x, w), PY(y), SS(w), SS(h), c, a); };
         auto DL = [&](int x0, int y0, int x1, int y1, uint32_t c, int th = 1, int a = 255, bool add = false) {
-            drawLine(PX(x0), PY(y0), PX(x1), PY(y1), std::max(1, (int)lrintf(th * sc)), c, a, add);
+            // Порядок аргументов у drawLine: (col, thickness, alpha, additive).
+            // Раньше здесь цвет и толщина стояли наоборот: в цвет попадало число
+            // толщины (почти чёрный 0x0000000A без альфы), а в толщину — упакованный
+            // цвет, который как int отрицателен, поэтому rad <= 0 и линия вырождалась
+            // в цепочку одиночных пикселей. Из-за этого все DL-детали фигур (руки,
+            // посохи, перья) были невидимы, а силуэт читался обрубком.
+            drawLine(PX(x0), PY(y0), PX(x1), PY(y1), c, std::max(1, (int)lrintf(th * sc)), a, add);
         };
         auto CR = [&](int x, int y, int r, int th, uint32_t c, int a = 255, bool add = false) {
             drawCircleRing(PX(x), PY(y), SS(r), std::max(1, (int)lrintf(th * sc)), c, a, add);
@@ -937,113 +1871,264 @@ struct Renderer {
 
         if (id == 0) {
             // МОРГАР — воротный страж: приземистый, широкий, щит-башня и алебарда с ключом.
+            //
+            // Раньше он только «дышал» на 2 px: копьё, щит и ноги стояли мёртво, и
+            // страж читался как картинка. Теперь переступает, качает алебарду, щит
+            // ходит вместе с дыханием, а на замах приседает и поднимает древко.
             const uint32_t steel = tint(0xFF7A6A48), steelLit = tint(0xFFB49B62), steelDark = tint(0xFF3E3423);
             const uint32_t ember = tint(enraged ? 0xFFFF6A2A : 0xFFFFAE3C);
-            // halberd shaft behind the body
-            DL(cx + 30, cy - 62, cx + 22, cy + 46, steelDark, 5, alpha);
-            DL(cx + 30, cy - 62, cx + 22, cy + 46, steel, 3, alpha);
+            const float cp = std::max(0.0f, std::min(1.2f, castPose));
+            const float cb = std::max(0.0f, std::min(1.2f, castBurst));
+            // Просадка корпуса на шаге: тяжесть уходит вниз, когда ноги разошлись.
+            const int gaitDip = footfall(3.4f);
+            // Приседает на замахе и выпрямляется на ударе.
+            const int bodyY = (int)(cp * 5.0f) - (int)(cb * 3.0f) + gaitDip;
+            const int step = (int)(sinf(animTime * 3.4f) * 2.0f);
+            // Вес: корпус переносит тяжесть с ноги на ногу, медленнее шага. Без
+            // этого многотонная фигура «скользила» ровно, будто её несут.
+            const int weight = (int)(sinf(animTime * 1.7f) * 2.0f);
+            // Древко: в покое качается, на замахе уходит вверх и назад.
+            const int shaftX = cx + 30 + (int)(sinf(T_HAND * 1.7f) * 2.0f) - (int)(cp * 8.0f) + (int)(cb * 16.0f);
+            const int shaftTopY = cy - 62 - (int)(cp * 16.0f) + (int)(cb * 20.0f);
+            DL(shaftX, shaftTopY, cx + 22, cy + 46, steelDark, 5, alpha);
+            DL(shaftX, shaftTopY, cx + 22, cy + 46, steel, 3, alpha);
             // key-head of the halberd
-            FR(cx + 20, cy - 74, 20, 7, 3, steel, alpha);
-            FR(cx + 30, cy - 78, 7, 14, 3, steelLit, alpha);
-            FR(cx + 26, cy - 64, 6, 6, 2, steel, alpha);
-            // legs
-            FR(cx - 26, cy + 18, 18, 34, 5, steelDark, alpha);
-            FR(cx + 6, cy + 18, 18, 34, 5, steelDark, alpha);
-            FR(cx - 28, cy + 46, 22, 8, 3, steel, alpha);
-            FR(cx + 4, cy + 46, 22, 8, 3, steel, alpha);
+            FR(shaftX - 10, shaftTopY - 12, 20, 7, 3, steel, alpha);
+            FR(shaftX, shaftTopY - 16, 7, 14, 3, steelLit, alpha);
+            FR(shaftX - 4, shaftTopY - 2, 6, 6, 2, steel, alpha);
+            // legs: переступает, стопы расходятся
+            FR(cx - 26 + step, cy + 18, 18, 34, 5, steelDark, alpha);
+            FR(cx + 6 - step, cy + 18, 18, 34, 5, steelDark, alpha);
+            FR(cx - 28 + step, cy + 46, 22, 8, 3, steel, alpha);
+            FR(cx + 4 - step, cy + 46, 22, 8, 3, steel, alpha);
             // torso
-            FR(cx - 24, cy - 24 - lift, 48, 50, 12, steel, alpha);
-            FR(cx - 18, cy - 18 - lift, 36, 22, 8, steelLit, alpha);
-            // chest ember slit
-            FR(cx - 9, cy - 6 - lift, 18, 7, 3, ember, alpha);
+            FR(cx - 24 + weight, cy - 24 - lift + bodyY, 48, 50, 12, steel, alpha);
+            FR(cx - 18 + weight, cy - 18 - lift + bodyY, 36, 22, 8, steelLit, alpha);
+            // chest ember slit: разгорается на замахе, в покое пульсирует
+            const float emberPulse = 0.72f + 0.16f * sinf(animTime * 2.9f) + 0.12f * cp;
+            FR(cx - 9 + weight, cy - 6 - lift + bodyY, 18, 7, 3, ember, (int)(alpha * emberPulse));
             // pauldrons
-            FR(cx - 36, cy - 30 - lift, 18, 20, 8, steelLit, alpha);
-            FR(cx + 18, cy - 30 - lift, 18, 20, 8, steelLit, alpha);
-            // helmet with slit
-            FR(cx - 13, cy - 46 - lift, 26, 24, 8, steel, alpha);
-            FR(cx - 9, cy - 38 - lift, 18, 4, 2, ember, alpha);
-            // tower shield in front, slightly turned
-            FR(cx - 44, cy - 22 - lift, 30, 58, 8, steelDark, alpha);
-            FR(cx - 40, cy - 18 - lift, 22, 50, 6, steel, alpha);
-            FR(cx - 36, cy - 12 - lift, 14, 38, 5, steelLit, alpha);
-            FR(cx - 33, cy + 2 - lift, 8, 10, 3, ember, alpha);
+            FR(cx - 36 + weight, cy - 30 - lift + bodyY, 18, 20, 8, steelLit, alpha);
+            FR(cx + 18 + weight, cy - 30 - lift + bodyY, 18, 20, 8, steelLit, alpha);
+            // Голова и гребень. Шею с просветом пробовал дважды: на приземистом
+            // торсе она читалась то тонкой палкой, то горлышком бутылки, а рога по
+            // краям шлема — висящими в воздухе точками. Для стража-башни сплошная
+            // масса — намеренная часть образа (квадрат = надёжность), поэтому голова
+            // остаётся на плечах, а верхнюю линию ломает гребень, вросший в шлем.
+            // Он же даёт опознание в миниатюре: единственная ступенька на макушке.
+            FR(cx - 13 + weight, cy - 47 - lift + bodyY, 26, 24, 8, steel, alpha);
+            FR(cx - 9 + weight, cy - 39 - lift + bodyY, 18, 4, 2, ember, alpha);
+            FR(cx - 5 + weight, cy - 51 - lift + bodyY, 14, 5, 2, steel, alpha);
+            FR(cx + 1 + weight, cy - 55 - lift + bodyY, 9, 6, 2, steelLit, alpha);
+            FR(cx + 5 + weight, cy - 58 - lift + bodyY, 4, 5, 1, steelLit, alpha);
+            // Искры из щели в груди: поднимаются и гаснут. Раньше страж был
+            // единственным, у кого не было ни одной живой частицы.
+            for (int i = 0; i < 5 && !lodSmall; ++i) {
+                const float t = fmodf(animTime * 0.7f + i * 0.2f, 1.0f);
+                const int ex = cx + weight + (int)(sinf(t * 6.0f + i) * 7.0f);
+                const int ey = cy - 2 - lift + bodyY - (int)(t * 40.0f);
+                FC(ex, ey, 1 + (i % 2), ember, (int)(170 * (1.0f - t)));
+            }
+            // tower shield: в покое чуть качается, на замахе поднимается к груди
+            const int shieldX = cx - 44 + weight + (int)(sinf(T_HAND * 1.5f) * 1.0f) + (int)(cp * 6.0f);
+            const int shieldY = cy - 22 - lift + bodyY - (int)(cp * 10.0f) + (int)(sinf(T_HAND * 2.2f) * 1.0f);
+            FR(shieldX, shieldY, 30, 58, 8, steelDark, alpha);
+            FR(shieldX + 4, shieldY + 4, 22, 50, 6, steel, alpha);
+            FR(shieldX + 8, shieldY + 10, 14, 38, 5, steelLit, alpha);
+            FR(shieldX + 11, shieldY + 24, 8, 10, 3, ember, alpha);
             // rivets
-            for (int i = 0; i < 3; ++i) FC(cx - 37, cy - 12 + i * 16 - lift, 2, steelDark, alpha);
+            for (int i = 0; i < 3 && !lodSmall; ++i) FC(shieldX + 7, shieldY + 10 + i * 16, 2, steelDark, alpha);
         } else if (id == 1) {
-            // МАЛАКОР — алхимик чумы: сгорбленная фигура в капюшоне, респиратор, колба
-            // в вытянутой руке. Тёмный балахон с яркой каймой, чтобы силуэт не тонул
-            // в собственной зелёной дымке.
+            // МАЛАКОР — чумной алхимик. Читается по трём вещам: клюв-респиратор,
+            // горб над плечами и колба в вытянутой руке. Сгорбленный силуэт шире
+            // книзу, поэтому фигура не выглядит мешком.
+            //
+            // Живость даёт цикл: переступает с ноги на ногу, капюшон качается,
+            // подол хлещет тонкими прядями, в колбе кипит и поднимаются пары,
+            // глаза горят неровно. На замах он поднимает колбу над головой,
+            // при выбросе — швыряет её вперёд.
             const uint32_t robe = tint(0xFF35502A), robeLit = tint(0xFF6FA04A), robeDark = tint(0xFF141F0F);
             const uint32_t glass = tint(0xFFA8F07C), plague = tint(enraged ? 0xFFC6FF52 : 0xFF7CE04E);
-            const int sway = (int)(sinf(animTime * 2.6f) * 3.0f);
-            // hunched robe: dark core, bright hem line
-            FR(cx - 26, cy - 10 - lift, 52, 56, 20, robeDark, alpha);
-            FR(cx - 22, cy - 6 - lift, 44, 48, 18, robe, alpha);
-            FR(cx - 22, cy + 30 - lift, 44, 6, 3, robeLit, alpha);
-            // ragged hem strips, clearly separated
-            for (int i = -2; i <= 2; ++i) {
-                const int hx = cx + i * 10 + sway;
-                DL(hx, cy + 32 - lift, hx + (int)(sinf(animTime * 3.1f + i) * 4), cy + 48 - lift, robeLit, 4, alpha);
+            const float poseCast = std::max(0.0f, std::min(1.2f, castPose));
+            const float poseBurst = std::max(0.0f, std::min(1.2f, castBurst));
+            const float breathe = 0.5f + 0.5f * sinf(animTime * 2.3f);
+            const int pace = (int)(sinf(animTime * 3.3f) * 3.0f);
+            const int crouch = (int)(breathe * 2.0f) + (int)(poseCast * 4.0f) - (int)(poseBurst * 3.0f);
+            const int torsoY = -lift - crouch + footfall(3.3f);
+            const int sway = pace;
+            const int lean = (int)(poseCast * 4.0f);
+            // Стопы выглядывают из-под подола и переступают: видно, что он идёт,
+            // а не скользит.
+            const int stepL = (int)(sinf(animTime * 3.3f) * 3.0f);
+            FR(cx - 16 + stepL, cy + 34 + torsoY, 12, 12, 4, robeDark, alpha);
+            FR(cx + 4 - stepL, cy + 34 + torsoY, 12, 12, 4, robeDark, alpha);
+            FR(cx - 18 + stepL, cy + 43 + torsoY, 15, 4, 2, robe, alpha);
+            FR(cx + 3 - stepL, cy + 43 + torsoY, 15, 4, 2, robe, alpha);
+            // Мантия тремя поясами: узкая грудь, пояс, широкий подол.
+            FR(cx - 18 + sway, cy - 24 + torsoY, 36, 28, 10, robe, alpha);
+            FR(cx - 23 + sway, cy - 2 + torsoY, 46, 24, 10, robe, alpha);
+            FR(cx - 26 + sway, cy + 14 + torsoY, 52, 18, 9, robe, alpha);
+            // Рваный край подола — плотные пряди, а не тонкие штрихи: раньше две
+            // линии на тёмном фоне читались как царапины.
+            const int swayHem = swayLag(3.3f, 3.0f, 0.16f);
+            for (int i = -3; i <= 3; ++i) {
+                // Волна идёт от пояса к краю: крайние пряди отстают сильнее внутренних.
+                const int hemWave = (int)(sinf(T_HEM * 3.6f + i * 0.9f - std::abs(i) * 0.45f) * 2.0f);
+                const int strandH = 4 + ((i + 3) % 3) * 3;
+                FR(cx + i * 7 + swayHem + hemWave, cy + 30 + torsoY, 6, strandH, 2, robe, alpha);
             }
-            // shoulders + hood, hood lined with the bright edge
-            FR(cx - 20, cy - 30 - lift, 40, 22, 10, robe, alpha);
-            FR(cx - 16, cy - 46 - lift, 32, 26, 12, robe, alpha);
-            FR(cx - 16, cy - 46 - lift, 32, 4, 2, robeLit, alpha);
-            // face cavity + respirator mask sitting inside the hood
-            FR(cx - 12, cy - 40 - lift, 24, 20, 9, 0xFF0B1206, alpha);
-            FR(cx - 10, cy - 34 - lift, 20, 12, 5, robeLit, alpha);
-            FC(cx - 13, cy - 28 - lift, 5, glass, alpha);
-            FC(cx + 13, cy - 28 - lift, 5, glass, alpha);
-            FC(cx - 13, cy - 28 - lift, 2, plague, alpha);
-            FC(cx + 13, cy - 28 - lift, 2, plague, alpha);
-            FC(cx - 5, cy - 37 - lift, 2, plague, alpha);
-            FC(cx + 5, cy - 37 - lift, 2, plague, alpha);
-            // arm out to the flask
-            DL(cx + 16, cy - 12 - lift, cx + 30 + sway, cy + 4 - lift, robeLit, 5, alpha);
-            // the flask he guards: glass ball, bright rim, glowing contents
-            FC(cx + 34 + sway, cy + 8 - lift, 13, robeLit, alpha);
-            FC(cx + 34 + sway, cy + 8 - lift, 11, glass, alpha);
-            FC(cx + 34 + sway, cy + 11 - lift, 7, plague, alpha);
-            FR(cx + 30 + sway, cy - 12 - lift, 8, 10, 3, glass, alpha);
-            FR(cx + 25 + sway, cy - 18 - lift, 18, 5, 2, robeLit, alpha);
-            // drips that fall away from the flask
-            for (int i = 0; i < 3; ++i) {
-                const int dy = (int)(fmodf(animTime * 30.0f + i * 22.0f, 26.0f));
-                FC(cx + 30 + i * 5, cy + 24 + dy - lift, 2, plague, 180);
+            FX(cx - 26 + sway, cy + 30 + torsoY, 52, 2, robeLit, 150);
+            // Пояс и пара склянок на нём: видно, что перед нами алхимик.
+            FR(cx - 21 + sway, cy + 12 + torsoY, 42, 4, 2, robeLit, alpha);
+            for (int v = -1; v <= 1; v += 2) {
+                FR(cx + v * 12 + sway, cy + 16 + torsoY, 5, 8, 2, robe, alpha);
+                FR(cx + v * 12 + sway, cy + 16 + torsoY, 5, 2, 1, glass, alpha);
+            }
+            // Плечи, горб и капюшон. На замахе капюшон наклоняется вперёд.
+            const int headX = cx + lean + sway;
+            FR(cx - 19 + sway, cy - 32 + torsoY, 38, 14, 7, robeLit, alpha);   // воротник
+            FR(cx - 16 + sway, cy - 38 + torsoY, 34, 14, 8, robe, alpha);      // горб
+            FR(headX - 17, cy - 56 + torsoY, 34, 24, 11, robe, alpha);
+            FR(headX - 17, cy - 56 + torsoY, 34, 4, 2, robeLit, alpha);
+            // Остроконечный верх капюшона: залитый конус из сужающихся полос.
+            // Две тонкие линии читались как отдельный треугольник над головой.
+            for (int k = 0; k < 10; ++k) {
+                const int tipW = std::max(2, 22 - k * 2);
+                // Кончик капюшона отстаёт тем сильнее, чем выше ряд: колпак
+                // не приклеен к голове, а запаздывает за ней.
+                const int tipTrail = (int)lrintf((float)k * 0.45f * sinf(T_HEM * 2.4f));
+                const int tipX = headX - tipW / 2 + (k * 9) / 10 + tipTrail;
+                FR(tipX, cy - 58 - k + torsoY, tipW, 2, 1, k < 2 ? robeLit : robe, alpha);
+            }
+            // Тёмное лицо и клюв-респиратор.
+            FR(headX - 12, cy - 50 + torsoY, 24, 16, 6, 0xFF0B1206, alpha);
+            FR(headX - 8, cy - 40 + torsoY, 16, 9, 3, robeLit, alpha);      // пластина маски
+            DL(headX + 4, cy - 37 + torsoY, headX + 24, cy - 33 + torsoY, robeLit, 8, alpha);
+            DL(headX + 5, cy - 37 + torsoY, headX + 22, cy - 34 + torsoY, glass, 4, alpha);
+            FC(headX + 24, cy - 33 + torsoY, 3, plague, 190);
+            // Линзы: обе смотрят вперёд, зрачки горят неровно.
+            const int eyeGlow = (int)(170.0f + 60.0f * sinf(animTime * 4.1f)) - (int)(poseCast * 60.0f);
+            FR(headX - 10, cy - 48 + torsoY, 8, 4, 1, glass, alpha);
+            FR(headX + 2, cy - 48 + torsoY, 7, 4, 1, glass, alpha);
+            FR(headX - 9, cy - 47 + torsoY, 4, 2, 1, plague, eyeGlow);
+            FR(headX + 4, cy - 47 + torsoY, 4, 2, 1, plague, eyeGlow);
+            // ── Колба ────────────────────────────────────────────────────────
+            // В покое колба висит ниже и правее лица, чтобы ореол не резал глаза.
+            const int idleX = cx + 40 + sway, idleY = cy + 14 - lift;
+            // На замахе колба уходит над головой и чуть в сторону: ровно над лицом
+            // она закрывала ему глаза.
+            const int castX = headX + 19, castY = cy - 78 + (int)(poseCast * 3.0f) - lift;
+            const int burstX = cx + 56, burstY = cy - 2 - lift;
+            int flaskX = idleX, flaskY = idleY;
+            if (poseCast > 0.0f) {
+                flaskX = idleX + (int)((castX - idleX) * poseCast);
+                flaskY = idleY + (int)((castY - idleY) * poseCast);
+            }
+            if (poseBurst > 0.0f) {
+                flaskX = castX + (int)((burstX - castX) * poseBurst);
+                flaskY = castY + (int)((burstY - castY) * poseBurst);
+            }
+            // Рука от плеча к колбе, всегда живая (чуть дрожит).
+            const int shoulderX = cx + 16 + sway, shoulderY = cy - 14 + torsoY;
+            const int handJitter = (int)(sinf(T_HAND * 7.0f) * 1.0f);
+            DL(shoulderX, shoulderY, flaskX - 5 + handJitter, flaskY - 2, robeLit, 5, alpha);
+            DL(shoulderX, shoulderY, flaskX - 5 + handJitter, flaskY - 2, robe, 3, alpha);
+            // Ореол колбы: на замахе разгорается, после удара вспыхивает.
+            const float halo = std::max(poseCast * 0.8f, poseBurst);
+            if (halo > 0.01f) {
+                CR(flaskX, flaskY, 13 + (int)(halo * 12.0f), 2, plague, (int)(90 + 120 * halo), true);
+                CR(flaskX, flaskY, 19 + (int)(halo * 18.0f), 1, glass, (int)(60 + 80 * halo), true);
+            }
+            // Колба: стекло, ободок, светящееся содержимое с уровнем жидкости.
+            // Стекло приглушённое: раньше оно было почти белым и колба читалась
+            // как светящийся шар, а не как сосуд с отравой.
+            FC(flaskX, flaskY, 10, robeLit, alpha);
+            FC(flaskX, flaskY, 9, 0xFF5F9440, alpha);
+            const int liquidTop = flaskY + 8 - (int)(5.0f + 2.0f * breathe);
+            FC(flaskX, flaskY + 8, 6, plague, alpha);
+            FX(flaskX - 5, liquidTop, 10, 2, plague, (int)(180 + 60 * breathe));
+            FR(flaskX - 3, flaskY - 9, 6, 8, 3, 0xFF6FA04A, alpha);
+            FR(flaskX - 8, flaskY - 15, 16, 4, 2, robeLit, alpha);
+            // Кипение: пузыри идут вверх по колбе и лопаются у поверхности.
+            for (int b = 0; b < 4 && !lodSmall; ++b) {
+                const float rise = fmodf(T_CLOAK * 0.9f + b * 0.27f, 1.0f);
+                const int by = flaskY + 10 - (int)(rise * 16.0f);
+                const int bx = flaskX + (int)(sinf(T_CLOAK * 3.0f + b * 2.0f) * 5.0f);
+                const int br = rise > 0.85f ? 0 : 1 + (b % 2);
+                if (br > 0) FC(bx, by, br, plague, (int)(120 + 100 * (1.0f - rise)));
+            }
+            // Пары над колбой.
+            for (int w = 0; w < 3 && !lodSmall; ++w) {
+                const float up = fmodf(animTime * 0.6f + w * 0.33f, 1.0f);
+                const int wx = flaskX + (int)(sinf(T_CLOAK * 2.2f + w) * 6.0f);
+                const int wy = flaskY - 20 - (int)(up * 20.0f);
+                FC(wx, wy, 2 + (w % 2), plague, (int)(80 * (1.0f - up)));
+            }
+            // Капли: в покое редкие, на замахе чаще, при выбросе — веером.
+            const int drops = 3 + (int)(poseCast * 5.0f) + (int)(poseBurst * 6.0f);
+            for (int i = 0; i < drops && !lodSmall; ++i) {
+                const float phase = fmodf(animTime * (1.1f + poseBurst * 1.6f) + i * 0.19f, 1.0f);
+                const int dxSpr = (int)((sinf(i * 2.7f) * 8.0f) * (1.0f + poseBurst * 2.2f));
+                const int dySpr = (int)(phase * (26.0f + poseBurst * 22.0f));
+                FC(flaskX + 4 + dxSpr, flaskY + 12 + dySpr, 2, plague, (int)(190 * (1.0f - phase * 0.7f)));
             }
         } else if (id == 2) {
             // КАРДИНАЛ — счётчик имён: высокий, в широкой шляпе, с книгой и пером.
             const uint32_t cloth = tint(0xFF3C1A28), clothLit = tint(0xFF6E2E44), clothDark = tint(0xFF1E0C14);
             const uint32_t paper = tint(0xFFE8DCC8), ink = tint(0xFFFF4E74);
+            // Замах: он откидывается назад и поднимает перо, на выбросе — бросает
+            // руку вперёд. Раньше фигура на замах не реагировала вовсе.
+            const float cp = std::max(0.0f, std::min(1.2f, castPose));
+            const float cb = std::max(0.0f, std::min(1.2f, castBurst));
+            const int lean = -(int)(cp * 7.0f) + (int)(cb * 5.0f);
+            // Корпус качается в такт шагу: раньше он не двигался боком вовсе и
+            // фигура стояла истуканом, пока ноги переступали.
+            const int gaitSway = (int)lrintf(sinf(animTime * 2.6f) * 2.0f * sc);
+            const int gaitDip = footfall(2.6f);
+            const int bodyY = -(int)(cp * 4.0f) + (int)(cb * 2.0f);
             // long robe, narrow silhouette
-            FR(cx - 20, cy - 16 - lift, 40, 62, 14, cloth, alpha);
-            FR(cx - 14, cy - 4 - lift, 28, 48, 12, clothDark, alpha);
+            FR(cx - 20 + lean + gaitSway, cy - 16 - lift + bodyY + gaitDip, 40, 62, 14, cloth, alpha);
+            FR(cx - 14 + lean + gaitSway, cy - 4 - lift + bodyY + gaitDip, 28, 48, 12, clothDark, alpha);
+            const int swayHem = swayLag(2.6f, 2.0f, 0.16f);
             for (int i = -1; i <= 1; ++i)
-                DL(cx + i * 8, cy + 8 - lift, cx + i * 8 + (int)(sinf(animTime * 2.0f + i) * 3), cy + 46, clothLit, 3, alpha);
+                DL(cx + i * 8 + lean + swayHem, cy + 8 - lift, cx + i * 8 + lean + swayHem + (int)(sinf(T_HEM * 2.0f + i) * 3), cy + 46, clothLit, 3, alpha);
             // shoulders and collar
-            FR(cx - 24, cy - 22 - lift, 48, 16, 8, clothLit, alpha);
-            FR(cx - 12, cy - 20 - lift, 24, 10, 5, paper, alpha);
-            // porcelain mask
-            FR(cx - 11, cy - 44 - lift, 22, 26, 10, paper, alpha);
-            FR(cx - 7, cy - 36 - lift, 5, 3, 1, ink, alpha);
-            FR(cx + 2, cy - 36 - lift, 5, 3, 1, ink, alpha);
-            FR(cx - 4, cy - 27 - lift, 8, 2, 1, ink, alpha);
+            FR(cx - 24 + lean + gaitSway, cy - 22 - lift + bodyY + gaitDip, 48, 16, 8, clothLit, alpha);
+            FR(cx - 12 + lean + gaitSway, cy - 20 - lift + bodyY + gaitDip, 24, 10, 5, paper, alpha);
+            // porcelain mask: на замахе чуть опускает голову, будто читает строку
+            const int maskY = cy - 44 - lift + bodyY + gaitDip + (int)(cp * 3.0f);
+            FR(cx - 11 + lean + gaitSway, maskY, 22, 26, 10, paper, alpha);
+            FR(cx - 7 + lean + gaitSway, maskY + 8, 5, 3, 1, ink, alpha);
+            FR(cx + 2 + lean + gaitSway, maskY + 8, 5, 3, 1, ink, alpha);
+            FR(cx - 4 + lean + gaitSway, maskY + 17, 8, 2, 1, ink, alpha);
             // a crack across the mask
-            DL(cx + 2, cy - 44 - lift, cx - 1, cy - 30 - lift, clothDark, 1, alpha);
-            // wide cardinal hat
-            FR(cx - 30, cy - 52 - lift, 60, 6, 3, clothLit, alpha);
-            FR(cx - 16, cy - 66 - lift, 32, 16, 6, cloth, alpha);
-            FR(cx - 16, cy - 66 - lift, 32, 4, 2, clothLit, alpha);
-            // open ledger
-            FR(cx - 40, cy - 6 - lift, 22, 16, 3, paper, alpha);
-            DL(cx - 29, cy - 4 - lift, cx - 29, cy + 8 - lift, clothDark, 1, alpha);
-            for (int i = 0; i < 3; ++i) DL(cx - 37, cy - 2 + i * 4 - lift, cx - 33, cy - 2 + i * 4 - lift, ink, 1, 170);
-            // quill
-            DL(cx + 24, cy + 6 - lift, cx + 36, cy - 30 - lift, paper, 2, alpha);
-            DL(cx + 33, cy - 24 - lift, cx + 40, cy - 34 - lift, paper, 1, alpha);
-            FC(cx + 26, cy + 4 - lift, 2, ink, alpha);
-            // seal chain hanging from the belt
-            for (int i = 0; i < 3; ++i) CR(cx + 12, cy + 16 + i * 8 - lift, 3, 1, ink, 190, true);
+            DL(cx + 2 + lean + gaitSway, maskY, cx - 1 + lean + gaitSway, maskY + 14, clothDark, 1, alpha);
+            // wide cardinal hat: покачивается, иначе фигура стоит как истукан
+            const int hatSway = (int)(sinf(T_HAND * 1.4f) * 2.0f) + lean + gaitSway;
+            FR(cx - 30 + hatSway, cy - 52 - lift + bodyY, 60, 6, 3, clothLit, alpha);
+            FR(cx - 16 + hatSway, cy - 66 - lift + bodyY - (int)(cp * 2.0f), 32, 16, 6, cloth, alpha);
+            FR(cx - 16 + hatSway, cy - 66 - lift + bodyY - (int)(cp * 2.0f), 32, 4, 2, clothLit, alpha);
+            // open ledger: на замахе книга поднимается к груди
+            const int bookY = cy - 6 - lift - (int)(cp * 20.0f) + (int)(cb * 6.0f);
+            FR(cx - 40 + lean, bookY, 22, 16, 3, paper, alpha);
+            DL(cx - 29 + lean, bookY + 2, cx - 29 + lean, bookY + 14, clothDark, 1, alpha);
+            // строки бегут: раз в 0,9 с заново — книга «пишется»
+            const int lineDrift = (int)(fmodf(animTime * 6.0f, 4.0f));
+            for (int i = 0; i < 3 && !lodSmall; ++i)
+                DL(cx - 37 + lean, bookY + 4 + i * 4 - lineDrift / 2, cx - 33 + lean, bookY + 4 + i * 4 - lineDrift / 2, ink, 1, 170);
+            // перо: в покое пишет мелким движением, на замахе вскинуто, на выбросе
+            // уходит вперёд — видно момент удара.
+            const float write = sinf(T_HAND * 5.5f) * 2.0f;
+            const int quillBaseX = cx + 24 + lean, quillBaseY = cy + 6 - lift + (int)(write);
+            // Кончик пера отстаёт от кисти ещё на полкадра — перо не палка.
+            const int quillTipX = cx + 36 + gaitSway + (int)(-cp * 16.0f + cb * 26.0f) + (int)lrintf(sinf(T_HEM * 5.5f) * 2.0f);
+            const int quillTipY = cy - 30 - lift - (int)(cp * 26.0f) + (int)(cb * 22.0f);
+            DL(quillBaseX, quillBaseY, quillTipX, quillTipY, paper, 2, alpha);
+            DL(quillTipX - 3, quillTipY + 6, quillTipX + 4, quillTipY - 4, paper, 1, alpha);
+            FC(quillBaseX + 2, quillBaseY - 2, 2, ink, alpha);
+            // seal chain hanging from the belt: подрагивает на ходу
+            for (int i = 0; i < 3 && !lodSmall; ++i)
+                CR(cx + 12 + gaitSway + (int)(sinf(T_HEM * 2.4f + i * 0.9f) * 1.5f), cy + 16 + i * 8 - lift, 3, 1, ink, 190, true);
         } else if (id == 3) {
             // АЗАРОТ — пепельный архивариус. Раньше это было маленькое парящее ядро с
             // кольцами: в бою оно читалось как подбираемый предмет, а не как страж.
@@ -1052,15 +2137,21 @@ struct Renderer {
             const uint32_t robe = tint(0xFF3A2B58), robeLit = tint(0xFF6A5495), robeDark = tint(0xFF1B142B);
             const uint32_t ash = tint(0xFF6E6076), ashLit = tint(0xFFB4A6C0);
             const uint32_t core = tint(enraged ? 0xFFFF5A2A : 0xFFFFB45C);
-            const float pulse = 0.5f + 0.5f * sinf(animTime * 3.1f);
-            const int bob = (int)(sinf(animTime * 1.4f) * 4.0f);
+            // На замахе сердце разгорается, руки разводятся шире и фигура
+            // приподнимается; на выбросе — резко проседает. Раньше на замах
+            // не реагировал только он один из всей линейки.
+            const float cp = std::max(0.0f, std::min(1.2f, castPose));
+            const float cb = std::max(0.0f, std::min(1.2f, castBurst));
+            const float pulse = 0.5f + 0.5f * sinf(animTime * 3.1f * (1.0f + cp * 1.2f));
+            const int bob = (int)(sinf(animTime * 1.4f) * 4.0f) - (int)(cp * 5.0f) + (int)(cb * 4.0f);
             const int oy = cy + bob;
             const int sway = (int)(sinf(animTime * 0.9f) * 3.0f);
             // тень под парящей фигурой
             FX(cx - 40, cy + 58, 80, 9, 0xFF08060E, 90);
             // рваный подол балахона — живёт, шевелится
+            const int swayHem = swayLag(0.9f, 3.0f, 0.16f);
             for (int i = 0; i < 7; ++i) {
-                const int hx = cx - 33 + i * 11 + (int)(sinf(animTime * 1.3f + i) * 2.0f);
+                const int hx = cx - 33 + i * 11 + swayHem + (int)(sinf(T_HEM * 1.3f + i * 1.0f) * 2.0f);
                 FX(hx, cy + 40 + (i % 3) * 3, 9, 18, robeDark, alpha);
             }
             // тело-балахон
@@ -1076,17 +2167,19 @@ struct Renderer {
             FR(cx + 24 + sway, oy - 12, 22, 8, 4, ashLit, alpha);
             // руки-угли, тянутся вниз и в стороны
             for (int side = -1; side <= 1; side += 2) {
-                const int hx = cx + side * (40 + sway) + (int)(sinf(animTime * 1.1f + side) * 3.0f);
-                const int hy = oy + 26 + (int)(cosf(animTime * 1.1f + side) * 3.0f);
+                // Руки разводятся на замахе и вскидываются на выбросе.
+                const int spread = (int)(cp * 12.0f) - (int)(cb * 6.0f);
+                const int hx = cx + side * (40 + sway + spread) + (int)(sinf(T_HAND * 1.1f + side) * 3.0f);
+                const int hy = oy + 26 - (int)(cp * 14.0f) + (int)(cosf(T_HAND * 1.1f + side) * 3.0f);
                 DL(cx + side * 26 + sway, oy - 12, hx, hy, robeDark, 6, alpha);
                 DL(cx + side * 26 + sway, oy - 12, hx, hy, robe, 4, alpha);
                 FC(hx, hy, 6, ash, alpha);
                 FC(hx, hy, 3, core, 220);
             }
             // горящее сердце в груди
-            FC(cx + sway, oy + 14, 17, robeDark, alpha);
-            FC(cx + sway, oy + 14, 13, core, (int)(150 + 90 * pulse));
-            FC(cx + sway, oy + 14, 7, 0xFFFFF0C8, 235);
+            FC(cx + sway, oy + 14, 17 + (int)(cp * 4.0f), robeDark, alpha);
+            FC(cx + sway, oy + 14, 13 + (int)(cp * 4.0f), core, (int)(150 + 90 * pulse));
+            FC(cx + sway, oy + 14, 7 + (int)(cp * 3.0f), 0xFFFFF0C8, 235);
             FX(cx + sway - 20, oy + 30, 40, 3, core, (int)(60 + 60 * pulse));
             // Каждый удар сердца выходит кольцом — силуэт «живёт», а не просто стоит.
             // Кольцо рождается в такт 2,2 с и расходится за 0,7 с.
@@ -1104,14 +2197,14 @@ struct Renderer {
             // Корона — рваный гребень по краю капюшона: плотные клинья-пластины,
             // а не тонкие лучи с шариком на конце (те читались как усики).
             for (int i = -2; i <= 2; ++i) {
-                const int hgt = 7 + (int)(4.0f + 4.0f * sinf(animTime * 2.0f + i * 1.1f)) - (i % 2 ? 2 : 0);
+                const int hgt = 7 + (int)(4.0f + 4.0f * sinf(T_CLOAK * 2.0f + i * 1.1f)) - (i % 2 ? 2 : 0);
                 const int bx2 = cx + sway + i * 9 - 2;
                 FX(bx2, oy - 60 - hgt, 6, hgt + 2, ash, alpha);
                 FX(bx2 + 1, oy - 60 - hgt, 4, hgt, ashLit, alpha);
                 FX(bx2 + 2, oy - 60 - hgt, 2, 3, core, 220);
             }
             // вихрь пепла вокруг фигуры — эллипс, читается как орбита
-            for (int ring = 0; ring < 2; ++ring) {
+            for (int ring = 0; ring < 2 && !lodSmall; ++ring) {
                 const int rr = 56 + ring * 14;
                 // В ярости пепел идёт быстрее и плотнее: одна и та же фигура, но злее.
                 const float spin = animTime * ((0.7f + ring * 0.5f) * (enraged ? 1.6f : 1.0f));
@@ -1123,7 +2216,7 @@ struct Renderer {
                 }
             }
             // поднимающиеся угли
-            for (int i = 0; i < 9; ++i) {
+            for (int i = 0; i < 9 && !lodSmall; ++i) {
                 const float t2 = fmodf(animTime * 0.45f + i * 0.111f, 1.0f);
                 const int eY = cy + 46 - (int)(t2 * 118.0f);
                 const int eX = cx + (int)(sinf(t2 * 9.0f + i) * (10.0f + t2 * 26.0f));
@@ -1136,8 +2229,10 @@ struct Renderer {
             // томом перед ней: строки на страницах ползут вверх, как в живой записи.
             const uint32_t stone = tint(0xFF4A5566), stoneLit = tint(0xFF8798AD), stoneDark = tint(0xFF232B36);
             const uint32_t ink = tint(enraged ? 0xFF6AF0FF : 0xFF49C8E8);
+            const float cp = std::max(0.0f, std::min(1.2f, castPose));
+            const float cb = std::max(0.0f, std::min(1.2f, castBurst));
             const int sway = (int)(sinf(animTime * 0.8f) * 3.0f);
-            const int bob = (int)(sinf(animTime * 1.5f) * 3.0f);
+            const int bob = (int)(sinf(animTime * 1.5f) * 3.0f) - (int)(cp * 3.0f);
             const int oy = cy + bob;
             // тень
             FX(cx - 38, cy + 58, 76, 9, 0xFF08060E, 90);
@@ -1149,11 +2244,15 @@ struct Renderer {
             FR(cx - 44 + sway, oy - 34, 88, 18, 8, stoneLit, alpha);
             FR(cx - 40 + sway, oy - 31, 80, 7, 4, stone, alpha);
             for (int i = 0; i < 4; ++i) FC(cx - 31 + i * 21 + sway, oy - 27, 2, ink, 200);
+            // Шея: капюшон поднят, между ним и наплечником виден просвет.
+            // Раньше капюшон лежал на плечах вплотную, и в силуэте не было ни
+            // одного промежутка — страж читался плитой (аудит §3: 0 дыр).
+            FR(cx - 7 + sway, oy - 42, 14, 12, 4, stoneDark, alpha);
             // капюшон и скрижаль-лицо с прорезью чернил
-            FR(cx - 22 + sway, oy - 78, 44, 48, 14, stoneDark, alpha);
-            FR(cx - 16 + sway, oy - 70, 32, 32, 8, 0xFF0E1219, alpha);
+            FR(cx - 22 + sway, oy - 84, 44, 48, 14, stoneDark, alpha);
+            FR(cx - 16 + sway, oy - 76, 32, 32, 8, 0xFF0E1219, alpha);
             for (int ln = 0; ln < 3; ++ln) {
-                const int ly = oy - 64 + ln * 9;
+                const int ly = oy - 70 + ln * 9;
                 const int lw = 20 - ln * 4;
                 const float glow = 0.5f + 0.5f * sinf(animTime * 4.0f - ln * 1.2f);
                 FX(cx - 8 + sway, ly, lw, 2, ink, (int)(110 + 140 * glow));
@@ -1166,28 +2265,54 @@ struct Renderer {
                     // Развёртка идёт вниз по скрижали, как сканирующая строка: поперёк
                     // лица двигать нельзя — получался крест на всю голову.
                     const int dy = (int)(tick / 0.35f * 28.0f);
-                    FX(cx - 15 + sway, oy - 70 + dy, 30, 2, 0xFFDFF6FF, 190);
+                    FX(cx - 15 + sway, oy - 76 + dy, 30, 2, 0xFFDFF6FF, 190);
                 }
             }
-            // рука с пером
+            // Руки. Ширину силуэта держит наплечник, поэтому кисти не выходят за
+            // него: плечо уходит под наплечник, локоть чуть наружу мантии (34),
+            // кисть возвращается на верхний угол тома. Между предплечьем и мантией
+            // остаётся сквозной просвет — единственная дыра в силуэте стража.
             {
-                const int ax = cx - 46 + sway, ay = oy - 6;
-                DL(cx - 26 + sway, oy - 18, ax, ay, stone, 6, alpha);
-                DL(cx - 26 + sway, oy - 18, ax, ay, stoneLit, 3, alpha);
-                const float qa = animTime * 2.2f;
-                DL(ax, ay, ax - 10 + (int)(sinf(qa) * 6.0f), ay - 26, stoneLit, 2, alpha);
-                FC(ax - 10 + (int)(sinf(qa) * 6.0f), ay - 28, 3, ink, 230);
+                const int bend = (int)(sinf(T_HAND * 1.1f) * 2.0f);
+                const int shY = oy - 12;              // низ наплечника
+                for (int side = -1; side <= 1; side += 2) {
+                    const int sx = cx + side * 36 + sway;
+                    const int ex = cx + side * 54 + sway, ey = oy + 2 + bend;
+                    const int hx = cx + side * 34 + sway, hy = oy + 26;
+                    // Объём: тело руки камнем, блик — тонкой линией по верхне-левой
+                    // стороне. Раньше блик шёл по центру трубы, и рука светилась
+                    // целиком, как пластиковая.
+                    DL(sx, shY, ex, ey, stoneDark, 10, alpha);
+                    DL(sx - 2, shY - 2, ex - 2, ey - 2, stone, 3, alpha);
+                    DL(ex, ey, hx, hy, stoneDark, 9, alpha);
+                    DL(ex - 2, ey - 2, hx - 2, hy - 2, stone, 3, alpha);
+                    FC(hx, hy + 1, 5, stoneDark, alpha);
+                    FC(hx - 1, hy, 3, stone, alpha);
+                }
+                // Перо в правой кисти: короткое, вверх-вправо от кисти, с кончиком,
+                // лежащим на странице. Длинное перо через полфигуры пересекало
+                // предплечье у локтя и читалось случайной светлой царапиной.
+                const float qa = T_HAND * 2.2f;
+                const int qt = (int)(sinf(qa) * 2.0f);
+                const int hqx = cx + 34 + sway, hqy = oy + 25;
+                DL(hqx, hqy, hqx + 11 + qt, hqy - 20, stoneLit, 2, alpha);
+                DL(hqx + 11 + qt, hqy - 20, hqx + 6 + qt, hqy - 27, ink, 1, 220);
+                FC(hqx + 6 + qt, hqy - 28, 2, ink, 230);
+                DL(hqx, hqy, hqx - 9, hqy + 6, ink, 2, 210);   // кончик по странице
             }
             // большой том перед фигурой: страницы дышат, строки ползут вверх
             // Том держим ниже и уже: на арене (s≈1.1) прежний размер закрывал
             // мантию целиком, и страж читался как «скрижаль над книгой».
-            const int bookY = oy + 42;
-            const int flutter = (int)(sinf(animTime * 5.0f) * 2.0f);
+            // Том на замахе поднимается к груди и раскрывается шире, на выбросе
+            // захлопывается и проседает — момент удара видно по книге.
+            const int bookY = oy + 42 - (int)(cp * 26.0f) + (int)(cb * 8.0f);
+            const int bookSpread = (int)(cp * 5.0f) - (int)(cb * 4.0f);
+            const int flutter = (int)(sinf(T_CLOAK * 5.0f) * 2.0f);
             FR(cx - 29, bookY - 15, 58, 32, 6, 0xFF2B2119, alpha);      // переплёт
             FR(cx - 27, bookY - 13, 54, 27, 4, 0xFF4A382A, alpha);
             for (int side = -1; side <= 1; side += 2) {
                 const int pw = 23;
-                const int px3 = side < 0 ? cx - 25 : cx + 2;
+                const int px3 = side < 0 ? cx - 25 - bookSpread : cx + 2 + bookSpread;
                 const int ph = 23 + (side > 0 ? flutter : -flutter);
                 FR(px3, bookY - ph / 2, pw, ph, 3, 0xFFDCD2BC, alpha);
                 FR(px3 + 2, bookY - ph / 2 + 2, pw - 4, ph - 4, 2, 0xFFF6EFDD, alpha);
@@ -1216,12 +2341,12 @@ struct Renderer {
             FR(cx - 3, bookY - 16, 6, 34, 3, stoneLit, alpha);
             FC(cx, bookY - 20, 5, ink, 230);
             // чернильные капли падают с тома
-            for (int i = 0; i < 3; ++i) {
+            for (int i = 0; i < 3 && !lodSmall; ++i) {
                 const float t2 = fmodf(animTime * 0.6f + i * 0.33f, 1.0f);
                 FX(cx - 13 + i * 13, bookY + 16 + (int)(t2 * 24.0f), 2, 3, ink, (int)(200 * (1.0f - t2)));
             }
             // перья-перья вокруг: летят по орбите с хвостом
-            for (int i = 0; i < 4; ++i) {
+            for (int i = 0; i < 4 && !lodSmall; ++i) {
                 const float a = animTime * 1.2f + i * 1.5708f;
                 const int qx = cx + (int)(cosf(a) * 58.0f);
                 const int qy = oy - 6 + (int)(sinf(a) * 30.0f);
@@ -1239,10 +2364,15 @@ struct Renderer {
             // «просвечивает», поэтому сразу видно, кто настоящий.
             const uint32_t glass = tint(0xFF4E7C8A), glassLit = tint(0xFFB4E8F4), glassDark = tint(0xFF16242A);
             const uint32_t core = tint(enraged ? 0xFFFF5A7A : 0xFF8FF0FF);
+            const float cp = std::max(0.0f, std::min(1.2f, castPose));
+            const float cb = std::max(0.0f, std::min(1.2f, castBurst));
             const float pulse = 0.5f + 0.5f * sinf(animTime * 3.4f);
             const int sway = (int)(sinf(animTime * 1.6f) * 3.0f);
             const int bob = (int)(sinf(animTime * 2.1f) * 3.0f);
             const int oy = cy + bob;
+            // Обмен местами виден по фигуре: перед броском слепок отходит дальше,
+            // после — оба сходятся. Раньше телепорт был мгновенным и без позы.
+            const int separation = (int)(cp * 34.0f) - (int)(cb * 26.0f);
             // тень у настоящего тела
             FX(cx - 34, cy + 56, 68, 9, 0xFF08060E, 80);
             auto glassBody = [&](int bx, int by, int a, bool mirror, float phase) {
@@ -1267,16 +2397,20 @@ struct Renderer {
                 FC(bx, by - 42, 8, glassDark, (a * 3) / 4);
                 FC(bx - 4, by - 43, 3, core, a);
                 FC(bx + 4, by - 43, 3, core, a);
-                // руки, слегка в стороны
-                DL(bx - 20, by - 8, bx - 30, by + 16, glassLit, 5, a);
-                DL(bx + 20, by - 8, bx + 30, by + 16, glassLit, 5, a);
-                DL(bx - 30, by + 16, bx - 28, by + 26, glass, 4, a);
-                DL(bx + 30, by + 16, bx + 28, by + 26, glass, 4, a);
+                // руки, слегка в стороны. Тело руки — стекло, блик тонкой линией
+                // по внешней стороне: раньше вся рука была glassLit, и после
+                // починки drawLine они читались белыми палками, ярче головы.
+                DL(bx - 20, by - 8, bx - 30, by + 16, glass, 6, a);
+                DL(bx + 20, by - 8, bx + 30, by + 16, glass, 6, a);
+                DL(bx - 22, by - 8, bx - 32, by + 16, glassLit, 2, a);
+                DL(bx + 22, by - 8, bx + 32, by + 16, glassLit, 2, a);
+                DL(bx - 30, by + 16, bx - 28, by + 26, glassDark, 5, a);
+                DL(bx + 30, by + 16, bx + 28, by + 26, glassDark, 5, a);
                 // ядро в груди
                 FC(bx, by + 4, 9, glassDark, a);
                 FC(bx, by + 4, 6, core, (int)((a * (0.55f + 0.45f * pulse))));
                 // трещины
-                for (int i = 0; i < 3; ++i) {
+                for (int i = 0; i < 3 && !lodSmall; ++i) {
                     const float ang = (mirror ? -1.0f : 1.0f) * (0.7f + i * 0.9f) + animTime * 0.4f;
                     DL(bx, by + 2, bx + (int)(cosf(ang) * 22.0f), by + (int)(sinf(ang) * 26.0f), core, 1, 130);
                 }
@@ -1284,15 +2418,15 @@ struct Renderer {
             // шлейф: два запоздавших слепка, каждый бледнее предыдущего —
             // движение читается как «стекло», а не как две статичные фигурки
             for (int ghost = 2; ghost >= 1; --ghost) {
-                const int lagX = cx + 40 + sway - (int)(sinf(animTime * 2.6f - ghost * 0.5f) * 5.0f) - ghost * 6;
+                const int lagX = cx + 40 + sway + separation - (int)(sinf(T_CLOAK * 2.6f - ghost * 0.5f) * 5.0f) - ghost * 6;
                 glassBody(lagX, oy - 4 + ghost, 36 - ghost * 8, true, 1.1f + ghost * 0.4f);
             }
             // двойник: та же фигура, отстаёт по фазе и просвечивает сквозь
-            const int tx = cx + 46 + sway;
+            const int tx = cx + 46 + sway + separation;
             glassBody(tx, oy - 4, 120, true, 1.1f);
             // трос между двумя телами
-            for (int i = 0; i < 6; ++i)
-                FX(cx + 22 + i * 5, oy + 2 + (int)(sinf(animTime * 3.0f + i) * 2.0f), 2, 2, core, 170);
+            for (int i = 0; i < 6 && !lodSmall; ++i)
+                FX(cx + 22 + i * 5, oy + 2 + (int)(sinf(T_HEM * 3.0f + i * 0.7f) * 2.0f), 2, 2, core, 170);
             // настоящее тело
             glassBody(cx + sway, oy, alpha, false, 0.0f);
             // осколки на орбите
@@ -1307,12 +2441,53 @@ struct Renderer {
     }
 
     void drawBossSprite(int cx, int cy, int bossType, float animTime, bool hitFlash, bool enraged = false,
-                        bool reinforced = false) {
+                        bool reinforced = false, float castPose = 0.0f, float castBurst = 0.0f,
+                        bool mirror = false, float recoil = 0.0f, float fade = 1.0f) {
+        // Поза догоняется пружиной (см. BossSpring): dt берём из animTime, потому
+        // что рендерер не знает про кадровое время игры. Пауза и переход сцены
+        // дают скачок dt — тогда пружину не двигаем, иначе она «выстрелит».
+        // Пружина живёт здесь, а не в drawBossFigure: сюда приходит только живой
+        // страж (эхо-копии, карточка дела и смерть рисуют фигуру напрямую), так
+        // что один тип стража не двигает пружину дважды за кадр.
+        if (bossSpringEnabled) {
+            const int sid = ((bossType % 6) + 6) % 6;
+            BossSpring& sp = bossSprings()[sid];
+            float dt = sp.lastT < 0.0f ? 0.016f : (animTime - sp.lastT);
+            if (!(dt > 0.0f) || dt > 0.25f) {
+                // Пауза, переход сцены или новый страж с тем же типом: время ушло
+                // вперёд скачком или назад. Пружину не интегрируем, а ставим в цель
+                // — иначе она «выстрелит» из старого состояния.
+                dt = 0.0f;
+                sp.pose = castPose;
+                sp.burst = castBurst;
+                sp.poseV = sp.burstV = 0.0f;
+            }
+            sp.lastT = animTime;
+            if (dt > 0.0f) {
+                springStep(sp.pose, sp.poseV, castPose, dt, 15.0f, 0.62f);
+                springStep(sp.burst, sp.burstV, castBurst, dt, 19.0f, 0.55f);
+            }
+            castPose = sp.pose;
+            castBurst = sp.burst;
+            lastBossPose = sp.pose;
+            lastBossBurst = sp.burst;
+        }
         int auraRad = 40 + (int)(sinf(animTime * 7.0f) * 5.0f);
         static const uint32_t auraPalette[6] = {0xFFFFB028, 0xFF80FF40, 0xFFFF3068, 0xFFFF6818, 0xFF49C8E8, 0xFF9EDBE8};
         const int bossId = bossType % 6;
         uint32_t auraCol = enraged ? 0xFFFF2040 : auraPalette[bossId];
-        drawCircleRing(cx, cy + 24, auraRad, 3, auraCol, 210, true);
+        if (bossId == 1) {
+            // У Малакора знак — пролитая лужа на полу. Кольцо вокруг туловища
+            // читалось как обруч на фигуре, поэтому здесь эллипс у ног.
+            for (int seg = 0; seg < 34; ++seg) {
+                const float a0 = seg * 6.2831853f / 34.0f, a1 = (seg + 1) * 6.2831853f / 34.0f;
+                drawLine(cx + (int)(cosf(a0) * auraRad), cy + 52 + (int)(sinf(a0) * auraRad * 0.28f),
+                         cx + (int)(cosf(a1) * auraRad), cy + 52 + (int)(sinf(a1) * auraRad * 0.28f),
+                         auraCol, 3, 205, false);
+            }
+        } else {
+            drawCircleRing(cx, cy + 24, auraRad, 3, auraCol, 210, true);
+        }
         // Every guardian brands the floor with its own sigil: gate bars, a broken vial,
         // ledger rules, an archive wheel, marching protocol lines and mirrored shards.
         static const int tickTable[6] = {4, 5, 6, 8, 3, 6};
@@ -1331,12 +2506,28 @@ struct Renderer {
             for (int bar = -1; bar <= 1; ++bar)
                 drawLine(cx + bar * 13, cy + 40, cx + bar * 13, cy + 8, auraCol, 2, 70);
         } else if (bossId == 1) {
-            // Малакор: a broken vial, its contents pooling outward.
-            drawCircleRing(cx, cy + 34, auraRad / 2, 1, auraCol, 85, true);
-            for (int bubble = 0; bubble < 3; ++bubble) {
-                const int bx = cx + (int)(cosf(animTime * 1.7f + bubble * 2.1f) * 22.0f);
-                const int by = cy + 30 + (int)(sinf(animTime * 2.3f + bubble) * 6.0f);
-                fillCircle(bx, by, 2, auraCol, 120);
+            // Малакор: пролитая лужа у ног и поднимающиеся споры. Раньше здесь было
+            // кольцо поперёк живота — оно читалось как обруч на фигуре, а не как
+            // разлитая отрава. Лужа лежит на полу, поэтому сплющена по вертикали.
+            const int poolR = auraRad + 6;
+            // Сначала заливка лужи, потом край: без аддитивного режима цвет остаётся
+            // зелёным, а не выгорает в белый от наложения сегментов.
+            for (int y = -8; y <= 8; ++y) {
+                const float t = (float)y / 8.0f;
+                const int halfW = (int)(poolR * sqrtf(std::max(0.05f, 1.0f - t * t)));
+                drawLine(cx - halfW, cy + 52 + y / 3, cx + halfW, cy + 52 + y / 3, auraCol, 1, y == 0 ? 70 : 34, false);
+            }
+            for (int seg = 0; seg < 26; ++seg) {
+                const float a0 = seg * 6.2831853f / 26.0f, a1 = (seg + 1) * 6.2831853f / 26.0f;
+                drawLine(cx + (int)(cosf(a0) * poolR), cy + 52 + (int)(sinf(a0) * poolR * 0.26f),
+                         cx + (int)(cosf(a1) * poolR), cy + 52 + (int)(sinf(a1) * poolR * 0.26f),
+                         auraCol, 2, 165, false);
+            }
+            for (int bubble = 0; bubble < 5; ++bubble) {
+                const float rise = fmodf(animTime * 0.8f + bubble * 0.2f, 1.0f);
+                const int bx = cx + (int)(sinf(animTime * 1.7f + bubble * 2.1f) * (18.0f + poolR * 0.3f));
+                const int by = cy + 50 - (int)(rise * 34.0f);
+                fillCircle(bx, by, 1 + (bubble % 2), auraCol, (int)(130 * (1.0f - rise * 0.6f)));
             }
         } else if (bossId == 2) {
             // Кардинал: ruled ledger lines crossing the sigil.
@@ -1378,8 +2569,69 @@ struct Renderer {
             }
         }
         addGlow(cx, cy, 62, auraCol, enraged ? 190 : 140);
-        drawShadow(cx, cy + 50, 36, 12);
-        drawBossFigure(cx, cy, bossType, animTime, hitFlash, enraged, false, 1.12f);
+        // Тень стоит под ступнями, а не на фиксированном cy+50: у трёх стражей
+        // низ фигуры ниже на 22–34 px, и они висели в воздухе. Второй, узкий
+        // эллипс — контактная AO, без неё фигура «лежит» на полу, а не стоит.
+        const int footY = cy + bossFootOffset(bossId);
+        const int shadowW = bossShadowWidth(bossId);
+        drawShadow(cx, footY - 3, shadowW, 12);
+        drawShadow(cx, footY - 2, shadowW * 3 / 5, 6);
+        // Снимок области до фигуры: по нему считается маска для общего света,
+        // чтобы ореол и знак на полу не подсвечивались как часть стража.
+        // Область с запасом: замеренный размах стражей при 1.12 — от -125 до +119
+        // по x и от -123 до +93 по y в позах замаха и выброса. Меньшая рамка
+        // обрезала выброшенную колбу и поднятое древко.
+        const int lx = cx - 125, ly = cy - 132, lw = 250, lh = 232;
+        captureFigureRegion(lx, ly, lw, lh);
+        drawBossFigure(cx, cy, bossType, animTime, hitFlash, enraged, false, 1.12f, castPose, castBurst,
+                       mirror, recoil, fade);
+        // Ниже среднего уровня объём фигуры не считается: это отдельный проход
+        // по рамке 250x232 с тремя лучами на пиксель. Силуэт и подсветка
+        // остаются, уходит только светотень по форме.
+        if (figureVolumeEnabled && fxLevel >= 2)
+            applyFigureVolume(lx, ly, lw, lh, std::min(1.0f, fade), figureVolumeGradient, cx, cy, bossType);
+    }
+
+    // Смерть стража. Раньше босс исчезал между кадрами: попадал последний удар —
+    // и на его месте уже пусто. Теперь фигура проседает и сжимается, вспыхивает,
+    // рассыпается осколками и уходит в расширяющееся кольцо.
+    //   progress: 0 — только что погиб, 1 — пора убирать.
+    void drawBossDeath(int cx, int cy, int bossType, float animTime, float progress) {
+        static const uint32_t pal[6] = {0xFFFFB028, 0xFF80FF40, 0xFFFF3068,
+                                        0xFFFF6818, 0xFF49C8E8, 0xFF9EDBE8};
+        const float p = std::max(0.0f, std::min(1.0f, progress));
+        const uint32_t col = pal[bossType % 6];
+        const int fadeA = (int)(255.0f * (1.0f - p * p));
+        addGlow(cx, cy, 56 + (int)(p * 50.0f), col, (int)(190.0f * (1.0f - p)));
+        // Кольцо смерти расходится от фигуры.
+        drawCircleRing(cx, cy + 24, 26 + (int)(p * 130.0f), p < 0.5f ? 4 : 2, col,
+                       (int)(225.0f * (1.0f - p)), true);
+        drawCircleRing(cx, cy + 24, 14 + (int)(p * 78.0f), 1, 0xFFFFFFFF,
+                       (int)(160.0f * (1.0f - p)), true);
+        // Осколки: разлетаются по кругу и провисают вниз, как настоящие обломки.
+        for (int i = 0; i < 16; ++i) {
+            const float a = i * 6.2831853f / 16.0f + animTime * 0.4f;
+            const float dist = 18.0f + p * (46.0f + (i % 4) * 16.0f);
+            const int px = cx + (int)(cosf(a) * dist);
+            const int py = cy + 10 + (int)(sinf(a) * dist * 0.6f + p * p * 26.0f);
+            const int sz = std::max(1, 4 - (int)(p * 3.0f));
+            fillRect(px - sz / 2, py - sz / 2, sz, sz + (i % 2), i % 3 ? col : 0xFFFFF0C8,
+                     (int)(215.0f * (1.0f - p)));
+        }
+        // Сама фигура: проседает, сжимается и гаснет. Первую треть она ещё
+        // светится вспышкой — удар был последним.
+        const float shrink = 1.12f * (1.0f - p * 0.55f);
+        const int sink = (int)(p * 20.0f);
+        // Область с запасом: замеренный размах стражей при 1.12 — от -125 до +119
+        // по x и от -123 до +93 по y в позах замаха и выброса. Меньшая рамка
+        // обрезала выброшенную колбу и поднятое древко.
+        const int lx = cx - 125, ly = cy - 132, lw = 250, lh = 232;
+        captureFigureRegion(lx, ly, lw, lh);
+        drawBossFigure(cx, cy + sink, bossType, animTime, p < 0.3f, true, false, shrink,
+                       0.0f, p * 0.85f, false, p * 0.7f, 1.0f - p * 0.85f);
+        if (figureVolumeEnabled && fxLevel >= 2)
+            applyFigureVolume(lx, ly, lw, lh, 1.0f - p * 0.8f, figureVolumeGradient, cx, cy, bossType);
+        (void)fadeA;
     }
 
     // Эхо-двойники из третьей фазы: та же фигура, но призрачная и полупрозрачная.
@@ -1391,14 +2643,14 @@ struct Renderer {
     // ── Тон предмета ───────────────────────────────────────────────────────────
     // Один предмет — один смысловой цвет. Раньше палитра шла по кругу из десяти
     // оттенков (предметы 00, 10, 20, 30 были одного цвета) и половина цветов не
-    // имела отношения к предмету. Здесь сорок разных оттенков, и каждый выбран по
+    // имела отношения к предмету. Здесь сорок один оттенок, и каждый выбран по
     // смыслу: огонь оранжевый, лёд бирюзовый, молния золотая, кровь алая, магнетизм
     // пурпурный, бумага пергаментная, ветер зелёный.
     //   bg   — подложка, edge — рамка, glow — свечение
     static bool isPassiveItem(int id) { return !((id >= 0 && id <= 6) || (id >= 24 && id <= 27)); }
 
     void drawWeaponIcon(int cx, int cy, int weaponId, int size = 22, bool evolved = false) {
-        static const uint32_t glowColors[40] = {
+        static const uint32_t glowColors[41] = {
             0xFF40D0FF,0xFFFF6818,0xFF43D9F4,0xFF40B8FF,0xFFFF2850,
             0xFFFFA030,0xFF30E8FF,0xFF40B8FF,0xFF40FF90,0xFFFFD030,
             0xFFFF3058,0xFFFF7820,0xFFC068FF,0xFFFFA818,0xFFFF5028,
@@ -1406,10 +2658,11 @@ struct Renderer {
             0xFFFFC56A,0xFF77EAD7,0xFFFF758E,0xFFA895FF,
             0xFF70DEFF,0xFF62D9E8,0xFFBC8AFF,0xFFFF9A42,0xFF63E9E8,0xFFBD83FF,
             0xFFFFD878,0xFFFF9B58,0xFF67E7D4,0xFF68E6D8,0xFFFF9347,0xFF72DFFF,
-            0xFF8BEAFF,0xFFFF705E,0xFFFF9A72,0xFFD6A0FF
+            0xFF8BEAFF,0xFFFF705E,0xFFFF9A72,0xFFD6A0FF,
+            0xFFFF8A36
         };
-        const int id = std::max(0, std::min(39, weaponId));
-        // Арт-наборы для любого предмета 00–39: ИИ-АРТ или набор «ЦВЕТ», где первые
+        const int id = std::max(0, std::min(40, weaponId));
+        // Арт-наборы для любого предмета 00–40: ИИ-АРТ или набор «ЦВЕТ», где первые
         // десять предметов различаются цветом и силуэтом, а не общей рамкой.
         const ItemTone& tone = ITEM_TONE[id];
         // Активные и пассивные предметы носят разные подложки: у оружия — угловатая
@@ -1649,6 +2902,30 @@ struct Renderer {
             poly({{0,-10},{7,-4},{5,4},{0,10},{-6,5},{-8,-2}},body,outline,1);
             poly({{0,-5},{3,-1},{1,2},{-2,5},{-3,0}},facet,outline,1);
             ring(0,0,9,1,accent); dot(0,0,1,white); break;
+        case 40: { // Ember trail: три отпечатка вдоль выжженной дуги.
+            // Тропа — не печать и не руна: у неё нет центра. Силуэт — дуга от
+            // левого низа к правому верху, и отпечатки гаснут по пути: первый
+            // ещё горит и даёт пламя, последний уже уголь. Поэтому иконка
+            // читается как «след», а не как очередной круглый артефакт.
+            // Формы круглые, а не гранёные: на 22 px квадрат превращается в
+            // пятно, а кружок с точкой внутри остаётся отпечатком.
+            const uint32_t emberHot = 0xFFFFCF63, emberDim = 0xFF7C3414;
+            for (int k = 0; k <= 10; ++k) {                 // выжженная дуга
+                const float t = (float)k / 10.0f;
+                const int px = (int)lroundf(-9.0f + 17.0f * t);
+                const int py = (int)lroundf(7.0f - 12.0f * t + 3.0f * sinf(3.14159f * t));
+                dot(px, py, 1, k % 2 ? shade : accent);
+            }
+            dot(-8,6,4,outline); dot(-8,6,3,body);          // отпечаток 1: горит
+            poly({{-8,6},{-6,2},{-3,0},{-5,3},{-9,4}},emberHot,outline,1); // пламя
+            dot(-8,6,1,sparkle);
+            dot(-1,1,3,outline); dot(-1,1,2,body);          // отпечаток 2: тлеет
+            dot(-1,1,1,emberHot);
+            dot(6,-5,3,outline); dot(6,-5,2,shade);         // отпечаток 3: уголь
+            dot(6,-5,1,emberDim);
+            dot(9,-9,1,emberHot); dot(-11,2,1,emberHot);    // искры
+            break;
+        }
         default: break;
         }
         switch (id) {

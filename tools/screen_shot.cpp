@@ -1,0 +1,218 @@
+// ── Снимок экрана игры в BMP ─────────────────────────────────────────────────
+//
+// Стенд для глазами-проверок: рисует один экран игры в заданном логическом
+// размере и пишет BMP (24-бит он же 32-бит с альфой, читается любым вьюером).
+// Нужен там, где хеша мало: хеш говорит «картинка изменилась», а снимок — что
+// именно поехало. Например, лишняя строка в настройках могла наехать на
+// ползунки громкости, и это видно только на снимке.
+//
+//     g++ -O2 -std=c++17 -pthread -Isrc tools/screen_shot.cpp -o build/shot
+//     build/shot settings 1280x720 settings.bmp
+//     build/shot settings 720x1280 settings_portrait.bmp 2
+//     build/shot play 960x720 play.bmp 1 3
+//     build/shot play 1280x720 mosaic.bmp 1 1 layout1   # прибить вариант пола
+//     build/shot play 1280x720 ash.bmp 1 2 time480       # место: 4-й акт (пепел)
+//     build/shot play 1280x720 floor.bmp 1 1 floor       # три напольных устройства
+//
+// Мыши в стенде нет: игра рисует курсор-«◎» в точке указателя, и по умолчанию
+// он приходился ровно на середину кадра — поверх текста. Стенд уводит курсор за
+// край; аргумент «cursor» возвращает его в центр, если снимок нужен с курсором.
+//
+// Аргументы: экран, размер, файл, [потоков], [ступень графики 1..4].
+// Экраны: menu, settings, help, patchnotes, hall, hero, play, pause, chest,
+// levelup, trail (бой с тлеющей тропой — предмет 40), debug (бой с панелью F3).
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cstdint>
+#include <vector>
+#include "renderer.h"
+#include "game.h"
+
+static void writeBmp(const char* path, const uint32_t* px, int w, int h) {
+    const int dataSize = w * 4 * h;
+    unsigned char header[54] = {0};
+    header[0] = 'B'; header[1] = 'M';
+    const int fileSize = 54 + dataSize;
+    header[2] = fileSize & 0xFF; header[3] = (fileSize >> 8) & 0xFF;
+    header[4] = (fileSize >> 16) & 0xFF; header[5] = (fileSize >> 24) & 0xFF;
+    header[10] = 54;
+    header[14] = 40;
+    header[18] = w & 0xFF; header[19] = (w >> 8) & 0xFF;
+    header[22] = h & 0xFF; header[23] = (h >> 8) & 0xFF;
+    header[26] = 1; header[28] = 32;
+    header[34] = dataSize & 0xFF; header[35] = (dataSize >> 8) & 0xFF;
+    header[36] = (dataSize >> 16) & 0xFF; header[37] = (dataSize >> 24) & 0xFF;
+    FILE* f = fopen(path, "wb");
+    if (!f) { printf("не смог открыть %s\n", path); return; }
+    fwrite(header, 1, 54, f);
+    for (int y = h - 1; y >= 0; --y) fwrite(px + (size_t)y * w, 4, (size_t)w, f);
+    fclose(f);
+}
+
+static bool parseSize(const char* s, int& w, int& h) {
+    const char* x = strchr(s, 'x');
+    if (!x) return false;
+    w = atoi(s);
+    h = atoi(x + 1);
+    return w >= 240 && h >= 240;
+}
+
+int main(int argc, char** argv) {
+    const char* screen = argc > 1 ? argv[1] : "settings";
+    int w = 1280, h = 720;
+    if (argc > 2) parseSize(argv[2], w, h);
+    const char* out = argc > 3 ? argv[3] : "/tmp/shot.bmp";
+    const int threads = argc > 4 ? std::max(1, atoi(argv[4])) : 1;
+    const int graphics = argc > 5 ? std::max(1, std::min(4, atoi(argv[5]))) : 1;
+    // Любой аргумент «touch» включает телефонный интерфейс: подсказки без
+    // названий клавиш и экран выбора схемы движения.
+    bool touchUi = false;
+    int buttonScale = TOUCH_SIZE_DEFAULT;
+    int iconStyle = -1; // -1: как в настройках (по умолчанию вектор)
+    int pinYear = 0, pinMonth = 1, pinDay = 1;   // «сегодня» для снимка, если задано
+    int forcedLayout = -1;
+    bool floorProps = false;                     // поставить три напольных устройства                       // рисунок пола, если задан
+    float runTimeArg = 240.0f;                   // время забега: от него место (палитра)
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "touch") == 0) touchUi = true;
+        // icons0/icons1/icons2 — стиль иконок: ВЕКТОР, ИИ-АРТ, ЦВЕТ. Арсенал
+        // должен проверяться во всех трёх, а не только в том, что стоит по
+        // умолчанию: стили рисуются разным кодом.
+        else if (strncmp(argv[i], "icons", 5) == 0 && argv[i][5] >= '0' && argv[i][5] <= '2')
+            iconStyle = argv[i][5] - '0';
+        // size140 — тот же экран с размером кнопок 140 %: так видно, что настройка
+        // двигает геометрию, а не только цифру в строке.
+        else if (strncmp(argv[i], "size", 4) == 0) buttonScale = atoi(argv[i] + 4);
+        // date20260217 — закрепить «сегодня» этим днём: пересечения окон
+        // (Валентин + Лунный новый год) выпадают на конкретные годы, и без
+        // этого снимок их не покажет.
+        // layoutN — прибить рисунок пола (0..4): на снимке видно, что именно
+        // добавил вариант карты, а не только «картинка другая».
+        else if (strncmp(argv[i], "layout", 6) == 0 && argv[i][6] >= '0' && argv[i][6] <= '4')
+            forcedLayout = argv[i][6] - '0';
+        // time480 — время забега в секундах: место меняется каждые 150 с, и без
+        // этого снимок всегда показывал бы второй акт.
+        else if (strcmp(argv[i], "floor") == 0) floorProps = true;
+        else if (strncmp(argv[i], "time", 4) == 0 && atoi(argv[i] + 4) > 0)
+            runTimeArg = (float)atoi(argv[i] + 4);
+        else if (strncmp(argv[i], "date", 4) == 0 && strlen(argv[i]) == 12) {
+            pinYear = atoi(std::string(argv[i] + 4, 4).c_str());
+            pinMonth = atoi(std::string(argv[i] + 8, 2).c_str());
+            pinDay = atoi(std::string(argv[i] + 10, 2).c_str());
+        }
+    }
+
+    struct Case { const char* name; int state; } cases[] = {
+        {"menu", STATE_MENU}, {"settings", STATE_SETTINGS}, {"help", STATE_HELP},
+        {"patchnotes", STATE_PATCH_NOTES}, {"hall", STATE_HALL}, {"hero", STATE_HERO_SELECT},
+        {"play", STATE_PLAYING}, {"pause", STATE_PAUSED}, {"chest", STATE_CHEST},
+        {"levelup", STATE_LEVELUP}, {"controls", STATE_CONTROLS_SETUP},
+        {"look", STATE_BUTTON_LOOK}, {"holidays", STATE_HOLIDAY}, {"trail", STATE_PLAYING},
+        {"daily", STATE_DAILY},
+    };
+    int state = strcmp(screen, "debug") == 0 ? STATE_PLAYING : STATE_SETTINGS;
+    for (const Case& c : cases) if (strcmp(c.name, screen) == 0) state = c.state;
+
+    SCREEN_W = w; SCREEN_H = h;
+    Renderer r;
+    r.resize(w, h);
+    Game g;
+    g.simulationMode = true;
+    g.ignoreSavedState = true;   // кадр не зависит от сейва, оставленного соседним прогоном
+    g.touchControls = touchUi;
+    srand(4242);
+    g.init();
+    g.gameMode = MODE_ENDLESS;
+    g.arenaLayoutOverride = forcedLayout;
+    g.runTime = runTimeArg;
+    g.cheatGodMode = true;
+    g.options.graphicsLevel = graphics;
+    g.options.touchButtonScale = touchClampSize(buttonScale);
+    if (iconStyle >= 0) g.options.skillIconStyle = iconStyle;
+    if (pinYear > 0) {
+        g.holidayPinYear = pinYear; g.holidayPinMonth = pinMonth; g.holidayPinDay = pinDay;
+        g.activeHoliday = g.resolveActiveHoliday();
+    }
+    // scrollN — прокрутить арсенал на N рядов: 41-й предмет стоит в самом конце
+    // списка, и без прокрутки его иконку в экране не увидеть.
+    for (int i = 1; i < argc; ++i)
+        if (strncmp(argv[i], "scroll", 6) == 0) g.arsenalScrollRow = std::max(0, atoi(argv[i] + 6));
+    g.renderThreads = threads;
+    for (int i = 0; i < 5; ++i) g.itemLevels[i] = 3;
+    // «runboosterNN» — жетон, сгоревший в этом бою: нужен снимкам паузы, где
+    // печатается правило забега. Множители здесь не важны, только строка.
+    for (int i = 1; i < argc; ++i)
+        if (strncmp(argv[i], "runbooster", 10) == 0)
+            g.runBooster = std::max(0, std::min(BOOSTER_KINDS - 1, atoi(argv[i] + 10)));
+    g.state = (GameState)state;
+    if (state == STATE_PLAYING || state == STATE_LEVELUP || state == STATE_CHEST || state == STATE_PAUSED) {
+        for (int i = 0; i < 60; ++i) g.spawnMonster(i % 8, i % 9 == 0, false);
+        for (int f = 0; f < 3; ++f) g.update(1.0f / 60.0f);
+    }
+    g.state = (GameState)state;
+    // Календарь игра открывает на текущем празднике (openHolidays): снимок
+    // повторяет это, иначе шапка говорит «идёт Лунный», а панель показывает
+    // Хэллоуин — просто первый в списке.
+    if (state == STATE_HOLIDAY) {
+        const HolidayId live = g.resolveActiveHoliday();
+        if (live != HOLIDAY_NONE) g.holidayCursor = live;
+    }
+    // «debug» — та же сцена боя с открытой панелью F3: там видна строка
+    // «ГРАФИКА» (уровень, ступень, цена кадра, потоки).
+    if (floorProps) {
+        g.playerX = 0.0f; g.playerY = 0.0f;
+        g.spawnFloorDeviceAt(FLOOR_DEVICE_PLATE, -160.0f, 30.0f);
+        g.spawnFloorDeviceAt(FLOOR_DEVICE_SPIKES, 140.0f, -60.0f);
+        g.spawnFloorDeviceAt(FLOOR_DEVICE_SIGIL, 20.0f, 160.0f);
+    }
+    // «daily» — экран даров с тир-листом жетонов. Аргументы dailyTierN (какой
+    // тир открыт на экране) и spendNNN (сколько потрачено — от этого зависит,
+    // какие тиры открыты): снимок должен показывать и закрытый тир, и открытый.
+    if (strcmp(screen, "daily") == 0) {
+        g.ensureDaily();
+        g.save.dailyProgress[0] = g.save.dailyTarget[0];
+        g.save.dailyProgress[1] = g.save.dailyTarget[1] / 3;
+        g.save.dailyClaimed = 1 << 2;
+        g.save.dailyProgress[2] = g.save.dailyTarget[2];
+        for (int i = 1; i < argc; ++i) {
+            if (strncmp(argv[i], "dailyTier", 9) == 0) g.boosterTierView = std::max(0, std::min(2, atoi(argv[i] + 9)));
+            if (strncmp(argv[i], "spend", 5) == 0) g.save.goldSpent = std::max(0, atoi(argv[i] + 5));
+        }
+        g.save.boosters[BOOSTER_RAGE] = 2;
+        g.save.boosters[BOOSTER_LUCK] = 1;
+        if (g.save.goldSpent >= BOOSTER_TIER_GOLD[1]) { g.save.boosters[BOOSTER_SPEED] = 2; g.save.boosters[BOOSTER_XP] = 1; }
+        if (g.save.goldSpent >= BOOSTER_TIER_GOLD[2]) { g.save.boosters[BOOSTER_HUNGER] = 1; g.save.boosters[BOOSTER_BREAK] = 1; }
+        g.save.activeBooster = BOOSTER_RAGE;
+    }
+    if (strcmp(screen, "debug") == 0) g.debugOverlay = true;
+    // «trail» — бой с тлеющей тропой (предмет 40). Сцена двигает героя по дуге,
+    // а не ставит метки вручную: на снимке должен быть след, который игра
+    // оставила сама, иначе картинка врёт про механику.
+    if (strcmp(screen, "trail") == 0) {
+        g.itemLevels[40] = 3;
+        g.state = STATE_PLAYING;
+        g.playerX = 0.0f; g.playerY = 0.0f;
+        const float dt = 1.0f / 60.0f;
+        for (int f = 0; f < 150; ++f) {
+            const float t = (float)f / 150.0f * 6.2831853f;
+            g.keyD = cosf(t) > -0.2f;
+            g.keyW = sinf(t) < -0.1f;
+            g.keyS = sinf(t) > 0.1f;
+            g.update(dt);
+        }
+        g.keyW = g.keyS = g.keyD = false;
+    }
+    // Курсор-«◎» игра рисует в точке мыши, а у стенда мыши нет: по умолчанию
+    // она стоит в центре кадра и попадала ровно на текст. Снимок — про экран,
+    // а не про указатель, поэтому уводим его за край; аргумент «cursor»
+    // возвращает курсор в центр, если снимок нужен с ним.
+    bool showCursor = false;
+    for (int i = 1; i < argc; ++i) if (strcmp(argv[i], "cursor") == 0) showCursor = true;
+    if (!showCursor) { g.mouseX = -200; g.mouseY = -200; }
+    r.clear(0xFF000000);
+    g.render(r);
+    writeBmp(out, r.pixels, w, h);
+    printf("%s  %dx%d  потоков %d  ступень %d\n", out, w, h, threads, graphics);
+    return 0;
+}

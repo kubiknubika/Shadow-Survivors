@@ -1,0 +1,19 @@
+// Shadow Survivors — Android-проект.
+// Java-кода здесь нет: активность системная (android.app.NativeActivity), весь
+// код — C++ в src/. Поэтому и зависимостей, кроме AGP, никаких.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "ShadowSurvivors"
+include ':app'

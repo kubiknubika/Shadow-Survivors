@@ -1,0 +1,160 @@
+// ── Сверка экранов: контрольная сумма кадра до и после правок рендера ───────
+//
+// Растеризатор трогать страшно: он рисует всё, а глазами проверяют только то,
+// куда посмотрели. Этот стенд печатает хеш десяти экранов (меню, настройки,
+// справка, патчноуты, зал славы, выбор героя, бой, пауза, сундук, прокачка).
+// Соберите его до правки и после — совпали хеши, значит картинка не изменилась
+// ни на пиксель; разошлись — смотрите, где именно.
+//
+//     g++ -O2 -std=c++17 -pthread -Isrc tools/screen_check.cpp -o build/screens_new
+//     build/screens_new 2          # тот же набор, но кадр в две полосы
+//     build/screens_new 2 3        # и на ступени графики 3 («быстрое»)
+//
+// Второй аргумент — ступень графики 1..4. На ступени 1 картинка обязана
+// совпадать со сборкой до правок; 2–4 меняют её осознанно, и там проверяется
+// другое: что один, два и четыре потока дают один и тот же кадр.
+//     git stash && g++ -O2 -std=c++17 -Isrc tools/screen_check.cpp -o build/screens_old && git stash pop
+//     build/screens_old > old.txt && build/screens_new > new.txt && diff old.txt new.txt
+//
+// Важно: оба бинарника должны собираться с одним и тем же game.h, иначе
+// разойдётся текст (версия в заголовке), а не отрисовка.
+#include <cstdio>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <algorithm>
+#include "renderer.h"
+#include "game.h"
+
+static uint32_t checksum(const Renderer& r) {
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < r.width * r.height; ++i) { h ^= r.pixels[i]; h *= 16777619u; }
+    return h;
+}
+
+int main(int argc, char** argv) {
+    // Второй аргумент — число потоков: с ним тот же стенд проверяет, что
+    // полосный кадр совпадает с однопоточным пиксель в пиксель.
+    const int threads = argc > 1 ? std::max(1, atoi(argv[1])) : 1;
+    // Второй аргумент — уровень графики (1 высокое … 4 эконом): три нижних
+    // уровня меняют картинку осознанно, и их надо смотреть глазами.
+    const int graphicsLevel = argc > 2 ? std::max(1, std::min(4, atoi(argv[2]))) : 1;
+    // Третий аргумент «touch» включает телефонный интерфейс: подсказки без
+    // названий клавиш и кнопка «УПРАВЛЕНИЕ» в настройках. Тот же стенд с теми же
+    // экранами, только глазами телефона.
+    const bool touchUi = argc > 3 && strcmp(argv[3], "touch") == 0;
+    // Праздники задаются явно, а не берутся из системной даты: иначе хеши боя
+    // и меню менялись бы 20 октября, 31 декабря и в любой другой день, когда
+    // календарь включает окно. -1 — праздников нет, 0..7 — принудительный
+    // праздник, -2 — календарь на закреплённой дате 31 октября 2026.
+    // Пятый вариант карты — рисунок пола: 0..4 или -1 «как в режиме». У каждого
+    // рисунка свой хеш, иначе новый пол в одном варианте проходил бы мимо сверки.
+    // dailySpend — сколько золота «потрачено» к моменту кадра экрана даров:
+    // от этой цифры зависят открытые тиры жетонов, вкладки и подпись до
+    // следующего тира. Без неё в сверку попадал только первый тир.
+    struct Case { const char* name; int state; int holiday; int layout; bool devices; int dailySpend = 0; };
+    const Case cases[] = {
+        {"меню", STATE_MENU, -1, -1, false},
+        {"настройки", STATE_SETTINGS, -1, -1, false},
+        {"справка", STATE_HELP, -1, -1, false},
+        {"патчноуты", STATE_PATCH_NOTES, -1, -1, false},
+        {"зал славы", STATE_HALL, -1, -1, false},
+        {"выбор героя", STATE_HERO_SELECT, -1, -1, false},
+        {"бой", STATE_PLAYING, -1, -1, false},
+        {"бой плиты", STATE_PLAYING, -1, 0, false},
+        {"бой мозаика", STATE_PLAYING, -1, 1, false},
+        {"бой ритуал", STATE_PLAYING, -1, 2, false},
+        {"бой разлив", STATE_PLAYING, -1, 3, false},
+        {"бой осыпь", STATE_PLAYING, -1, 4, false},
+        // Отдельный кадр с предметами пола: плита, шипы на замахе и знак-круг
+        // стоят вокруг героя. Без него вся механика пола в сверку не попадала.
+        {"бой пол", STATE_PLAYING, -1, 0, true},
+        {"пауза", STATE_PAUSED, -1, -1, false},
+        {"сундук", STATE_CHEST, -1, -1, false},
+        {"прокачка", STATE_LEVELUP, -1, -1, false},
+        // Кузница и договоры — единственный экран с ценами и шкалами рангов, и
+        // до этой строки он в сверку не входил: правка витрины проходила мимо
+        // всех пломб. Ранги выставляются заранее, иначе кадр показывает только
+        // «Ранг 0» и незакрашенные отрезки.
+        {"кузница", STATE_SHOP, -1, -1, false},
+        {"управление", STATE_CONTROLS_SETUP, -1, -1, false},
+        {"вид кнопок", STATE_BUTTON_LOOK, -1, -1, false},
+        {"праздники", STATE_HOLIDAY, -2, -1, false},
+        // Экран дневных даров: три задания с прогрессом, крутка, жетоны и
+        // список аномалий. Прогресс и жетоны выставляются заранее — иначе кадр
+        // показывал бы «0 / N» и «НЕТ ЖЕТОНА» и половина вёрстки осталась бы
+        // без сверки.
+        {"дары дня", STATE_DAILY, -2, -1, false},
+        // Третий тир: открыты все вкладки, статус говорит «все тиры открыты»,
+        // а карточки — «ПЕПЕЛ». Отдельный кадр, иначе верх тир-листа никто
+        // никогда не увидит в сверке.
+        {"дары дня тир III", STATE_DAILY, -2, -1, false, 2000000},
+        {"бой праздник", STATE_PLAYING, 0, -1, false},
+    };
+    SCREEN_W = 1280; SCREEN_H = 720;
+    for (const Case& c : cases) {
+        Renderer r; r.resize(SCREEN_W, SCREEN_H);
+        Game g; g.simulationMode = true; g.ignoreSavedState = true;   // кадр не зависит от сейва с диска
+        g.touchControls = touchUi;      // до init(): от него зависит первый экран
+        srand(4242); g.init();
+        // Праздничная часть прибита гвоздями: выключена или выбрана вручную.
+        g.options.holidayDateShift = 0;
+        g.options.holidaysEnabled = c.holiday >= 0 ? 1 : 0;
+        g.options.holidayOverride = c.holiday >= 0 ? c.holiday : -1;
+        if (c.holiday == -2) {
+            g.options.holidaysEnabled = 1;
+            g.holidayPinYear = 2026; g.holidayPinMonth = 10; g.holidayPinDay = 31;
+        }
+        g.activeHoliday = g.resolveActiveHoliday();
+        g.holidayBannerShown = false;
+        g.holidayWaveTimer = 40.0f;
+        g.gameMode = MODE_ENDLESS;
+        g.arenaLayoutOverride = c.layout;
+        g.runTime = 240.0f;
+        for (int i = 0; i < 5; ++i) g.itemLevels[i] = 3;
+        g.renderThreads = threads;
+        g.options.graphicsLevel = graphicsLevel;
+        g.state = (GameState)c.state;
+        if (c.state == STATE_DAILY) {
+            g.ensureDaily();
+            g.save.dailyProgress[0] = g.save.dailyTarget[0];
+            g.save.dailyProgress[1] = g.save.dailyTarget[1] / 3;
+            g.save.dailyClaimed = 1 << 2;
+            g.save.dailyProgress[2] = g.save.dailyTarget[2];
+            g.save.boosters[BOOSTER_RAGE] = 2;
+            g.save.boosters[BOOSTER_LUCK] = 1;
+            g.save.activeBooster = BOOSTER_RAGE;
+            g.save.goldSpent = c.dailySpend;
+            if (c.dailySpend >= BOOSTER_TIER_GOLD[2]) {
+                g.save.boosters[BOOSTER_HUNGER] = 1;
+                g.save.boosters[BOOSTER_BREAK] = 1;
+            }
+            g.boosterTierView = std::min(2, g.unlockedBoosterTierCount() - 1);
+        }
+        if (c.state == STATE_SHOP) {
+            // Разные ранги в одном кадре: подпись «Ранг N / 12», закрашенная
+            // шкала и цена следующего ранга должны попасть в контрольную сумму.
+            g.save.gold = 150000;
+            for (int i = 0; i < 6; ++i) g.save.metaRanks[i] = i * 2;
+        }
+        if (c.state == STATE_PLAYING || c.state == STATE_LEVELUP || c.state == STATE_CHEST || c.state == STATE_PAUSED) {
+            for (int i = 0; i < 60; ++i) g.spawnMonster(i % 8, i % 9 == 0, false);
+        }
+        if (c.devices) {
+            g.spawnFloorDeviceAt(FLOOR_DEVICE_PLATE, g.playerX - 150.0f, g.playerY + 40.0f);
+            g.spawnFloorDeviceAt(FLOOR_DEVICE_SPIKES, g.playerX + 120.0f, g.playerY - 70.0f);
+            g.floorDevices.back().timer = 0.85f;
+            g.spawnFloorDeviceAt(FLOOR_DEVICE_SIGIL, g.playerX + 30.0f, g.playerY + 150.0f);
+            g.floorDeviceSpawnTimer = 1e9f;
+        }
+        for (int f = 0; f < 3; ++f) {
+            if (g.state == STATE_LEVELUP) break;
+            g.update(1.0f / 60.0f);
+        }
+        g.state = (GameState)c.state;
+        r.clear(0xFF000000);
+        g.render(r);
+        printf("%-14s %08x\n", c.name, checksum(r));
+    }
+    return 0;
+}

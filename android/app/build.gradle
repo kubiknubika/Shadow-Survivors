@@ -1,0 +1,65 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Версия берётся из src/version.h: build_android.bat передаёт её сюда
+// (-PappVersion / -PappVersionCode), поэтому номер версии в APK, в заголовке
+// окна и в хронике игры не расходятся. Без аргументов работают значения ниже.
+def appVersionName = project.findProperty('appVersion') ?: '2.12.17'
+def appVersionCode = (project.findProperty('appVersionCode') ?: '3217') as int
+
+android {
+    namespace 'com.shadowsurvivors.game'
+    compileSdk 34
+    ndkVersion '26.1.10909125'
+
+    defaultConfig {
+        applicationId 'com.shadowsurvivors.game'
+        minSdk 26            // AAudio появился в API 26
+        targetSdk 34
+        versionCode appVersionCode
+        versionName appVersionName
+        ndk {
+            // arm64 — все телефоны последних лет. armeabi-v7a добавьте, если
+            // нужна поддержка старых устройств: кода это не меняет.
+            abiFilters 'arm64-v8a'
+        }
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_static'
+                cppFlags '-std=c++17'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+            jniDebuggable true
+        }
+        release {
+            minifyEnabled false
+            // Release подписывается отладочным ключом: так `build_android.bat
+            // release` даёт APK, который сразу ставится на телефон, без
+            // возни с keystore. Для Google Play эту строку нужно заменить на
+            // свой signingConfig — там отладочный ключ не принимают.
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+    }
+}

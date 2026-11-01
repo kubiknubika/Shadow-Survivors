@@ -13,6 +13,9 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <mmsystem.h>
+#else
+// Не-Windows (Android): тот же замок, только средствами стандартной библиотеки.
+#include <mutex>
 #endif
 
 enum SfxId {
@@ -39,8 +42,32 @@ enum SfxId {
     SFX_BOSS_PHASE,
     SFX_PROJECTILE_FLIGHT,
     SFX_PROJECTILE_IMPACT,
+    // Сигналы предметов на полу и разрушаемых целей: по ним игрок слышит, что
+    // рядом есть с чем взаимодействовать, ещё до того, как посмотрит туда.
+    SFX_FLOOR_APPEAR,
+    SFX_FLOOR_NEAR,
+    SFX_FLOOR_PLATE,
+    SFX_FLOOR_SPIKE_WARN,
+    SFX_FLOOR_SPIKE_BURST,
+    SFX_FLOOR_SIGIL_TICK,
+    SFX_FLOOR_SIGIL_DONE,
+    SFX_RESONATOR_BREAK,
     SFX_COUNT
 };
+
+// Имена эффектов для стенда и отладочной панели: без них сообщение «провал в
+// SFX_BOSS_PHASE» приходится расшифровывать по номеру.
+inline const char* sfxName(SfxId id) {
+    static const char* const names[SFX_COUNT] = {
+        "клик", "клинок", "огненный шар", "молния", "самоцвет", "новый уровень",
+        "сундук", "удар", "босс", "рывок", "ультимейт", "эволюция",
+        "смерть босса", "смерть героя", "магнит", "возрождение", "заморозка",
+        "тир", "телеграф босса", "удар босса", "фаза босса", "полёт снаряда",
+        "попадание снаряда", "пол: предмет появился", "пол: предмет рядом",
+        "пол: плита нажата", "шипы: треск", "шипы: выброс", "знак: тик",
+        "знак: собран", "резонатор разбит"};
+    return (id >= 0 && id < SFX_COUNT) ? names[id] : "?";
+}
 
 struct ActiveVoice {
     bool active = false;
@@ -79,7 +106,17 @@ struct SoundEngine {
     VoiceBank voice;                  // recorded announcer phrases from audio/voice/
     float proceduralMusicGain = 0.0f;
 
-    std::vector<int16_t> sfxSamples[SFX_COUNT];
+    // Три записи на эффект: у удара и клинка за бой десятки срабатываний, и
+    // одна и та же волна узнаётся даже с джиттером высоты. Остальные эффекты
+    // используют только вариант 0 (sfxVariantCount == 1).
+    static constexpr int SFX_VARIANTS = 3;
+    std::vector<int16_t> sfxSamples[SFX_COUNT][SFX_VARIANTS];
+    int sfxVariantCount[SFX_COUNT] = {0};
+    // Выбор варианта — счётчиком, а не rand(): лишний вызов rand() в play()
+    // сдвигал общий поток случайности, и сцена боя менялась целиком (это уже
+    // ловили на праздничном набеге). Счётчик даёт чередование записей и ни на
+    // что не влияет.
+    int sfxVariantCursor[SFX_COUNT] = {0};
     float cooldowns[SFX_COUNT] = {0};
     int gemComboStep = 0;
     float gemComboResetTimer = 0.0f;
@@ -96,6 +133,10 @@ struct SoundEngine {
     HANDLE hThread = NULL;
     std::atomic<bool> running{false};
     CRITICAL_SECTION cs;
+#else
+    // Android и любой другой не-Windows хост: звук тянет платформа (AAudio),
+    // а микшер остаётся тем же — значит и замок нужен тот же, только std.
+    std::mutex cs;
 #endif
 
     double musicTime = 0.0;
@@ -103,6 +144,7 @@ struct SoundEngine {
     float musicMuteGain = 1.0f;
     float sfxMuteGain = 1.0f;
     float musicDuckGain = 1.0f;
+    float sfxDuckGain = 1.0f;      // effects bus trim while the announcer speaks
     float musicVolumeSmooth = 0.42f;
     float musicSceneGainSmooth = 1.0f;
     float sfxVolumeSmooth = 0.65f;
@@ -127,6 +169,11 @@ struct SoundEngine {
             case SFX_BOSS_TELEGRAPH: case SFX_BOSS_IMPACT: return 4;
             case SFX_PROJECTILE_FLIGHT: return 2;
             case SFX_PROJECTILE_IMPACT: return 3;
+            // Пол — подсказка, а не событие боя: слышнее удара, но тише сигналов.
+            case SFX_FLOOR_APPEAR: case SFX_FLOOR_NEAR: case SFX_FLOOR_SIGIL_TICK: return 1;
+            case SFX_FLOOR_PLATE: case SFX_FLOOR_SPIKE_WARN:
+            case SFX_FLOOR_SPIKE_BURST: case SFX_RESONATOR_BREAK: return 2;
+            case SFX_FLOOR_SIGIL_DONE: return 3;
             default: return 1;
         }
     }
@@ -139,6 +186,11 @@ struct SoundEngine {
             case SFX_TIER_UP: case SFX_BOSS_TELEGRAPH: case SFX_BOSS_IMPACT: case SFX_BOSS_PHASE: return 1;
             case SFX_PROJECTILE_FLIGHT: return 2;
             case SFX_PROJECTILE_IMPACT: return 3;
+            // Две плиты рядом могут сработать разом, но треск и тик — по одному:
+            // три шипа залпом дают кашу из шума.
+            case SFX_FLOOR_APPEAR: case SFX_FLOOR_PLATE: case SFX_RESONATOR_BREAK: return 2;
+            case SFX_FLOOR_NEAR: case SFX_FLOOR_SPIKE_WARN: case SFX_FLOOR_SPIKE_BURST:
+            case SFX_FLOOR_SIGIL_TICK: case SFX_FLOOR_SIGIL_DONE: return 1;
             default: return 1;
         }
     }
@@ -149,23 +201,128 @@ struct SoundEngine {
         return count;
     }
 
+    // Три записи удара и клинка. Джиттер высоты прячет повторы, но одну и ту
+    // же волну слышно и сквозь него; три разные записи — уже нет. Вариант 0
+    // строится ровно по прежней формуле, поэтому звук не «сменился», а получил
+    // два соседа: ниже и суше — у удара, выше и звонче — у клинка.
+    void buildSfxVariants() {
+        const int sr = 44100;
+        for (int i = 0; i < SFX_COUNT; ++i) sfxVariantCount[i] = 1;
+
+        // Удар: частота, спад огибающей, длина и доля шума в тембре.
+        const float hitFreq[SFX_VARIANTS] = {125.0f, 96.0f, 152.0f};
+        const float hitDecay[SFX_VARIANTS] = {1.4f, 1.7f, 1.2f};
+        const float hitMs[SFX_VARIANTS] = {100.0f, 124.0f, 84.0f};
+        const float hitNoise[SFX_VARIANTS] = {0.0f, 0.22f, 0.10f};
+        for (int v = 0; v < SFX_VARIANTS; ++v) {
+            const int n = (int)(sr * hitMs[v] / 1000.0f);
+            std::vector<int16_t>& out = sfxSamples[SFX_HIT][v];
+            out.resize(n);
+            float lp = 0.0f;
+            for (int i = 0; i < n; ++i) {
+                const float t = (float)i / sr;
+                const float u = (float)i / n;
+                const float env = powf(1.0f - u, hitDecay[v]);
+                lp = lp * 0.84f + nextNoise() * 0.16f;
+                const float tone = sinf(2.0f * 3.14159f * (hitFreq[v] - 65.0f * u) * t);
+                out[i] = (int16_t)((tone * (1.0f - hitNoise[v]) + lp * 4.0f * hitNoise[v]) * 7500.0f * env);
+            }
+        }
+        sfxVariantCount[SFX_HIT] = SFX_VARIANTS;
+
+        // Клинок: стартовая частота, длина, доля тона и сглаживание шума.
+        const float bladeFreq[SFX_VARIANTS] = {480.0f, 560.0f, 410.0f};
+        const float bladeMs[SFX_VARIANTS] = {70.0f, 62.0f, 86.0f};
+        const float bladeTone[SFX_VARIANTS] = {0.45f, 0.55f, 0.36f};
+        const float bladeLp[SFX_VARIANTS] = {0.82f, 0.80f, 0.86f};
+        for (int v = 0; v < SFX_VARIANTS; ++v) {
+            const int n = (int)(sr * bladeMs[v] / 1000.0f);
+            std::vector<int16_t>& out = sfxSamples[SFX_BLADE][v];
+            out.resize(n);
+            float lp = 0.0f;
+            for (int i = 0; i < n; ++i) {
+                const float u = (float)i / n;
+                const float env = sinf(u * 3.14159f) * (1.0f - u * 0.5f);
+                const float freq = bladeFreq[v] * (1.0f - 0.6f * u);
+                lp = lp * bladeLp[v] + nextNoise() * (1.0f - bladeLp[v]);
+                const float tone = sinf(2.0f * 3.14159f * freq * ((float)i / sr));
+                out[i] = (int16_t)((tone * bladeTone[v] + lp * (1.0f - bladeTone[v])) * 3800.0f * env);
+            }
+        }
+        sfxVariantCount[SFX_BLADE] = SFX_VARIANTS;
+    }
+
+    // Выравнивание банка. Синтез писал каждый эффект «как получилось»: у клинка
+    // пик 1899 против 6800 у огненного шара, и в миксе он оказывался на 10 дБ
+    // тише — не потому, что так задумано, а потому что так сложилась формула.
+    // Здесь у каждого сэмпла убирается постоянная составляющая (её слышно как
+    // щелчок в наушниках), срезаются первые 1,5 мс и последние 8 мс (обрыв
+    // волны на ненулевом значении — это тоже щелчок), а пик приводится к одной
+    // величине. Иерархию «клик тише удара, удар тише смерти босса» задаёт
+    // baseVolumes в play(), а не случайные множители синтеза.
+    void normalizeSfxBank() {
+        const int targetPeak = 30000;
+        for (int id = 0; id < SFX_COUNT; ++id)
+        for (int v = 0; v < std::max(1, sfxVariantCount[id]); ++v) {
+            std::vector<int16_t>& s = sfxSamples[id][v];
+            if (s.empty()) continue;
+            // 1. Концы: обрыв волны на ненулевом значении слышен щелчком. Режем
+            //    первые 1,5 мс и последние 8 мс.
+            const int fadeIn = std::min((int)s.size() / 4, 66);
+            const int fadeOut = std::min((int)s.size() / 3, 352);
+            for (int i = 0; i < fadeIn; ++i) s[i] = (int16_t)(s[i] * (float)i / (float)fadeIn);
+            for (int i = 0; i < fadeOut; ++i) {
+                const int idx = (int)s.size() - 1 - i;
+                s[idx] = (int16_t)(s[idx] * (float)i / (float)fadeOut);
+            }
+            // 2. Постоянная составляющая. Считать её до срезания концов нельзя:
+            //    срезанный хвост сам сдвигает среднее (у клика выходило −1 %), и
+            //    «исправленный» звук всё равно уезжал в минус.
+            double sum = 0.0;
+            for (int16_t sample : s) sum += sample;
+            const float dc = (float)(sum / (double)s.size());
+            if (std::fabs(dc) > 0.5f) {
+                for (int16_t& sample : s) {
+                    const float fixed = (float)sample - dc;
+                    sample = (int16_t)std::max(-32767.0f, std::min(32767.0f, fixed));
+                }
+                // 3. Снятие постоянной составляющей вернуло ненулевые концы —
+                //    добиваем их короткой огибающей, иначе щелчок возвращается.
+                const int edge = std::min((int)s.size() / 8, 32);
+                for (int i = 0; i < edge; ++i) {
+                    s[i] = (int16_t)(s[i] * (float)i / (float)edge);
+                    const int idx = (int)s.size() - 1 - i;
+                    s[idx] = (int16_t)(s[idx] * (float)i / (float)edge);
+                }
+            }
+            // 4. Пик — к одной величине. Иерархию задаёт baseVolumes в play().
+            int peak = 0;
+            for (int16_t sample : s) peak = std::max(peak, std::abs((int)sample));
+            if (peak > 0) {
+                const float gain = (float)targetPeak / (float)peak;
+                for (int16_t& sample : s)
+                    sample = (int16_t)std::max(-32767.0f, std::min(32767.0f, sample * gain));
+            }
+        }
+    }
+
     void generateSfxBank() {
         const int sr = 44100;
 
         // 0: SFX_CLICK (soft warm UI tick)
         {
             int n = sr * 35 / 1000;
-            sfxSamples[SFX_CLICK].resize(n);
+            sfxSamples[SFX_CLICK][0].resize(n);
             for (int i = 0; i < n; ++i) {
                 float t = (float)i / sr;
                 float env = powf(1.0f - (float)i / n, 2.2f);
-                sfxSamples[SFX_CLICK][i] = (int16_t)(sinf(2.0f * 3.14159f * 520.0f * t) * 4500.0f * env);
+                sfxSamples[SFX_CLICK][0][i] = (int16_t)(sinf(2.0f * 3.14159f * 520.0f * t) * 4500.0f * env);
             }
         }
         // 1: SFX_BLADE (soft airy whoosh)
         {
             int n = sr * 70 / 1000;
-            sfxSamples[SFX_BLADE].resize(n);
+            sfxSamples[SFX_BLADE][0].resize(n);
             float lp = 0.0f;
             for (int i = 0; i < n; ++i) {
                 float u = (float)i / n;
@@ -173,39 +330,39 @@ struct SoundEngine {
                 float freq = 480.0f - 290.0f * u;
                 lp = lp * 0.82f + nextNoise() * 0.18f;
                 float tone = sinf(2.0f * 3.14159f * freq * ((float)i / sr));
-                sfxSamples[SFX_BLADE][i] = (int16_t)((tone * 0.45f + lp * 0.55f) * 3800.0f * env);
+                sfxSamples[SFX_BLADE][0][i] = (int16_t)((tone * 0.45f + lp * 0.55f) * 3800.0f * env);
             }
         }
         // 2: SFX_FIREBALL (deep warm bass explosion)
         {
             int n = sr * 180 / 1000;
-            sfxSamples[SFX_FIREBALL].resize(n);
+            sfxSamples[SFX_FIREBALL][0].resize(n);
             float lp = 0.0f;
             for (int i = 0; i < n; ++i) {
                 float u = (float)i / n;
                 float env = powf(1.0f - u, 1.5f);
                 lp = lp * 0.90f + nextNoise() * 0.10f;
                 float tone = sinf(2.0f * 3.14159f * (135.0f - 85.0f * u) * ((float)i / sr));
-                sfxSamples[SFX_FIREBALL][i] = (int16_t)((tone * 0.65f + lp * 0.35f) * 6800.0f * env);
+                sfxSamples[SFX_FIREBALL][0][i] = (int16_t)((tone * 0.65f + lp * 0.35f) * 6800.0f * env);
             }
         }
         // 3: SFX_LIGHTNING (crisp thunder snap)
         {
             int n = sr * 140 / 1000;
-            sfxSamples[SFX_LIGHTNING].resize(n);
+            sfxSamples[SFX_LIGHTNING][0].resize(n);
             float lp = 0.0f;
             for (int i = 0; i < n; ++i) {
                 float u = (float)i / n;
                 float env = powf(1.0f - u, 1.6f);
                 lp = lp * 0.70f + nextNoise() * 0.30f;
                 float tone = sinf(2.0f * 3.14159f * (620.0f - 380.0f * u) * ((float)i / sr));
-                sfxSamples[SFX_LIGHTNING][i] = (int16_t)((tone * 0.5f + lp * 0.5f) * 5200.0f * env);
+                sfxSamples[SFX_LIGHTNING][0][i] = (int16_t)((tone * 0.5f + lp * 0.5f) * 5200.0f * env);
             }
         }
         // 4: SFX_GEM (Gentle, warm, low-volume marimba/harp pluck — NEVER harsh!)
         {
             int n = sr * 85 / 1000;
-            sfxSamples[SFX_GEM].resize(n);
+            sfxSamples[SFX_GEM][0].resize(n);
             for (int i = 0; i < n; ++i) {
                 float t = (float)i / sr;
                 float u = (float)i / n;
@@ -215,13 +372,13 @@ struct SoundEngine {
                 // Warm fundamental at 293.66 Hz (D4) + soft 2nd harmonic
                 float w = sinf(2.0f * 3.14159f * 293.66f * t) * 0.80f
                         + sinf(2.0f * 3.14159f * 587.33f * t) * 0.20f * (1.0f - u);
-                sfxSamples[SFX_GEM][i] = (int16_t)(w * 2600.0f * attack * decay);
+                sfxSamples[SFX_GEM][0][i] = (int16_t)(w * 2600.0f * attack * decay);
             }
         }
         // 5: SFX_LEVELUP (Warm gothic chord arpeggio)
         {
             int n = sr * 420 / 1000;
-            sfxSamples[SFX_LEVELUP].resize(n);
+            sfxSamples[SFX_LEVELUP][0].resize(n);
             float notes[4] = {293.66f, 349.23f, 440.0f, 587.33f}; // Dm chord
             for (int i = 0; i < n; ++i) {
                 float t = (float)i / sr;
@@ -229,49 +386,49 @@ struct SoundEngine {
                 float env = powf(1.0f - (float)i / n, 0.8f);
                 float w = sinf(2.0f * 3.14159f * notes[step] * t) * 0.7f
                         + sinf(2.0f * 3.14159f * notes[step] * 2.0f * t) * 0.3f;
-                sfxSamples[SFX_LEVELUP][i] = (int16_t)(w * 6200.0f * env);
+                sfxSamples[SFX_LEVELUP][0][i] = (int16_t)(w * 6200.0f * env);
             }
         }
         // 6: SFX_CHEST (Rich treasure fanfare)
         {
             int n = sr * 520 / 1000;
-            sfxSamples[SFX_CHEST].resize(n);
+            sfxSamples[SFX_CHEST][0].resize(n);
             float notes[5] = {293.66f, 369.99f, 440.0f, 587.33f, 739.99f};
             for (int i = 0; i < n; ++i) {
                 float t = (float)i / sr;
                 int step = std::min(4, (i * 5) / n);
                 float env = powf(1.0f - (float)i / n, 0.7f);
-                sfxSamples[SFX_CHEST][i] = (int16_t)(sinf(2.0f * 3.14159f * notes[step] * t) * 6800.0f * env);
+                sfxSamples[SFX_CHEST][0][i] = (int16_t)(sinf(2.0f * 3.14159f * notes[step] * t) * 6800.0f * env);
             }
         }
         // 7: SFX_HIT (Deep thud)
         {
             int n = sr * 100 / 1000;
-            sfxSamples[SFX_HIT].resize(n);
+            sfxSamples[SFX_HIT][0].resize(n);
             for (int i = 0; i < n; ++i) {
                 float t = (float)i / sr;
                 float u = (float)i / n;
                 float env = powf(1.0f - u, 1.4f);
-                sfxSamples[SFX_HIT][i] = (int16_t)(sinf(2.0f * 3.14159f * (125.0f - 65.0f * u) * t) * 7500.0f * env);
+                sfxSamples[SFX_HIT][0][i] = (int16_t)(sinf(2.0f * 3.14159f * (125.0f - 65.0f * u) * t) * 7500.0f * env);
             }
         }
         // 8: SFX_BOSS (Deep ominous warhorn)
         {
             int n = sr * 580 / 1000;
-            sfxSamples[SFX_BOSS].resize(n);
+            sfxSamples[SFX_BOSS][0].resize(n);
             for (int i = 0; i < n; ++i) {
                 float t = (float)i / sr;
                 float u = (float)i / n;
                 float env = sinf(u * 3.14159f);
                 float w = sinf(2.0f * 3.14159f * 82.41f * t) * 0.6f
                         + sinf(2.0f * 3.14159f * 123.47f * t) * 0.4f;
-                sfxSamples[SFX_BOSS][i] = (int16_t)(w * 7800.0f * env);
+                sfxSamples[SFX_BOSS][0][i] = (int16_t)(w * 7800.0f * env);
             }
         }
         // 9: SFX_DASH (Kinetic wind-burst)
         {
             int n = sr * 110 / 1000;
-            sfxSamples[SFX_DASH].resize(n);
+            sfxSamples[SFX_DASH][0].resize(n);
             float lp = 0.0f;
             for (int i = 0; i < n; ++i) {
                 float t = (float)i / sr;
@@ -279,26 +436,26 @@ struct SoundEngine {
                 float env = sinf(u * 3.14159f);
                 lp = lp * 0.85f + nextNoise() * 0.15f;
                 float sweep = sinf(2.0f * 3.14159f * (220.0f + 260.0f * u) * t);
-                sfxSamples[SFX_DASH][i] = (int16_t)((sweep * 0.55f + lp * 0.45f) * 5800.0f * env);
+                sfxSamples[SFX_DASH][0][i] = (int16_t)((sweep * 0.55f + lp * 0.45f) * 5800.0f * env);
             }
         }
         // 10: SFX_ULTIMATE (Epic screen-shaking power surge)
         {
             int n = sr * 650 / 1000;
-            sfxSamples[SFX_ULTIMATE].resize(n);
+            sfxSamples[SFX_ULTIMATE][0].resize(n);
             for (int i = 0; i < n; ++i) {
                 float t = (float)i / sr;
                 float u = (float)i / n;
                 float env = sinf(u * 3.14159f);
                 float w = sinf(2.0f * 3.14159f * (110.0f + 220.0f * u) * t) * 0.5f
                         + sinf(2.0f * 3.14159f * (220.0f + 440.0f * u) * t) * 0.5f;
-                sfxSamples[SFX_ULTIMATE][i] = (int16_t)(w * 8000.0f * env);
+                sfxSamples[SFX_ULTIMATE][0][i] = (int16_t)(w * 8000.0f * env);
             }
         }
         // 11: SFX_EVOLVE (Symbiosis evolution fanfare)
         {
             int n = sr * 700 / 1000;
-            sfxSamples[SFX_EVOLVE].resize(n);
+            sfxSamples[SFX_EVOLVE][0].resize(n);
             float notes[6] = {293.66f, 349.23f, 440.0f, 587.33f, 698.46f, 880.0f};
             for (int i = 0; i < n; ++i) {
                 float t = (float)i / sr;
@@ -306,13 +463,13 @@ struct SoundEngine {
                 float env = powf(1.0f - (float)i / n, 0.6f);
                 float w = sinf(2.0f * 3.14159f * notes[step] * t) * 0.7f
                         + sinf(2.0f * 3.14159f * notes[step] * 1.5f * t) * 0.3f;
-                sfxSamples[SFX_EVOLVE][i] = (int16_t)(w * 7600.0f * env);
+                sfxSamples[SFX_EVOLVE][0][i] = (int16_t)(w * 7600.0f * env);
             }
         }
         // 10: SFX_BOSS_DEATH — low impact, brass fall, and shimmering tail.
         {
             int n = sr * 1100 / 1000;
-            sfxSamples[SFX_BOSS_DEATH].resize(n);
+            sfxSamples[SFX_BOSS_DEATH][0].resize(n);
             float lp = 0.0f;
             for (int i = 0; i < n; ++i) {
                 float t = (float)i / sr, u = (float)i / n;
@@ -321,13 +478,13 @@ struct SoundEngine {
                 float bass = sinf(2.0f * 3.14159f * (72.0f - 34.0f * u) * t);
                 float brass = sinf(2.0f * 3.14159f * (146.83f - 55.0f * u) * t);
                 float shimmer = sinf(2.0f * 3.14159f * 587.33f * t) * (1.0f - u) * 0.16f;
-                sfxSamples[SFX_BOSS_DEATH][i] = (int16_t)((bass * 0.52f + brass * 0.25f + lp * 0.18f + shimmer) * 9400.0f * env);
+                sfxSamples[SFX_BOSS_DEATH][0][i] = (int16_t)((bass * 0.52f + brass * 0.25f + lp * 0.18f + shimmer) * 9400.0f * env);
             }
         }
         // 11: SFX_PLAYER_DEATH — restrained descending minor chord.
         {
             int n = sr * 1350 / 1000;
-            sfxSamples[SFX_PLAYER_DEATH].resize(n);
+            sfxSamples[SFX_PLAYER_DEATH][0].resize(n);
             const float notes[3] = {293.66f, 277.18f, 220.0f};
             for (int i = 0; i < n; ++i) {
                 float u = (float)i / n, t = (float)i / sr;
@@ -335,13 +492,13 @@ struct SoundEngine {
                 int step = std::min(2, (i * 3) / n);
                 float tone = sinf(2.0f * 3.14159f * notes[step] * t) * 0.72f
                            + sinf(2.0f * 3.14159f * notes[step] * 0.5f * t) * 0.28f;
-                sfxSamples[SFX_PLAYER_DEATH][i] = (int16_t)(tone * 7200.0f * env);
+                sfxSamples[SFX_PLAYER_DEATH][0][i] = (int16_t)(tone * 7200.0f * env);
             }
         }
         // SFX_MAGNET: four gentle ascending "woo" pulses, with a light gliding top.
         {
             int n = sr * 760 / 1000;
-            sfxSamples[SFX_MAGNET].resize(n);
+            sfxSamples[SFX_MAGNET][0].resize(n);
             const float notes[4] = {330.0f, 392.0f, 494.0f, 587.0f};
             for (int i = 0; i < n; ++i) {
                 float u = (float)i / n;
@@ -352,13 +509,13 @@ struct SoundEngine {
                 float env = powf(std::max(0.0f, sinf(local * 3.14159f)), 0.8f) * (0.82f + 0.18f * u);
                 float tone = sinf(2.0f * 3.14159f * freq * t);
                 float overtone = sinf(2.0f * 3.14159f * freq * 2.01f * t) * 0.16f;
-                sfxSamples[SFX_MAGNET][i] = (int16_t)((tone * 0.72f + overtone) * 5200.0f * env);
+                sfxSamples[SFX_MAGNET][0][i] = (int16_t)((tone * 0.72f + overtone) * 5200.0f * env);
             }
         }
         // Phoenix revival: breathy, filtered ash-noise, a warm low impact, and a rising bell-like chord.
         {
             int n = sr * 1850 / 1000;
-            sfxSamples[SFX_REVIVE].resize(n);
+            sfxSamples[SFX_REVIVE][0].resize(n);
             float lowNoise = 0.0f;
             static const float notes[4] = {196.0f, 293.66f, 392.0f, 587.33f};
             for (int i = 0; i < n; ++i) {
@@ -374,13 +531,13 @@ struct SoundEngine {
                 const float impact = expf(-u * 42.0f) * (rawNoise * 0.7f + rising * 0.3f);
                 const float ash = lowNoise * (0.55f - 0.30f * u) + (rawNoise - lowNoise) * 0.09f;
                 const float sample = bell * bellEnv * 0.30f + rising * (1.0f - u) * 0.16f + ash + impact * 0.75f;
-                sfxSamples[SFX_REVIVE][i] = (int16_t)(sample * 8600.0f);
+                sfxSamples[SFX_REVIVE][0][i] = (int16_t)(sample * 8600.0f);
             }
         }
         // Frost Nova: a soft descending air-sweep with a glassy rising shimmer and filtered frost noise.
         {
             const int n = sr * 620 / 1000;
-            sfxSamples[SFX_FREEZE].resize(n);
+            sfxSamples[SFX_FREEZE][0].resize(n);
             float lowNoise = 0.0f;
             double sweepPhase = 0.0;
             for (int i = 0; i < n; ++i) {
@@ -397,13 +554,13 @@ struct SoundEngine {
                 const float air = (rawNoise - lowNoise) * expf(-u * 9.0f);
                 const float crystal = shimmer * 0.20f + shimmer2 * 0.085f;
                 const float sample = attack * tail * (sweep * 0.38f + crystal + lowNoise * 0.12f + air * 0.12f);
-                sfxSamples[SFX_FREEZE][i] = (int16_t)(sample * 12500.0f);
+                sfxSamples[SFX_FREEZE][0][i] = (int16_t)(sample * 12500.0f);
             }
         }
         // Tier-up: low anvil impact under a bright seven-note ascending forge fanfare.
         {
             const int n = sr * 1450 / 1000;
-            sfxSamples[SFX_TIER_UP].resize(n);
+            sfxSamples[SFX_TIER_UP][0].resize(n);
             static const float notes[7] = {196.0f, 293.66f, 392.0f, 523.25f, 659.25f, 783.99f, 1046.5f};
             float lowNoise = 0.0f;
             for (int i = 0; i < n; ++i) {
@@ -415,13 +572,13 @@ struct SoundEngine {
                 const float bell = sinf(6.2831853f * notes[step] * t) + 0.22f * sinf(6.2831853f * notes[step] * 2.01f * t);
                 const float strike = expf(-local * 24.0f) * (raw * 0.55f + sinf(6.2831853f * (74.0f - 24.0f * u) * t) * 0.45f);
                 const float sample = bell * env * (0.46f + 0.16f * local) + strike * 0.38f + lowNoise * (1.0f - u) * 0.08f;
-                sfxSamples[SFX_TIER_UP][i] = (int16_t)(sample * 11500.0f);
+                sfxSamples[SFX_TIER_UP][0][i] = (int16_t)(sample * 11500.0f);
             }
         }
         // Boss telegraph: rising sub rumble and breath-noise crest before a signature attack.
         {
             const int n = sr * 820 / 1000;
-            sfxSamples[SFX_BOSS_TELEGRAPH].resize(n);
+            sfxSamples[SFX_BOSS_TELEGRAPH][0].resize(n);
             float lowNoise = 0.0f; double phase = 0.0;
             for (int i = 0; i < n; ++i) {
                 const float u = (float)i / n, t = (float)i / sr, raw = nextNoise();
@@ -430,13 +587,13 @@ struct SoundEngine {
                 const float build = powf(u, 1.55f), pulse = 0.64f + 0.36f * sinf(6.2831853f * (3.0f + 4.0f * u) * t);
                 const float snap = expf(-((u - 0.91f) * (u - 0.91f)) * 520.0f) * (raw * 0.48f + sinf(6.2831853f * 155.0f * t) * 0.52f);
                 const float rumble = sinf(6.2831853f * (float)phase) * 0.58f + lowNoise * 0.22f + (raw - lowNoise) * 0.15f;
-                sfxSamples[SFX_BOSS_TELEGRAPH][i] = (int16_t)((rumble * build * pulse + snap * 0.55f) * 11800.0f);
+                sfxSamples[SFX_BOSS_TELEGRAPH][0][i] = (int16_t)((rumble * build * pulse + snap * 0.55f) * 11800.0f);
             }
         }
         // Boss impact: short, heavy sub thump with a noisy crack and a descending metal tail.
         {
             const int n = sr * 460 / 1000;
-            sfxSamples[SFX_BOSS_IMPACT].resize(n);
+            sfxSamples[SFX_BOSS_IMPACT][0].resize(n);
             float lowNoise = 0.0f; double phase = 0.0;
             for (int i = 0; i < n; ++i) {
                 const float u = (float)i / n, t = (float)i / sr, raw = nextNoise();
@@ -446,13 +603,13 @@ struct SoundEngine {
                 const float crack = (raw - lowNoise) * expf(-u * 20.0f);
                 const float metal = sinf(6.2831853f * (265.0f - 150.0f * u) * t) * powf(1.0f - u, 2.2f);
                 const float thump = expf(-u * 58.0f) * sinf(6.2831853f * 54.0f * t);
-                sfxSamples[SFX_BOSS_IMPACT][i] = (int16_t)((sub * 0.54f + crack * 0.34f + metal * 0.18f + thump * 0.72f) * 14500.0f);
+                sfxSamples[SFX_BOSS_IMPACT][0][i] = (int16_t)((sub * 0.54f + crack * 0.34f + metal * 0.18f + thump * 0.72f) * 14500.0f);
             }
         }
         // Boss phase: a 2.3-second ritual transition — heavy gong, rising three-step minor harmony, breath and final metallic flare.
         {
             const int n = sr * 2300 / 1000;
-            sfxSamples[SFX_BOSS_PHASE].resize(n);
+            sfxSamples[SFX_BOSS_PHASE][0].resize(n);
             static const float chords[3][3] = {
                 {73.42f, 110.00f, 146.83f}, {87.31f, 130.81f, 174.61f}, {98.00f, 146.83f, 196.00f}
             };
@@ -479,13 +636,13 @@ struct SoundEngine {
                 const float finalFlare = expf(-((u - 0.91f) * (u - 0.91f)) * 180.0f) *
                     (sinf(6.2831853f * 523.25f * t) * 0.25f + (raw - lowNoise) * 0.32f);
                 const float sample = strike * 0.47f + sub * 0.25f + chord * ring * (0.32f + 0.42f * u) + breath + finalFlare;
-                sfxSamples[SFX_BOSS_PHASE][i] = (int16_t)(sample * 11200.0f);
+                sfxSamples[SFX_BOSS_PHASE][0][i] = (int16_t)(sample * 11200.0f);
             }
         }
         // Projectile flight: a short airy whistle with a curved pitch glide and a thin turbulent tail.
         {
             const int n = sr * 235 / 1000;
-            sfxSamples[SFX_PROJECTILE_FLIGHT].resize(n);
+            sfxSamples[SFX_PROJECTILE_FLIGHT][0].resize(n);
             float lowNoise = 0.0f; double phase = 0.0;
             for (int i = 0; i < n; ++i) {
                 const float u = (float)i / n, t = (float)i / sr, raw = nextNoise();
@@ -496,13 +653,13 @@ struct SoundEngine {
                 const float whistle = sinf(6.2831853f * (float)phase) * 0.48f;
                 const float air = (raw - lowNoise) * (0.38f + 0.12f * sinf(6.2831853f * 6.0f * u));
                 const float body = sinf(6.2831853f * (320.0f - 115.0f * u) * t) * 0.14f;
-                sfxSamples[SFX_PROJECTILE_FLIGHT][i] = (int16_t)((whistle + air + body) * env * 10500.0f);
+                sfxSamples[SFX_PROJECTILE_FLIGHT][0][i] = (int16_t)((whistle + air + body) * env * 10500.0f);
             }
         }
         // Projectile impact: a crisp crack over a compact low thud and a tiny glass/metal tick.
         {
             const int n = sr * 175 / 1000;
-            sfxSamples[SFX_PROJECTILE_IMPACT].resize(n);
+            sfxSamples[SFX_PROJECTILE_IMPACT][0].resize(n);
             float lowNoise = 0.0f; double subPhase = 0.0;
             for (int i = 0; i < n; ++i) {
                 const float u = (float)i / n, t = (float)i / sr, raw = nextNoise();
@@ -512,7 +669,120 @@ struct SoundEngine {
                 const float thud = sinf(6.2831853f * (float)subPhase) * expf(-u * 13.0f);
                 const float tick = sinf(6.2831853f * (1120.0f - 420.0f * u) * t) * expf(-u * 25.0f);
                 const float sample = crack * 0.48f + thud * 0.38f + tick * 0.24f;
-                sfxSamples[SFX_PROJECTILE_IMPACT][i] = (int16_t)(sample * 14400.0f);
+                sfxSamples[SFX_PROJECTILE_IMPACT][0][i] = (int16_t)(sample * 14400.0f);
+            }
+        }
+        // ── Предметы на полу и разрушаемые цели ──────────────────────────────
+        // Все они играются через playCue(): без rand(), чтобы звук не сдвигал
+        // общий поток случайности. Тембры разведены по смыслу: камень (появился),
+        // металл (плита), треск (телеграф), удар (выброс), колокольчик (заряд),
+        // аккорд (награда).
+        // SFX_FLOOR_APPEAR — камень осел: низкий скрип и мягкий звон сверху.
+        {
+            const int n = sr * 300 / 1000;
+            sfxSamples[SFX_FLOOR_APPEAR][0].resize(n);
+            float lowNoise = 0.0f;
+            for (int i = 0; i < n; ++i) {
+                const float u = (float)i / n, t = (float)i / sr;
+                const float raw = nextNoise();
+                lowNoise += (raw - lowNoise) * 0.05f;
+                const float grit = (raw - lowNoise) * powf(1.0f - u, 2.0f);
+                const float body = sinf(6.2831853f * (108.0f - 34.0f * u) * t);
+                const float ring = sinf(6.2831853f * 880.0f * t) * expf(-u * 9.0f) * 0.13f;
+                const float env = std::min(1.0f, u / 0.05f) * powf(1.0f - u, 1.6f);
+                sfxSamples[SFX_FLOOR_APPEAR][0][i] = (int16_t)((body * 0.62f + grit * 0.22f + ring) * 9000.0f * env);
+            }
+        }
+        // SFX_FLOOR_NEAR — «зов»: предмет рядом, о нём стоит подумать сейчас.
+        {
+            const int n = sr * 200 / 1000;
+            sfxSamples[SFX_FLOOR_NEAR][0].resize(n);
+            for (int i = 0; i < n; ++i) {
+                const float u = (float)i / n, t = (float)i / sr;
+                const float env = std::min(1.0f, u / 0.12f) * powf(1.0f - u, 2.0f);
+                const float tone = sinf(6.2831853f * 880.0f * t) * 0.6f
+                                 + sinf(6.2831853f * 1320.0f * t) * 0.22f;
+                sfxSamples[SFX_FLOOR_NEAR][0][i] = (int16_t)(tone * 6000.0f * env);
+            }
+        }
+        // SFX_FLOOR_PLATE — тяжёлый металлический клац: низ и короткий призвук.
+        {
+            const int n = sr * 240 / 1000;
+            sfxSamples[SFX_FLOOR_PLATE][0].resize(n);
+            for (int i = 0; i < n; ++i) {
+                const float u = (float)i / n, t = (float)i / sr;
+                const float clack = sinf(6.2831853f * (196.0f - 60.0f * u) * t) * powf(1.0f - u, 3.2f);
+                const float ring = sinf(6.2831853f * 523.0f * t) * expf(-u * 16.0f) * 0.35f;
+                const float grit = nextNoise() * expf(-u * 55.0f) * 0.30f;
+                sfxSamples[SFX_FLOOR_PLATE][0][i] = (int16_t)((clack * 0.9f + ring + grit) * 11000.0f);
+            }
+        }
+        // SFX_FLOOR_SPIKE_WARN — металл ползёт: дребезг с дробью, к концу громче.
+        {
+            const int n = sr * 340 / 1000;
+            sfxSamples[SFX_FLOOR_SPIKE_WARN][0].resize(n);
+            for (int i = 0; i < n; ++i) {
+                const float u = (float)i / n, t = (float)i / sr;
+                const float rattle = 0.55f + 0.45f * sinf(6.2831853f * (26.0f + 14.0f * u) * t);
+                const float tone = sinf(6.2831853f * (330.0f + 90.0f * u) * t);
+                const float hiss = nextNoise() * 0.35f;
+                const float env = std::min(1.0f, u / 0.10f) * (0.35f + 0.65f * u);
+                sfxSamples[SFX_FLOOR_SPIKE_WARN][0][i] = (int16_t)((tone * 0.55f * rattle + hiss * rattle) * 8200.0f * env);
+            }
+        }
+        // SFX_FLOOR_SPIKE_BURST — выброс: шумовой удар, сталь и низ.
+        {
+            const int n = sr * 320 / 1000;
+            sfxSamples[SFX_FLOOR_SPIKE_BURST][0].resize(n);
+            float lowNoise = 0.0f;
+            for (int i = 0; i < n; ++i) {
+                const float u = (float)i / n, t = (float)i / sr, raw = nextNoise();
+                lowNoise += (raw - lowNoise) * 0.10f;
+                const float hit = (raw - lowNoise) * expf(-u * 18.0f);
+                const float steel = sinf(6.2831853f * (760.0f - 380.0f * u) * t) * expf(-u * 11.0f);
+                const float thud = sinf(6.2831853f * (96.0f - 40.0f * u) * t) * expf(-u * 9.0f) * 0.7f;
+                sfxSamples[SFX_FLOOR_SPIKE_BURST][0][i] = (int16_t)((hit * 0.55f + steel * 0.35f + thud) * 12000.0f);
+            }
+        }
+        // SFX_FLOOR_SIGIL_TICK — тихий колокольчик заряда; высоту двигает playCue.
+        {
+            const int n = sr * 110 / 1000;
+            sfxSamples[SFX_FLOOR_SIGIL_TICK][0].resize(n);
+            for (int i = 0; i < n; ++i) {
+                const float u = (float)i / n, t = (float)i / sr;
+                const float env = (1.0f - u) * (1.0f - u);
+                const float bell = sinf(6.2831853f * 1320.0f * t)
+                                 + 0.3f * sinf(6.2831853f * 1980.0f * t);
+                sfxSamples[SFX_FLOOR_SIGIL_TICK][0][i] = (int16_t)(bell * 5200.0f * env);
+            }
+        }
+        // SFX_FLOOR_SIGIL_DONE — тёплый аккорд: знак собран.
+        {
+            const int n = sr * 520 / 1000;
+            sfxSamples[SFX_FLOOR_SIGIL_DONE][0].resize(n);
+            static const float notes[3] = {523.25f, 659.25f, 783.99f};
+            for (int i = 0; i < n; ++i) {
+                const float u = (float)i / n, t = (float)i / sr;
+                const float env = std::min(1.0f, u / 0.06f) * powf(1.0f - u, 1.5f);
+                float chord = 0.0f;
+                for (int k = 0; k < 3; ++k) chord += sinf(6.2831853f * notes[k] * t) * (0.34f - 0.06f * k);
+                const float air = sinf(6.2831853f * 1567.98f * t) * expf(-u * 7.0f) * 0.10f;
+                sfxSamples[SFX_FLOOR_SIGIL_DONE][0][i] = (int16_t)((chord + air) * 9000.0f * env);
+            }
+        }
+        // SFX_RESONATOR_BREAK — резонатор разбит: стеклянный треск и три обломка.
+        {
+            const int n = sr * 380 / 1000;
+            sfxSamples[SFX_RESONATOR_BREAK][0].resize(n);
+            static const float parts[3] = {1480.0f, 1120.0f, 840.0f};
+            float lowNoise = 0.0f;
+            for (int i = 0; i < n; ++i) {
+                const float u = (float)i / n, t = (float)i / sr, raw = nextNoise();
+                lowNoise += (raw - lowNoise) * 0.12f;
+                const float crack = (raw - lowNoise) * expf(-u * 22.0f);
+                const int step = std::min(2, (int)(u * 3.0f));
+                const float ring = sinf(6.2831853f * parts[step] * t) * expf(-u * 8.0f) * 0.30f;
+                sfxSamples[SFX_RESONATOR_BREAK][0][i] = (int16_t)((crack * 0.6f + ring) * 11000.0f);
             }
         }
     }
@@ -535,6 +805,9 @@ struct SoundEngine {
     bool voiceEnabled() const { return voice.enabled; }
     void setVoiceEnabled(bool on) { voice.setEnabled(on); }
     bool voiceSpeaking() const { return voice.speaking(); }
+    // F3: the announcer bus and how far the effects sit under a phrase right now.
+    static float announcerBusGain() { return VOICE_BUS_GAIN; }
+    float announcerDuckDb() const { return 20.0f * log10f(std::max(0.001f, sfxDuckGain)); }
     int externalMusicTrackCount() const { return externalMusic.trackCount(); }
     // Short read-out of which scenes actually have a file, for the settings screen.
     std::string externalMusicSummary() const {
@@ -553,6 +826,15 @@ struct SoundEngine {
     static constexpr double MUSIC_BPM = 96.0; // base tempo of the Ash theme
     static constexpr float MUSIC_BUS_GAIN = 0.80f;
     static constexpr float SFX_BUS_GAIN = 1.75f;
+    // Announcer bus. A recorded phrase is not "one more effect": it used to enter the same
+    // sum at 1.20 while every one-shot entered at 1.75, and then the whole sum went through
+    // the soft-knee limiter, so during a breakthrough (horde bed + dozens of effects) the
+    // phrase was heard quieter than the fight around it — the file was in the corridor and
+    // the mix still buried it. Now the phrase has its own bus gain, the effects and the
+    // score step back while it speaks, and the limiter only ever sees the program bus.
+    static constexpr float VOICE_BUS_GAIN = 1.45f;
+    static constexpr float VOICE_DUCK_SFX = 0.58f;   // -4.7 dB under a phrase
+    static constexpr float VOICE_DUCK_MUSIC = 0.34f; // the score steps back furthest
     static double musicVariantBpm(int variant) { return MusicComposer::tempo(variant); }
     static double musicVariantBarBeats(int variant) { return MusicComposer::beatsPerBar(variant); }
     static int nextMusicTempoTier(int currentTier,int liveMonsters) {
@@ -661,6 +943,11 @@ struct SoundEngine {
         const int sceneMode = std::max(0, std::min(7, musicMode.load(std::memory_order_relaxed)));
         externalMusic.variantSeed = musicVariantSeed.load(std::memory_order_relaxed);
         externalMusic.shuffle = musicShuffle.load(std::memory_order_relaxed);
+        // В кампании номер дела выбирает и трек, и момент перезапуска музыки:
+        // у каждого дела может быть своя запись (audio/ss_case_NN.mp3).
+        externalMusic.setCase(externalMusic.shuffle ? -1 : externalMusic.variantSeed);
+        // Страж тоже выбирает себе запись: audio/ss_boss_guardian00…05.mp3.
+        externalMusic.setGuardian(sceneMode == 2 ? musicBossType.load(std::memory_order_relaxed) : -1);
         externalMusic.requestScene(externalSceneForMode(sceneMode, musicSceneHint.load(std::memory_order_relaxed)));
         float music = externalMusic.render();
         const bool trackOwnsBus = externalMusic.ownsMusicSlot();
@@ -719,10 +1006,28 @@ struct SoundEngine {
         return mixTransitionScores(oldScore, newScore, blend, musicSequentialHandoff);
     }
 
-    void mixBuffer(int16_t* outBuf, int numSamples) {
+    // Замок звука: критическая секция на Windows, мьютекс на Android.
+    void lockAudio() {
 #ifdef _WIN32
         EnterCriticalSection(&cs);
+#else
+        cs.lock();
 #endif
+    }
+    void unlockAudio() {
+#ifdef _WIN32
+        LeaveCriticalSection(&cs);
+#else
+        cs.unlock();
+#endif
+    }
+
+    // Вход для платформы, у которой свой звуковой выход (AAudio на Android).
+    // Внутри тот же mixBuffer с тем же замком, поэтому микшер не раздваивается.
+    void mixSamples(int16_t* outBuf, int numSamples) { mixBuffer(outBuf, numSamples); }
+
+    void mixBuffer(int16_t* outBuf, int numSamples) {
+        lockAudio();
         const double invSr = 1.0 / 44100.0;
         const bool sfxOn = enabled.load(std::memory_order_relaxed);
         const float hordeSfxGain = musicMode.load(std::memory_order_relaxed) == 1 ? 0.82f : 1.0f;
@@ -734,25 +1039,29 @@ struct SoundEngine {
             if (sfxOn && voices[v].priority >= 4) importantVoice = true;
         }
         if (!sfxOn) { externalCues[0].stop(); externalCues[1].stop(); voice.stop(); }
-        const bool announcing = sfxOn && voice.speaking();
-        const float duckTarget = (importantVoice || announcing) ? 0.60f : (liveVoices > 0 ? 0.84f : 1.0f);
         const float voiceHeadroom = liveVoices > 10 ? 0.78f : (liveVoices > 6 ? 0.88f : 1.0f);
         for (int i = 0; i < numSamples; ++i) {
             const float sfxTarget = sfxOn ? 1.0f : 0.0f;
             sfxMuteGain += (sfxTarget - sfxMuteGain) * 0.00065f;
             sfxVolumeSmooth += (sfxVolume.load(std::memory_order_relaxed) - sfxVolumeSmooth) * 0.00045f;
-            const float duckRate = duckTarget < musicDuckGain ? 0.00050f : 0.00010f;
+            // The announcer is pulled first: its state decides how far the program steps back
+            // on this very sample, so the first syllable never lands in a full fight.
+            const float phrase = voice.next();
+            const bool narrating = sfxOn && voice.speaking();
+            const float duckTarget = narrating ? VOICE_DUCK_MUSIC
+                : (importantVoice ? 0.60f : (liveVoices > 0 ? 0.84f : 1.0f));
+            const float duckRate = duckTarget < musicDuckGain ? (narrating ? 0.00160f : 0.00050f) : 0.00010f;
             musicDuckGain += (duckTarget - musicDuckGain) * duckRate;
+            // Effects step back under a phrase too, and return in about a tenth of a second.
+            const float sfxDuckTarget = narrating ? VOICE_DUCK_SFX : 1.0f;
+            sfxDuckGain += (sfxDuckTarget - sfxDuckGain) * (sfxDuckTarget < sfxDuckGain ? 0.00160f : 0.00022f);
             // Keep music as the bed, not the foreground: raise one-shot effects and let active voices duck the score gently.
-            float mix = sampleMusic(musicTime) * musicDuckGain * MUSIC_BUS_GAIN;
+            float program = sampleMusic(musicTime) * musicDuckGain * MUSIC_BUS_GAIN;
             musicTime += invSr;
             // Level-up / upgrade stings use the SFX bus, so [M] and the effects slider apply.
             float cueSample = 0.0f;
             for (int c = 0; c < 2; ++c) cueSample += externalCues[c].next();
-            if (cueSample != 0.0f) mix += cueSample * sfxVolumeSmooth * sfxMuteGain * 1.15f;
-            // The announcer is a one-shot on the same bus: honours [M] and the effects slider.
-            const float phrase = voice.next();
-            if (phrase != 0.0f) mix += phrase * sfxVolumeSmooth * sfxMuteGain * 1.20f;
+            if (cueSample != 0.0f) program += cueSample * sfxVolumeSmooth * sfxMuteGain * sfxDuckGain * 1.15f;
 
             for (int v = 0; v < MAX_VOICES; ++v) {
                 ActiveVoice& vc = voices[v];
@@ -769,22 +1078,27 @@ struct SoundEngine {
                 const float attack = std::min(1.0f, vc.pos / 132.0f); // 3 ms at 44.1 kHz
                 const float tail = std::min(1.0f, (vc.length - 1.0f - vc.pos) / 220.0f); // 5 ms release
                 const float voiceBusGain = (vc.id == SFX_GEM || vc.id == SFX_MAGNET) ? 1.10f : SFX_BUS_GAIN;
-                mix += sample * attack * tail * vc.volume * sfxVolumeSmooth * sfxMuteGain * hordeSfxGain * voiceHeadroom * voiceBusGain;
+                program += sample * attack * tail * vc.volume * sfxVolumeSmooth * sfxMuteGain * hordeSfxGain * sfxDuckGain * voiceHeadroom * voiceBusGain;
                 vc.pos += vc.speed;
             }
 
-            // Smooth soft-knee limiter: stacked combat sounds compress gently instead of hard-clipping.
-            if (!isfinite(mix)) mix = 0.0f;
-            float magnitude = fabsf(mix);
+            // Smooth soft-knee limiter over the program bus only: a dense fight compresses
+            // the effects and the score, it never squashes the announcer.
+            if (!isfinite(program)) program = 0.0f;
+            float magnitude = fabsf(program);
             if (magnitude > 0.62f) {
                 float limited = 0.62f + 0.30f * (1.0f - expf(-(magnitude - 0.62f) / 0.30f));
-                mix = copysignf(std::min(limited, 0.92f), mix);
+                program = copysignf(std::min(limited, 0.92f), program);
             }
+            // The phrase rides above the limiter: honours [M] and the effects slider, but not
+            // the effects duck and not the program knee. The sum gets its own guard knee.
+            float mix = program + phrase * sfxVolumeSmooth * sfxMuteGain * VOICE_BUS_GAIN;
+            if (!isfinite(mix)) mix = 0.0f;
+            const float level = fabsf(mix);
+            if (level > 0.94f) mix = copysignf(0.94f + 0.05f * (1.0f - expf(-(level - 0.94f) / 0.05f)), mix);
             outBuf[i] = (int16_t)(mix * 30000.0f);
         }
-#ifdef _WIN32
-        LeaveCriticalSection(&cs);
-#endif
+        unlockAudio();
     }
 
 #ifdef _WIN32
@@ -813,6 +1127,8 @@ struct SoundEngine {
         loadExternalCues();
         (void)MusicComposer::allTracks(); // prewarm the immutable score table before the audio callback
         generateSfxBank();
+        buildSfxVariants();
+        normalizeSfxBank();
 #ifdef _WIN32
         InitializeCriticalSection(&cs);
         WAVEFORMATEX wfx = {};
@@ -882,6 +1198,22 @@ struct SoundEngine {
         }
     }
 
+    // Громкости заданы как пик одного голоса в долях полной шкалы: банк выровнен
+    // normalizeSfxBank(), поэтому число здесь — это то, что услышит игрок, а не
+    // побочный итог формулы синтеза. Таблица вынесена из play(): её же читают
+    // детерминированные сигналы playCue().
+    static float baseVolume(SfxId id) {
+        static const float v[SFX_COUNT] = {
+            0.116f, 0.200f, 0.220f, 0.233f, 0.117f, 0.326f, 0.315f, 0.209f,
+            0.336f, 0.221f, 0.347f, 0.347f, 0.378f, 0.357f, 0.150f, 0.437f, 0.233f,
+            0.347f, 0.353f, 0.470f, 0.560f, 0.179f, 0.258f,
+            // Пол: это подсказки, а не события боя — их слышно десятки раз за
+            // забег, и они не должны перекрывать удар или сигнал уровня.
+            0.130f, 0.095f, 0.270f, 0.200f, 0.240f, 0.085f, 0.300f, 0.240f
+        };
+        return (id >= 0 && id < SFX_COUNT) ? v[id] : 0.2f;
+    }
+
     void play(SfxId id, float minInterval = 0.09f) {
         if (!enabled.load(std::memory_order_relaxed) || id < 0 || id >= SFX_COUNT) return;
         // Throttle gem pickups strongly (220ms min interval) so mass pickups sound gentle & musical!
@@ -891,19 +1223,23 @@ struct SoundEngine {
         cooldowns[id] = minInterval;
 
         float pitch = 1.0f;
-        static const float baseVolumes[SFX_COUNT] = {
-            0.24f, 0.25f, 0.28f, 0.23f, 0.15f, 0.42f, 0.38f, 0.18f,
-            0.40f, 0.25f, 0.38f, 0.40f, 0.42f, 0.32f, 0.18f, 0.42f, 0.48f,
-            0.48f, 0.54f, 0.66f, 0.56f, 0.38f, 0.46f
-        };
-        float vol = baseVolumes[id];
+        // Громкости заданы как пик одного голоса в долях полной шкалы: банк
+        // выровнен normalizeSfxBank(), поэтому число здесь — это то, что
+        // услышит игрок, а не побочный итог формулы синтеза.
+        // Числа подобраны по замеру: это пик одного голоса в миксе. Боевые
+        // эффекты стоят в 1,7–2 раза выше подложки музыки, сигналы (уровень,
+        // босс, смерть) — в 2,4–3,4 раза, сбор трофеев — на уровне подложки и
+        // ниже, чтобы двадцать самоцветов подряд не перекрывали бой.
+        float vol = baseVolume(id);
         if (id == SFX_GEM) {
             // Soft pentatonic chord notes: 1.0, 1.12, 1.26, 1.33, 1.50
             static const float pentatonic[5] = {1.0f, 1.122f, 1.260f, 1.335f, 1.498f};
             pitch = pentatonic[gemComboStep % 5];
             gemComboStep = (gemComboStep + 1) % 5;
             gemComboResetTimer = 0.8f;
-            vol = 0.12f; // Gentle volume for pickups; player-controlled SFX level remains available.
+            // Громкость самоцвета больше не задаётся здесь числом: она в
+            // baseVolumes, рядом с остальными, иначе правка общей таблицы
+            // молча не действовала на самый частый звук в игре.
         } else if (id == SFX_BLADE) {
             pitch = 0.92f + (rand() % 16) * 0.01f;
         }
@@ -918,13 +1254,30 @@ struct SoundEngine {
             vol *= 0.90f + 0.20f * gainJitter;
         }
 
-#ifdef _WIN32
-        EnterCriticalSection(&cs);
-#endif
-        if (sfxSamples[id].empty()) {
-#ifdef _WIN32
-            LeaveCriticalSection(&cs);
-#endif
+        startVoice(id, pitch, vol);
+    }
+
+    // Детерминированный сигнал. play() добавляет джиттер высоты и громкости через
+    // rand(); в спавне и в бою это сдвигало бы общий поток случайности и меняло
+    // сцену боя целиком (на этом уже ловили праздничный набег). Здесь джиттера
+    // нет вовсе: высоту и громкость задаёт вызывающий, а они зависят только от
+    // расстояния до героя и от прогресса взаимодействия.
+    void playCue(SfxId id, float minInterval, float gain, float pitch = 1.0f) {
+        if (!enabled.load(std::memory_order_relaxed) || id < 0 || id >= SFX_COUNT) return;
+        if (cooldowns[id] > 0.0f) return;
+        cooldowns[id] = std::min(2.0f, std::max(0.0f, minInterval));
+        startVoice(id, std::max(0.25f, std::min(2.5f, pitch)),
+                   baseVolume(id) * std::max(0.0f, gain));
+    }
+
+    // Выделение голоса: общий хвост play() и playCue().
+    void startVoice(SfxId id, float pitch, float vol) {
+        lockAudio();
+        const int variants = std::max(1, sfxVariantCount[id]);
+        const int variant = variants > 1 ? sfxVariantCursor[id] : 0;
+        if (variants > 1) sfxVariantCursor[id] = (sfxVariantCursor[id] + 1) % variants;
+        if (sfxSamples[id][variant].empty()) {
+            unlockAudio();
             return;
         }
         const uint8_t priority = sfxPriority(id);
@@ -957,22 +1310,18 @@ struct SoundEngine {
                 }
             }
             if (slot < 0) {
-#ifdef _WIN32
-                LeaveCriticalSection(&cs);
-#endif
+                unlockAudio();
                 return;
             }
         }
         voices[slot].active = true;
-        voices[slot].data = sfxSamples[id].data();
-        voices[slot].length = (int)sfxSamples[id].size();
+        voices[slot].data = sfxSamples[id][variant].data();
+        voices[slot].length = (int)sfxSamples[id][variant].size();
         voices[slot].pos = 0.0f;
         voices[slot].speed = pitch;
         voices[slot].volume = vol;
         voices[slot].id = id;
         voices[slot].priority = priority;
-#ifdef _WIN32
-        LeaveCriticalSection(&cs);
-#endif
+        unlockAudio();
     }
 };

@@ -26,7 +26,30 @@ import wave
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REGISTRY = os.path.join(ROOT, "src", "messages.h")
 VOICE_DIR = os.path.join(ROOT, "audio", "voice")
-CAMPAIGN_MISSIONS = 28  # столько же, сколько дел в src/game.h
+CAMPAIGN_MISSIONS = 30  # столько же, сколько дел в src/game.h (проверяется campaign.py)
+
+
+def brief_key(mission):
+    """Ключ записи дела. Номера клипов не совпадают с позицией в дереве:
+    у каждого следа свой порядок, поэтому номер записи лежит в поле brief."""
+    index = mission.get("brief", -1)
+    if index is None or index < 0:
+        return None
+    return f"mission_brief_{index:02d}"
+
+
+def campaign_brief_keys():
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    try:
+        import campaign
+    except Exception:
+        return [f"mission_brief_{i:02d}" for i in range(CAMPAIGN_MISSIONS)]
+    keys = []
+    for mission in campaign.MISSIONS:
+        key = brief_key(mission)
+        if key and key not in keys:
+            keys.append(key)
+    return keys
 
 ROW = re.compile(r'\{(GMSG_[A-Z0-9_]+),\s*"([a-z0-9_]+)",\s*(true|false),\s*"([^"]*)",\s*"([^"]*)"\}')
 
@@ -171,8 +194,10 @@ def stress_warnings():
     except Exception:
         return []
     out = []
-    for i, mission in enumerate(campaign.MISSIONS):
-        key = f"mission_brief_{i:02d}"
+    for mission in campaign.MISSIONS:
+        key = brief_key(mission)
+        if not key:
+            continue
         if not any(os.path.exists(os.path.join(VOICE_DIR, key + ext)) for ext in (".wav", ".mp3")):
             continue
         text = mission["briefing"].lower()
@@ -210,13 +235,13 @@ def main(argv):
     # Отдельный банк: у каждого Дела кампании своя запись описания.
     briefs = 0
     brief_missing = []
-    for i in range(CAMPAIGN_MISSIONS):
-        key = f"mission_brief_{i:02d}"
+    keys = campaign_brief_keys()
+    for key in keys:
         if any(os.path.exists(os.path.join(VOICE_DIR, key + ext)) for ext in (".wav", ".mp3")):
             briefs += 1
         else:
             brief_missing.append(key)
-    print(f"описания дел: {briefs} из {CAMPAIGN_MISSIONS}")
+    print(f"описания дел: {briefs} из {len(keys)}")
     if brief_missing and ("--verbose" in argv or len(brief_missing) <= 5):
         print("  без записи: " + ", ".join(brief_missing))
     levels_bad = []

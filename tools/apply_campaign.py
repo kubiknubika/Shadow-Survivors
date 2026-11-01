@@ -39,9 +39,10 @@ def table_end(text, start):
 def generated_rows():
     out = subprocess.check_output([sys.executable, os.path.join(ROOT, "tools", "campaign.py"), "cpp"],
                                   cwd=ROOT).decode("utf-8").rstrip("\n")
-    count = out.count('\n') + 1
-    if count != 28:
-        raise SystemExit(f"campaign.py выдал {count} строк вместо 28")
+    count = out.count("\n") + 1
+    # Маска закрытых дел в сейве — одна 32-битная, поэтому дел не может быть больше 32.
+    if count > 32:
+        raise SystemExit(f"{count} дел не влезают в 32-битную маску сейва")
     return out
 
 
@@ -51,6 +52,11 @@ def main(argv):
     start = text.index(TABLE)
     end = table_end(text, start)
     rows = generated_rows()
+    count = rows.count("\n") + 1
+    # Число дел в game.h больше не правится руками: его задаёт campaign.py.
+    import re
+    text = re.sub(r"(static constexpr int CAMPAIGN_MISSION_COUNT = )\d+(;)",
+                  lambda m: f"{m.group(1)}{count}{m.group(2)}", text, count=1)
     # В файле после «}» таблицы стоят лишние точки с запятой (};;;;...). Без их
     # пропуска каждая запись добавляла ещё одну «;», и --check не проходил никогда.
     tail = text[end:]

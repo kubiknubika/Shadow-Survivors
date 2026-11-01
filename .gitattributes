@@ -1,6 +1,15 @@
 # cmd.exe needs CRLF in batch files; a LF-only checkout breaks multi-line blocks.
 *.bat text eol=crlf
 
+# update.bat скачивают с GitHub по кнопке Raw и кладут в игру руками. Текстовая
+# нормализация хранила в репозитории LF, и такой файл падал в cmd на первом же
+# блоке: человек видел окно, которое закрывается мгновенно. Поэтому этот файл
+# хранится как есть — с CRLF внутри, чтобы Raw, ZIP и checkout давали одно и то же.
+update.bat -text -eol
+
+# Остальные батники правятся через git и остаются текстовыми (diff читается),
+# но при скачивании Raw их так же нужно приводить к CRLF.
+
 # Sources and docs stay LF everywhere.
 *.c    text eol=lf
 *.cpp  text eol=lf

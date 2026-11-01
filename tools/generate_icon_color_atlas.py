@@ -26,12 +26,24 @@ SIZE = 64
 ASSIGN = [
     ("blue", "bright"), ("orange", "pure"), ("violet", "bright"), ("lime", "pure"), ("red", "pure"),
     ("orange", "deep"), ("cyan", "pure"), ("amber", "dark"), ("green", "pure"), ("magenta", "pure"),
-    ("magenta", "dark"), ("orange", "bright"), ("amber", "bright"), ("lime", "deep"), ("amber", "deep"),
+    ("red", "pure"),        # 10 сердце титана — багровое
+    ("orange", "bright"), ("amber", "bright"), ("lime", "deep"), ("amber", "deep"),
     ("violet", "dark"), ("cyan", "dark"), ("violet", "deep"), ("cyan", "bright"), ("red", "bright"),
     ("green", "dark"), ("teal", "pure"), ("teal", "deep"), ("magenta", "bright"), ("blue", "pure"),
     ("green", "bright"), ("blue", "dark"), ("lime", "dark"), ("cyan", "deep"), ("lime", "bright"),
-    ("green", "deep"), ("red", "deep"), ("amber", "pure"), ("teal", "bright"), ("red", "dark"),
-    ("teal", "dark"), ("blue", "deep"), ("magenta", "deep"), ("orange", "dark"), ("violet", "pure"),
+    # 30–39: нарисованы ИИ, цвет выбран вручную и разнесён по кругу,
+    # чтобы соседние предметы не читались одним оттенком.
+    ("green", "deep"),     # 30 чаша переполнения — нефрит
+    ("blue", "pure"),      # 31 осколок последнего удара — сталь
+    ("violet", "deep"),    # 32 ключ пепельного ритма
+    ("lime", "pure"),      # 33 призма перекрёстного огня — янтарь
+    ("red", "bright"),     # 34 угольный фитиль — тлеющий багровый уголь
+    ("cyan", "bright"),     # 35 осколок оттепели — бледная бирюза
+    ("magenta", "deep"),   # 36 печать обратного тока
+    ("red", "bright"),     # 37 знак палача — багровый
+    ("amber", "pure"),     # 38 печать возмездия — золото
+    ("blue", "deep"),      # 39 руна свидетеля — индиго
+    ("orange", "dark"),    # 40 тлеющая тропа — остывающий уголь на полу
 ]
 FAMILY_HUE = {"red": 352, "orange": 20, "amber": 42, "lime": 72, "green": 132,
               "teal": 168, "cyan": 190, "blue": 222, "violet": 268, "magenta": 312}
@@ -47,11 +59,20 @@ def _hsl(hue, sat, light):
     return (int(round(r * 255)) << 16) | (int(round(g * 255)) << 8) | int(round(b * 255))
 
 
-def _palette(item):
-    """Палитра одного предмета: подложка, фон, главный, свет, контур, акцент, белый."""
+def _palette(item, hue=None, sat=None, light=None):
+    """Палитра одного предмета: подложка, фон, главный, свет, контур, акцент, белый.
+
+    Для нарисованных иконок hue/sat/light берутся из фактических цветов картинки:
+    иначе серая иконка на цветной подложке читается как чужой предмет, а блёклая
+    теряется. Раньше подложка всегда была из ASSIGN и врала про цвет.
+    """
     family, variant = ASSIGN[item]
-    hue = FAMILY_HUE[family]
-    sat, light = VARIANT[variant]
+    if hue is None:
+        hue = FAMILY_HUE[family]
+    if sat is None or light is None:
+        s0, l0 = VARIANT[variant]
+        sat = s0 if sat is None else sat
+        light = l0 if light is None else light
     return (
         0xFF000000 | _hsl(hue, min(0.60, sat * 0.65), 0.10),
         0xFF000000 | _hsl(hue, min(0.60, sat * 0.72), 0.19),
@@ -63,7 +84,7 @@ def _palette(item):
     )
 
 
-PALETTES = [_palette(item) for item in range(40)]
+PALETTES = [_palette(item) for item in range(41)]
 
 
 # индексы палитры
@@ -642,19 +663,73 @@ def glyph_sigil(c, item):
 
 ICON_DIR = os.path.join(ROOT, "design", "ai_icons")
 
+# Стиль «ЦВЕТ» — свой рисунок, а не копия ИИ-арта. Для большинства предметов
+# рисунок один и тот же и различается подложкой, но у 41-го есть отдельная
+# одноцветная версия: тропа нарисована крупным знаком, без холодных камней,
+# иначе правило «один предмет — один оттенок» нарушалось бы.
+ART_OVERRIDE = {
+    40: "icon_40_ember_trail_color.png",
+}
+
 
 def ai_art_path(item, key):
     """ИИ-арт предмета, если он нарисован: design/ai_icons/icon_XX_<ключ>.png."""
+    override = ART_OVERRIDE.get(item)
+    if override:
+        path = os.path.join(ICON_DIR, override)
+        if os.path.exists(path):
+            return path
     for name in sorted(os.listdir(ICON_DIR)) if os.path.isdir(ICON_DIR) else []:
         if name.startswith(f"icon_{item:02d}_") and name.endswith(".png"):
             return os.path.join(ICON_DIR, name)
     return None
 
 
-def bake_ai_art(path):
+def trim_to_subject(image):
+    """Обрезает пустой фон по границам предмета и добивает кадр до квадрата.
+
+    Нужно только для отдельных рисунков стиля «ЦВЕТ» (ART_OVERRIDE): там знак
+    нарисован «в общий квадрат» и без обрезки занимал бы треть слота. Общие
+    иконки 00–39 не трогаются — их вид уже выпущен и перерисовывать нельзя.
+    """
+    import statistics
+    from PIL import Image
+    w, h = image.size
+    border = []
+    for x in range(0, w, max(1, w // 64)):
+        border.append(image.getpixel((x, 0)))
+        border.append(image.getpixel((x, h - 1)))
+    for y in range(0, h, max(1, h // 64)):
+        border.append(image.getpixel((0, y)))
+        border.append(image.getpixel((w - 1, y)))
+    bg = tuple(int(statistics.median(c[i] for c in border)) for i in range(3))
+    px = image.load()
+    minX, minY, maxX, maxY = w, h, -1, -1
+    for y in range(0, h, max(1, h // 256)):
+        for x in range(0, w, max(1, w // 256)):
+            r, g, b = px[x, y]
+            if abs(r - bg[0]) + abs(g - bg[1]) + abs(b - bg[2]) > 40:
+                minX = min(minX, x); maxX = max(maxX, x)
+                minY = min(minY, y); maxY = max(maxY, y)
+    if maxX <= minX or maxY <= minY:
+        return image
+    pad = int(max(maxX - minX, maxY - minY) * 0.08) + 2
+    cx, cy = (minX + maxX) // 2, (minY + maxY) // 2
+    half = max(maxX - minX, maxY - minY) // 2 + pad
+    cropped = image.crop((max(0, cx - half), max(0, cy - half),
+                          min(w, cx + half), min(h, cy + half)))
+    side = max(cropped.size)
+    square = Image.new("RGB", (side, side), bg)
+    square.paste(cropped, ((side - cropped.width) // 2, (side - cropped.height) // 2))
+    return square
+
+
+def bake_ai_art(path, fit=False):
     """PNG -> индексная картинка 64x64 (палитра + индексы) для встраивания в exe."""
     from PIL import Image
     image = Image.open(path).convert("RGB")
+    if fit:
+        image = trim_to_subject(image)
     side = min(image.size)
     left = (image.width - side) // 2
     top = (image.height - side) // 2
@@ -671,7 +746,7 @@ def bake_ai_art(path):
 def build_icon(item):
     path = ai_art_path(item, item)
     if path:
-        return bake_ai_art(path)
+        return bake_ai_art(path, fit=item in ART_OVERRIDE)
     canvas = Canvas()
     frame(canvas, item not in WEAPON_ITEMS)
     if item < 10:
@@ -683,6 +758,24 @@ def build_icon(item):
     return canvas
 
 
+def art_palette(path, item):
+    """Палитра подложки по самой картинке: медианный цвет светлых пикселей.
+
+    Так подложка любого нарисованного предмета совпадает с его настоящим цветом —
+    и серые иконки (перо, луна, звезда, рунный разворот) больше не стоят на
+    цветной плитке чужого оттенка.
+    """
+    from PIL import Image
+    image = Image.open(path).convert("RGB").resize((48, 48))
+    pix = [c for c in image.get_flattened_data() if sum(c) > 120]
+    if not pix:
+        return None
+    pix.sort(key=lambda c: c[0] * 3 + c[1] * 6 + c[2])
+    r, g, b = pix[len(pix) // 2]
+    h, l, s = colorsys.rgb_to_hls(r / 255.0, g / 255.0, b / 255.0)
+    return h * 360, max(0.18, min(0.92, s)), max(0.22, min(0.80, l))
+
+
 def emit():
     lines = ["#pragma once", "#include <stdint.h>", "",
              "// Generated by tools/generate_icon_color_atlas.py — стиль иконок «ЦВЕТ».",
@@ -692,7 +785,7 @@ def emit():
              "struct BakedIconImage; // объявлена в skill_icon_atlas.h",
              "#endif", ""]
     tables = []
-    for item in range(40):
+    for item in range(41):
         built = build_icon(item)
         if isinstance(built, tuple):
             pal, flat = built
@@ -700,7 +793,8 @@ def emit():
             source = "ии-арт"
         else:
             canvas = built
-            pal = [0x00000000] + list(PALETTES[item])
+            art = art_palette(ai_art_path(item, item), item) if ai_art_path(item, item) else None
+            pal = [0x00000000] + list(_palette(item, *art) if art else PALETTES[item])
             pal = pal + [0] * (128 - len(pal))
             flat = [px for row in canvas.px for px in row]
             source = "код"
@@ -718,7 +812,7 @@ def emit():
         lines.append("")
         tables.append(name)
         print(f"  {item:02d}  {ASSIGN[item][0]:8s}/{ASSIGN[item][1]:6s} {source:6s} цветов: {len(used)}")
-    lines.append("static const BakedIconImage SKILL_ICONS_COLOR[40] = {")
+    lines.append("static const BakedIconImage SKILL_ICONS_COLOR[41] = {")
     for name in tables:
         lines.append(f"    {{64,64,{name}_PALETTE,{name}_PIXELS}},")
     lines.append("};")

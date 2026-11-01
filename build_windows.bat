@@ -125,7 +125,7 @@ if errorlevel 1 (
 echo [OK] windres compile >> "%LOG%"
 
 :: --- compile game (into build/, so a failed build never destroys the shipped exe) ---
-g++ -O3 -std=c++17 -I"!SRC!" -DGAME_VERSION=\"!VER!\" -DGAME_VERSION_NUM=!VCODE! "!SRC!\main_win32.cpp" "!RESOBJ!" -o "!TMPEXE!" -mwindows -static -static-libgcc -static-libstdc++ -lwinmm -lgdi32 -luser32 -ldwmapi >> "%LOG%" 2>&1
+g++ -O3 -std=c++17 -I"!SRC!" -DGAME_VERSION=\"!VER!\" -DGAME_VERSION_NUM=!VCODE! "!SRC!\main_win32.cpp" "!RESOBJ!" -o "!TMPEXE!" -mwindows -static -static-libgcc -static-libstdc++ -lwinmm -lgdi32 -luser32 -ldwmapi -pthread >> "%LOG%" 2>&1
 if errorlevel 1 (
     echo ERROR: g++ compile failed >> "%LOG%"
     echo ERROR: g++ compile failed - see build\build.log
